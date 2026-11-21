@@ -190,6 +190,7 @@ function actions(r, app) {
     { name: "setup", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=setup]')")) || null },
     { name: "library", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree [data-act=library]')")) || null },
     { name: "tool", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-tool [data-act=tool]')")) || null },
+    { name: "delsetup", w: 1, may: ["project", "selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=delsetup]')")) || null },
     { name: "foldtree", w: 1, may: [], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=fold]')")) || null },
     { name: "generate", w: 1, may: ["pos"], run: async () => { await click("document.getElementById('generate')"); } },
   ];

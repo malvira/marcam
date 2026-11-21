@@ -277,6 +277,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     } else if (!t.selected) {
       html += `<div class="tree-outname">${esc(s.name || s.id)} <span class="muted">setup</span></div>
         <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
+        ${t.setupNotes?.[s.id] ? `<div class="small setup-note" id="setupNote">${esc(t.setupNotes[s.id])}</div>` : ""}
         <div class="row small"><button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
         <button type="button" id="treeReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button>
         <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>
@@ -338,7 +339,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const open = isOpen(x);
     return `<div class="tree-setup ${active ? "active" : ""} ${active && !t.selected && (!t.focus || t.focus === "setup") ? "sel" : ""}" data-setup="${esc(x.id)}">
       <div class="tree-setuphead"><button type="button" class="twisty" data-act="fold" aria-expanded="${open}" aria-label="Show the operations of ${esc(x.name || x.id)}">${open ? "▾" : "▸"}</button>
-      <span class="tree-label" data-act="setup" title="This setup's details">${esc(x.name || x.id)}</span> <span class="muted">${esc(KIND_NAMES[kindOfSetup(x)])} · ${x.operations.length} op${x.operations.length === 1 ? "" : "s"}</span></div>`;
+      <span class="tree-label" data-act="setup" title="This setup's details">${esc(x.name || x.id)}</span> <span class="muted">${esc(KIND_NAMES[kindOfSetup(x)])} · ${x.operations.length} op${x.operations.length === 1 ? "" : "s"}</span>
+      <button type="button" class="setup-del" data-act="delsetup" aria-label="Delete the setup ${esc(x.name || x.id)}" title="Delete this setup (and its operations)">✕</button></div>`;
   }
   /** Another setup's operations (when unfolded): selecting one goes to that setup. */
   function otherOps(x) {
@@ -351,6 +353,51 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       .join("")}</div>`;
   }
   const isOpen = (x) => (t.fold?.has(x.id) ? t.fold.get(x.id) : x.id === t.setup);
+  /** Delete setup `id` (Mar): with its operations, and the tools and models nothing else
+   *  uses; asked first when it has operations; never the last. The setups that took their
+   *  stock from it take it from the one before it (or, with none, the stock it had), and say
+   *  so. Undoable. */
+  async function deleteSetup(id) {
+    const doc = t.doc;
+    const k = doc.setups.findIndex((x) => x.id === id);
+    if (k < 0) return;
+    const s = doc.setups[k];
+    if (doc.setups.length === 1) return showError("The last setup cannot be deleted: a project has one at least.");
+    const n = s.operations.length;
+    if (n && !window.confirm(`Delete "${s.name || s.id}" and its ${n} operation${n === 1 ? "" : "s"}? (Edit > Undo brings it back.)`)) return;
+    if (t.picking) endPicking(false);
+    const name = s.name || s.id;
+    const before = doc.setups[k - 1] || null;
+    doc.setups.splice(k, 1);
+    t.setupNotes ||= {};
+    // the setups that took their stock from it
+    doc.setups.forEach((x, i) => {
+      if (x.stock?.shape !== "from_previous") return;
+      const named = x.stock.from;
+      const fromIt = named ? named === id : i === k;
+      if (!fromIt) return;
+      if (before) {
+        // from the one before it: named, unless it is now just before this one
+        if (doc.setups[i - 1]?.id === before.id) delete x.stock.from;
+        else x.stock.from = before.id;
+        t.setupNotes[x.id] = `Its stock came from "${name}", deleted: now from "${before.name || before.id}".`;
+      } else {
+        // nothing before: the stock the deleted one had (its own, not carried)
+        x.stock = structuredClone(s.stock);
+        t.setupNotes[x.id] = `Its stock came from "${name}", deleted: now new stock, as "${name}" had (Generate to plan it).`;
+      }
+    });
+    // the tools and models nothing else uses
+    const used = new Set(doc.setups.flatMap((x) => [...(x.tools || []), ...x.operations.map((o) => o.tool)]));
+    doc.tools = (doc.tools || []).filter((tl) => used.has(tl.number));
+    const models = new Set(doc.setups.flatMap((x) => x.part || []));
+    doc.models = (doc.models || []).filter((m) => models.has(m.id));
+    if (t.setup === id) switchSetup(doc.setups[Math.max(0, k - 1)].id);
+    t.focus = "setup";
+    t.selected = null;
+    await commit({ label: `Deleted the setup "${name}".` });
+  }
+
   /** Another setup is worked on: what was being edited here is dropped. */
   function switchSetup(id) {
     if (id === t.setup) return;
@@ -1173,6 +1220,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return commit({ label: `Added T${n} to ${s.name || s.id}.` });
     }
     const head = el.closest?.(".tree-setup");
+    if (el.dataset?.act === "delsetup" && head) return deleteSetup(head.dataset.setup);
     if (el.dataset?.act === "fold" && head) {
       const id = head.dataset.setup;
       const x = t.doc.setups.find((y) => y.id === id);
@@ -1300,6 +1348,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       await commit({ label: `Deleted ${id}.` });
     }
   });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Delete" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const tg = ev.target;
+    if (tg && (tg.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName))) return;
+    if (document.querySelector("dialog[open]:not(.embedded)")) return;
+    if (!t.doc || t.selected || (t.focus && t.focus !== "setup")) return;
+    ev.preventDefault();
+    deleteSetup(t.setup);
+  });
+
   // ------------------------------------------------------------ reordering
   /**
    * Move operation `id` before (or after) operation `target`, in the target's file (a file of

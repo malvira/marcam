@@ -3097,6 +3097,49 @@ try {
     await shot("34_work_zero");
   }
 
+  // (Mar) deleting setups: those carrying from it carry from the one before, said; undoable;
+  // asked first when it has operations; never the last
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle();
+    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
+    for (let k = 0; k < 2; k++) {
+      await js("document.getElementById('treeAddSetup').click(); true");
+      await waitFor(() => js(modal), "the add setup dialog", 30000);
+      await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
+      await waitFor(() => js(`!${modal}`), "the setup added", 60000);
+      await settle();
+    }
+    const ids = await js("JSON.parse(document.getElementById('job').value).setups.map((s) => s.id)");
+    // (asked first only when it has operations: starter ones, if asked for above)
+    const ops2 = await js("JSON.parse(document.getElementById('job').value).setups[1].operations.length");
+    const dialogs0 = cdp.dialogs.length;
+    // setup 2 (no operations): no question
+    await js(`document.querySelector('#tree .tree-setup[data-setup="${ids[1]}"] [data-act=delsetup]').click(); true`);
+    await settle();
+    const after = await js("JSON.parse(document.getElementById('job').value).setups.map((s) => ({ id: s.id, stock: s.stock }))");
+    await js(`document.querySelector('#tree .tree-setup[data-setup="${ids[2]}"] [data-act=setup]').click(); true`);
+    await settle();
+    const note = await js("document.getElementById('setupNote')?.textContent || ''");
+    const asked0 = cdp.dialogs.length - dialogs0;
+    // undo: back
+    await js("document.getElementById('menuUndo').click(); true");
+    await settle();
+    const undone = await js("JSON.parse(document.getElementById('job').value).setups.length");
+    // setup 1 has operations: asked first (declined: kept)
+    cdp.dialogAnswer = false;
+    const d1 = cdp.dialogs.length;
+    await js(`document.querySelector('#tree .tree-setup[data-setup="${ids[0]}"] [data-act=delsetup]').click(); true`);
+    await settle();
+    cdp.dialogAnswer = true;
+    const asked1 = cdp.dialogs.slice(d1).map((d) => d.message).join(" ");
+    const kept = await js("JSON.parse(document.getElementById('job').value).setups.length");
+    check("deleting a setup: the next one carries from the one before, said in its details; undone by Undo; asked first when it has operations",
+      after.length === 2 && after[1].id === ids[2] && after[1].stock.shape === "from_previous" && !after[1].stock.from && /deleted/.test(note) && asked0 === (ops2 ? 1 : 0) && undone === 3 && /operation/.test(asked1) && kept === 3,
+      `${JSON.stringify(after)}; note "${note}"; asked ${asked0} (${ops2} ops); undone ${undone}; asked "${asked1.slice(0, 80)}"; kept ${kept}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

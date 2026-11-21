@@ -96,6 +96,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; }
 .tree-setup.sel > .tree-setuphead { background: var(--bg); outline: 1px solid var(--accent); }
 .tree-setupbody { margin-left: 14px; }
 .tree-op.other .tree-label { padding-left: 2px; }
+.tree-setuphead .setup-del { margin-left: auto; padding: 0 5px; font-size: 11px; }
+.setup-note { margin: 4px 0; color: var(--accent); }
 .twisty { padding: 0 3px; font-size: 11px; border: none; background: none; cursor: pointer; }
 .tree-details { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
 #libraryPanel.hosted > summary { display: none; }
