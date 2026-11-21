@@ -56,3 +56,33 @@ if (existsSync(wasm)) {
     say(`wasm in Node, T1 ${name} mm: ${Math.round(performance.now() - t0)} ms${r.error ? ` (error: ${r.error})` : ""}; phases: ${phases.join(", ")}`);
   }
 } else say("wasm: web/pkg/marcam.wasm not built");
+
+// in the browser (the page's engine worker, as the e2e runs it), with --browser
+if (process.argv.includes("--browser")) {
+  const { startApp } = await import("../web/tests/harness.mjs");
+  const app = await startApp();
+  try {
+    const info = await app.js("JSON.stringify({ ua: navigator.userAgent, cores: navigator.hardwareConcurrency, hidden: document.hidden })");
+    say(`browser: ${info}`);
+    for (const name of ["3.175", "3.0"]) {
+      const t = name === "3.0" ? text30 : text;
+      const r = await app.js(`await (async () => {
+        const M = window.__marcam, seen = [];
+        let last = performance.now();
+        const iv = setInterval(() => { for (const c of M.inFlight()) if (c.phase && seen[seen.length - 1]?.p !== c.phase) { const now = performance.now(); seen.push({ p: c.phase, at: Math.round(now - last) }); last = now; } }, 20);
+        const t0 = performance.now();
+        try {
+          await M.engine('planAndPost', ${JSON.stringify(t)}, 'makera-z1-4axis', null, { max_points: 150000, cache: false });
+        } catch (e) {
+          return 'error ' + e.message;
+        } finally {
+          clearInterval(iv);
+        }
+        return Math.round(performance.now() - t0) + ' ms; phases: ' + seen.map((s) => s.p + ' @' + s.at).join(', ');
+      })()`);
+      say(`browser worker, T1 ${name} mm: ${r}`);
+    }
+  } finally {
+    await app.close();
+  }
+}

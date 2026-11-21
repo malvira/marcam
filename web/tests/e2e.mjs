@@ -196,7 +196,13 @@ async function addTypes() {
   await waitFor(() => js("!!document.getElementById('treeAddType')"), "the tree's operation types", 30000);
   return js("[...document.getElementById('treeAddType').options].map((o) => o.value)");
 }
+// (Windows CI: its browser has run the engine's WebAssembly far slower than anywhere else,
+// the same plans taking seconds natively and in Node on that runner and minutes in the page;
+// see scripts/knob-timing.mjs, run after check.sh. A plan is waited for four times longer
+// there: a plan that never ends still fails.)
+const PLAN_WAIT = process.platform === "win32" && process.env.CI ? 4 : 1;
 async function waitDone(what, timeoutMs) {
+  timeoutMs *= PLAN_WAIT;
   try {
     return await waitFor(async () => { const s = await state(); if (s === "error") throw new Error(await js("document.getElementById('error').textContent")); return s === "done"; }, what, timeoutMs);
   } catch (e) {

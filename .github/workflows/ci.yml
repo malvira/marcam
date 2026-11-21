@@ -69,7 +69,7 @@ jobs:
         shell: bash
         run: |
           cargo build -q --release -p marcam-cli --bin marcam || true
-          node scripts/knob-timing.mjs --notice || true
+          node scripts/knob-timing.mjs --notice --browser || true
       # the log's end as an annotation: readable on the run's page (and through the API)
       # without downloading the logs
       - name: report the failure
