@@ -7,6 +7,7 @@ pub mod archive;
 pub mod body;
 pub mod budget;
 pub mod carry;
+pub mod carry_mesh;
 pub mod collision;
 pub mod det;
 pub mod dropcutter;
