@@ -134,6 +134,10 @@ pub enum StockDef {
         /// The setup whose stock this one takes (None: the one just before).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<String>,
+        /// Turned any way first (degrees about X, then Y, then Z): the cut result goes on as a
+        /// mesh, sampled again in this setup's kind (Mar). None: the turns below only.
+        #[serde(default, skip_serializing_if = "is_zero3")]
+        rotate: [f64; 3],
         #[serde(default)]
         radius: f64,
         #[serde(default)]
@@ -901,6 +905,7 @@ impl Project {
         if let (
             StockDef::FromPrevious {
                 from,
+                rotate,
                 radius,
                 length,
                 turn,
@@ -929,6 +934,13 @@ impl Project {
                     })?,
             };
             let prev = self.setup_frame(prev_setup)?;
+            // turned any way, or a block going on as a bar (or back): the cut result as a mesh
+            let to_block = setup.kind.as_deref() == Some("vise") || setup.holding.kind == "vise";
+            if *rotate != [0.0; 3] || to_block != prev.stock_box.is_some() {
+                return Ok(mesh_carry_frame(
+                    prev_setup, &prev, *rotate, *turn, *offset, to_block,
+                ));
+            }
             let (turn, offset) = (*turn, *offset);
             // the previous stock's box: a block's, or a bar's on the axis (front at X0)
             let pb = prev.stock_box.unwrap_or(job::StockBox {
@@ -962,6 +974,7 @@ impl Project {
             let t = [s[0] + offset[0], s[1] + offset[1], s[2] + offset[2]];
             let carry = job::Carry {
                 from: prev_setup.id.clone(),
+                rotate: [0.0; 3],
                 turn,
                 shift: t,
             };
@@ -1253,6 +1266,111 @@ pub struct ProjectSim {
     pub rapid_hits: Vec<(String, usize)>,
 }
 
+/// The frame of a setup whose stock is the cut result of `prev_setup` (frame `prev`) as a mesh:
+/// turned by `rotate`, then `turn`, then moved by `offset`. A block (`to_block`): re-zeroed as a
+/// block carried on is (X and Y from its lowest corner where it was, its top where it was; a
+/// bar's at X0 Y0 and its top at Z0); a bar: its front at X0, centred on the axis, its radius
+/// to the box's corners. The part (a mesh) turns and moves with it; a revolved profile, which
+/// stays only about the axis, does not go on (a setup with no model: its stock-only
+/// operations, facing, still work).
+fn mesh_carry_frame(
+    prev_setup: &Setup,
+    prev: &SetupFrame,
+    rotate: [f64; 3],
+    turn: job::Turn,
+    offset: [f64; 3],
+    to_block: bool,
+) -> SetupFrame {
+    use crate::carry_mesh::{apply, euler, mul, rotation};
+    let s = turn.signs();
+    let tm = [[s[0], 0.0, 0.0], [0.0, s[1], 0.0], [0.0, 0.0, s[2]]];
+    let r = mul(tm, rotation(rotate));
+    let pb = prev.stock_box.unwrap_or(job::StockBox {
+        min: [-prev.stock.length, -prev.stock.radius, -prev.stock.radius],
+        max: [0.0, prev.stock.radius, prev.stock.radius],
+    });
+    let corners: Vec<[f64; 3]> = (0..8)
+        .map(|i| {
+            apply(
+                r,
+                [
+                    if i & 1 == 0 { pb.min[0] } else { pb.max[0] },
+                    if i & 2 == 0 { pb.min[1] } else { pb.max[1] },
+                    if i & 4 == 0 { pb.min[2] } else { pb.max[2] },
+                ],
+            )
+        })
+        .collect();
+    let lo = |a: usize| corners.iter().map(|c| c[a]).fold(f64::INFINITY, f64::min);
+    let hi = |a: usize| {
+        corners
+            .iter()
+            .map(|c| c[a])
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
+    let z = if to_block {
+        if prev.stock_box.is_some() {
+            [pb.min[0] - lo(0), pb.min[1] - lo(1), pb.max[2] - hi(2)]
+        } else {
+            [-lo(0), -lo(1), -hi(2)]
+        }
+    } else {
+        [-hi(0), -0.5 * (lo(1) + hi(1)), -0.5 * (lo(2) + hi(2))]
+    };
+    let t = [z[0] + offset[0], z[1] + offset[1], z[2] + offset[2]];
+    let deg = euler(r);
+    let carry = job::Carry {
+        from: prev_setup.id.clone(),
+        rotate: deg,
+        turn: job::Turn::None,
+        shift: t,
+    };
+    let (stock_box, mut stock) = if to_block {
+        (
+            Some(job::StockBox {
+                min: [lo(0) + t[0], lo(1) + t[1], lo(2) + t[2]],
+                max: [hi(0) + t[0], hi(1) + t[1], hi(2) + t[2]],
+            }),
+            prev.stock.clone(),
+        )
+    } else {
+        let (dy, dz) = (0.5 * (hi(1) - lo(1)), 0.5 * (hi(2) - lo(2)));
+        (
+            None,
+            job::Stock {
+                radius: dy.hypot(dz),
+                length: hi(0) - lo(0),
+                section: None,
+            },
+        )
+    };
+    if !to_block && stock.length <= 0.0 {
+        stock.length = 1.0;
+    }
+    // the part: a mesh turned and moved the same (its own turn and rotation folded in)
+    let mut part = serde_json::Map::new();
+    if let Some(m) = prev.part.get("mesh") {
+        if let Ok(mut src) = serde_json::from_value::<job::MeshSource>(m.clone()) {
+            let ss = src.turn.signs();
+            let ts = [[ss[0], 0.0, 0.0], [0.0, ss[1], 0.0], [0.0, 0.0, ss[2]]];
+            src.rotate = euler(mul(r, mul(ts, rotation(src.rotate))));
+            src.turn = job::Turn::None;
+            let q = apply(r, src.translate);
+            src.translate = [q[0] + t[0], q[1] + t[1], q[2] + t[2]];
+            if let Ok(v) = serde_json::to_value(src) {
+                part.insert("mesh".into(), v);
+            }
+        }
+    }
+    SetupFrame {
+        part,
+        stock,
+        stock_box,
+        stock_axis: None,
+        carry: Some(carry),
+    }
+}
+
 /// Simulate every setup in order. A setup whose stock is `from_previous` starts from the
 /// previous setup's result (same work origin); otherwise it starts from fresh bar stock. The
 /// grid covers the first setup's part (as [`crate::simulate_job`] does).
@@ -1421,6 +1539,7 @@ mod tests {
         s2.name = "Knurl (re-chucked)".into();
         s2.stock = StockDef::FromPrevious {
             from: None,
+            rotate: [0.0; 3],
             radius: 12.5,
             length: 100.0,
             turn: job::Turn::None,

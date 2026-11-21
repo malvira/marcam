@@ -285,3 +285,129 @@ fn a_setup_can_take_the_stock_of_any_setup_before_it() {
             .unwrap_err();
     assert!(e.contains("not a setup before it"), "{e}");
 }
+
+/// The top of column (x, y) of a carried block, and its bottom.
+fn column(c: &Carried, sb: &marcam::job::StockBox, x: f64, y: f64) -> (f64, f64) {
+    let h = c.heightmap(sb, 0.5).unwrap();
+    let b = c.bottoms(&h);
+    let i = ((x - h.x0) / h.cell) as usize;
+    let j = ((y - h.y0) / h.cell) as usize;
+    (h.z[j * h.nx + i], b[j * h.nx + i])
+}
+
+#[test]
+fn the_plate_stood_on_its_end_goes_on_as_a_mesh() {
+    // (Mar) setup 2 takes the plate tipped 90 degrees about Y: its old top (faced, pocketed)
+    // faces +X, its old X runs down. Re-zeroed where it was: X 0..10, Y 0..40, Z -60..0;
+    // every column full height (a pocket in a side is solid seen from above)
+    let dir = root().join("examples/plate");
+    let mut v = plate_three_setups();
+    v["setups"][1]["stock"] = json!({"shape": "from_previous", "rotate": [0.0, 90.0, 0.0]});
+    v["setups"].as_array_mut().unwrap().truncate(2);
+    let mut js = jobs(&v, &dir);
+    let sb = js[1].1.stock_box.unwrap();
+    for a in 0..3 {
+        let (lo, hi) = ([0.0, 0.0, -60.0][a], [10.0, 40.0, 0.0][a]);
+        assert!(
+            (sb.min[a] - lo).abs() < 1e-9 && (sb.max[a] - hi).abs() < 1e-9,
+            "{sb:?}"
+        );
+    }
+    let c = js[1].1.carry.clone().unwrap();
+    assert_eq!((c.turn, c.rotate), (Turn::None, [0.0, 90.0, 0.0]));
+    // the part tipped the same: within the block, Z 60 tall
+    let m2 = marcam::load_mesh(&js[1].1, &dir).unwrap().unwrap();
+    let (lo, hi) = m2.bounds().unwrap();
+    assert!(
+        lo[0] > -1e-6 && hi[0] < 10.0 + 1e-6 && lo[2] > -60.0 - 1e-6 && hi[2] < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    let meshes = |j: &Job| marcam::load_mesh(j, &dir).ok().flatten();
+    carry_stock(&mut js, &meshes, None).unwrap();
+    let c2 = js[1].1.carried.as_deref().unwrap();
+    assert!(matches!(c2, Carried::Block { .. }));
+    let (top, bot) = column(c2, &sb, 5.0, 20.0);
+    assert!(top.abs() < 0.05 && (bot + 60.0).abs() < 0.05, "{top} {bot}");
+    // the faced top, now the +X side: nothing beyond X 9.5
+    let (top, bot) = column(c2, &sb, 9.8, 20.0);
+    assert!(top <= bot + 1e-9, "{top} {bot}");
+    // and a facing pass plans on it, cutting the old X 60 end only
+    let tps = marcam::plan(&js[1].1).unwrap();
+    assert!(!tps.is_empty());
+}
+
+#[test]
+fn the_knob_lies_in_a_vise_on_its_side() {
+    // (Mar) the knob, turned, goes into a vise lying along X: the cut bar as a mesh, sampled
+    // as columns. X 0..100, Y 0..25, its top at Z0; the front (old X0, turned down to radius
+    // 7.2 or so) at X 100
+    let text =
+        std::fs::read_to_string(root().join("examples/knob/knob_two_setups.marcam.toml")).unwrap();
+    let (p, _) = Project::from_json_any(&text).unwrap();
+    let mut v = serde_json::to_value(&p).unwrap();
+    v["setups"][1]["kind"] = json!("vise");
+    v["setups"][1]["holding"] = json!({"kind": "vise", "tailstock": false});
+    v["setups"][1]["part"] = json!([]);
+    v["setups"][1]["operations"] = json!([{"id": "f1", "type": "face", "tool": 1, "depth": 0.5, "step_down": 0.5, "stepover": 1.5, "feed": 300.0, "plunge_feed": 60.0}]);
+    v["setups"][1]["outputs"] = json!([{"name": "face", "title": "face", "operations": ["f1"]}]);
+    let dir = root().join("examples/knob");
+    let mut js = jobs(&v, &dir);
+    let sb = js[1].1.stock_box.unwrap();
+    assert!(
+        (sb.min[0]).abs() < 1e-9 && (sb.max[0] - 100.0).abs() < 1e-9,
+        "{sb:?}"
+    );
+    assert!(
+        (sb.max[1] - sb.min[1] - 25.0).abs() < 1e-6 && sb.max[2].abs() < 1e-9,
+        "{sb:?}"
+    );
+    assert!(js[1].1.part.profile.is_none());
+    let meshes = |j: &Job| marcam::load_mesh(j, &dir).ok().flatten();
+    carry_stock(&mut js, &meshes, None).unwrap();
+    let c2 = js[1].1.carried.as_deref().unwrap();
+    let yc = 0.5 * (sb.min[1] + sb.max[1]);
+    // the chuck end as it came: top at Z0, bottom at -25
+    let (top, bot) = column(c2, &sb, 30.0, yc);
+    assert!(top.abs() < 0.1 && (bot + 25.0).abs() < 0.1, "{top} {bot}");
+    // the front, turned down: well below the bar's top
+    let (top, _) = column(c2, &sb, 99.5, yc);
+    assert!(top < -4.0, "{top}");
+    let tps = marcam::plan(&js[1].1).unwrap();
+    assert!(!tps.is_empty());
+}
+
+#[test]
+fn a_vise_cut_plate_goes_on_as_a_bar() {
+    // (Mar) the plate, faced and pocketed in the vise, chucked in the rotary: centred on the
+    // axis, its front at X0, X -60..0; the radius to its corners (20, 5)
+    let dir = root().join("examples/plate");
+    let mut v = plate_three_setups();
+    v["setups"][1]["stock"] = json!({"shape": "from_previous"});
+    v["setups"][1]["kind"] = json!("rotary");
+    v["setups"][1]["holding"] = json!({"kind": "rotary_chuck", "tailstock": false});
+    v["setups"][1]["operations"] = json!([]);
+    v["setups"][1]["outputs"] = json!([]);
+    v["setups"].as_array_mut().unwrap().truncate(2);
+    let mut js = jobs(&v, &dir);
+    assert!(js[1].1.stock_box.is_none());
+    let st = &js[1].1.stock;
+    assert!((st.length - 60.0).abs() < 1e-9 && (st.radius - 20f64.hypot(5.0)).abs() < 1e-9);
+    let meshes = |j: &Job| marcam::load_mesh(j, &dir).ok().flatten();
+    carry_stock(&mut js, &meshes, None).unwrap();
+    let Some(Carried::Bar(m)) = js[1].1.carried.as_deref() else {
+        panic!("no bar carried")
+    };
+    let g = m.grid;
+    // the radius at x toward angle a (0: +Y, 90: +Z)
+    let at = |x: f64, a: f64| {
+        let i = ((x - g.x0) / g.dx) as usize;
+        let j = ((a / 360.0 * g.na as f64) as usize).min(g.na - 1);
+        m.r[i * g.na + j] as f64
+    };
+    // its sides (Y +-20) and its faced top (old Z -0.5: 4.5 up from the axis), its bottom 5
+    assert!((at(-10.0, 0.0) - 20.0).abs() < 0.3, "{}", at(-10.0, 0.0));
+    assert!((at(-10.0, 90.0) - 4.5).abs() < 0.3, "{}", at(-10.0, 90.0));
+    assert!((at(-10.0, 270.0) - 5.0).abs() < 0.3, "{}", at(-10.0, 270.0));
+    // the pocket (old X 5..25: -55..-35), 3 deep: its floor 1.5 up
+    assert!((at(-45.0, 90.0) - 1.5).abs() < 0.3, "{}", at(-45.0, 90.0));
+}

@@ -100,10 +100,14 @@ impl PostOptions {
 }
 
 /// Stock carried over from the previous setup: its setup, and how a point there maps to this
-/// setup's work coordinates (`turn` it, then add `shift`).
+/// setup's work coordinates (`rotate` it, `turn` it, then add `shift`). A rotation, or a block
+/// going on as a bar (or back), carries the cut result as a mesh ([`crate::carry_mesh`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Carry {
     pub from: String,
+    /// Degrees about X, then Y, then Z (before the turn).
+    #[serde(default, skip_serializing_if = "is_zero3")]
+    pub rotate: [f64; 3],
     #[serde(default, skip_serializing_if = "Turn::is_none")]
     pub turn: Turn,
     #[serde(default)]
@@ -113,6 +117,11 @@ pub struct Carry {
 impl Carry {
     /// A point of the previous setup in this one.
     pub fn map(&self, p: [f64; 3]) -> [f64; 3] {
+        let p = if self.rotate == [0.0; 3] {
+            p
+        } else {
+            crate::carry_mesh::apply(crate::carry_mesh::rotation(self.rotate), p)
+        };
         let q = self.turn.apply(p);
         [
             q[0] + self.shift[0],

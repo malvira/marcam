@@ -284,7 +284,14 @@ pub fn carry_stock(
         // what it left, worked out before (the web app plans a setup at every edit)
         let key = crate::hash_of(&(
             crate::job_key(&prev, mesh.as_ref()),
-            serde_json::to_string(&(&prev.programs, &carry)).unwrap_or_default(),
+            // (and what it goes on as: sampled at this setup's block or bar)
+            serde_json::to_string(&(
+                &prev.programs,
+                &carry,
+                &jobs[k].1.stock_box,
+                &jobs[k].1.stock,
+            ))
+            .unwrap_or_default(),
         ));
         if let Some(c) = MEMO.with(|m| {
             m.borrow()
@@ -312,7 +319,14 @@ pub fn carry_stock(
                 for tp in &tps {
                     crate::sim3::simulate3(&mut hm, tp, &cutters, (cell * 2.0).min(0.1));
                 }
-                turn_block(&hm, &bot, &carry)
+                if mesh_carry(&carry, true, &jobs[k].1) {
+                    let m = crate::carry_mesh::block_mesh(
+                        hm.x0, hm.y0, hm.cell, hm.nx, hm.ny, &hm.z, &bot,
+                    );
+                    from_mesh(&m, &carry, &jobs[k].1)
+                } else {
+                    turn_block(&hm, &bot, &carry)
+                }
             }
             None => {
                 let grid = bar_grid(&prev.stock);
@@ -320,7 +334,11 @@ pub fn carry_stock(
                 for tp in &tps {
                     crate::sim::simulate(&mut map, tp, &cutters, 0.2);
                 }
-                turn_bar(&map, &carry)
+                if mesh_carry(&carry, false, &jobs[k].1) {
+                    from_mesh(&crate::carry_mesh::bar_mesh(&map), &carry, &jobs[k].1)
+                } else {
+                    turn_bar(&map, &carry)
+                }
             }
         };
         let carried = std::sync::Arc::new(carried);
@@ -334,6 +352,39 @@ pub fn carry_stock(
         set_carried(&mut jobs[k].1, carried);
     }
     Ok(())
+}
+
+/// Whether `carry` goes on as a mesh: turned any way, or a block going on as a bar (or back).
+fn mesh_carry(carry: &Carry, from_block: bool, to: &Job) -> bool {
+    carry.rotate != [0.0; 3] || from_block != to.stock_box.is_some()
+}
+
+/// The cut result `m` (in the setup before's coordinates) carried into `to`: turned and moved
+/// by `carry`, sampled as `to`'s block (its columns at the block's cell) or bar (its grid).
+fn from_mesh(m: &Mesh, carry: &Carry, to: &Job) -> Carried {
+    let s = carry.turn.signs();
+    let tm = [[s[0], 0.0, 0.0], [0.0, s[1], 0.0], [0.0, 0.0, s[2]]];
+    let r = crate::carry_mesh::mul(tm, crate::carry_mesh::rotation(carry.rotate));
+    let m = crate::carry_mesh::transform(m, r, carry.shift);
+    match to.stock_box {
+        Some(sb) => {
+            let (x0, y0, nx, ny, top, bot) = crate::carry_mesh::sample_block(&m, block_cell(&sb));
+            Carried::Block {
+                x0,
+                y0,
+                cell: block_cell(&sb),
+                nx,
+                ny,
+                top,
+                bot,
+            }
+        }
+        None => {
+            let mut map = crate::carry_mesh::sample_bar(&m, bar_grid(&to.stock));
+            map.top = map.r.iter().fold(0.0f32, |a, &b| a.max(b)) as f64;
+            Carried::Bar(map)
+        }
+    }
 }
 
 /// Carried stocks worked out lately (by the setup before and the carry).
@@ -377,6 +428,7 @@ mod tests {
         // over about Y, re-zeroed: X back over 0..10, its top (the old bottom) at Z0
         let c = Carry {
             from: "s1".into(),
+            rotate: [0.0; 3],
             turn: Turn::Y180,
             shift: [10.0, 0.0, -5.0],
         };
@@ -406,6 +458,7 @@ mod tests {
         // turned back: as it was
         let back = Carry {
             from: "s2".into(),
+            rotate: [0.0; 3],
             turn: Turn::Y180,
             shift: [10.0, 0.0, -5.0],
         };
@@ -433,6 +486,7 @@ mod tests {
             &m,
             &Carry {
                 from: "a".into(),
+                rotate: [0.0; 3],
                 turn: Turn::X180,
                 shift: [0.0; 3],
             },
@@ -443,6 +497,7 @@ mod tests {
             &m,
             &Carry {
                 from: "a".into(),
+                rotate: [0.0; 3],
                 turn: Turn::Y180,
                 shift: [-10.0, 0.0, 0.0],
             },
