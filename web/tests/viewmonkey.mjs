@@ -53,7 +53,11 @@ const INSTALL = `(() => {
     const g = v.groups, m = M.machining.state;
     const mach = !!g.machining && shown(g.machining);
     const shared = mach && g.work ? g.work.children.filter((c) => c.userData.shared && drawables(c)).length : 0;
-    const machPaths = mach && m.paths ? { cut: m.paths.cut.some(lineShown), rapid: m.paths.rapid.some(lineShown) } : { cut: false, rapid: false };
+    // (the path lines in the scene: while a playback is made again its new lines are not in it
+    // yet, the old ones are)
+    const inScene = [];
+    if (mach && g.work) g.work.traverse((o) => o.userData.path && inScene.push(o));
+    const machPaths = { cut: inScene.some((o) => o.userData.path === 'cut' && lineShown(o)), rapid: inScene.some((o) => o.userData.path === 'rapid' && lineShown(o)) };
     const legacy = { part: drawables(g.part), stock: drawables(g.stock), sim: drawables(g.sim), path: lineShown(v.cutLines), rapid: lineShown(v.rapLines), tool: drawables(g.tool), draft: g.draft ? drawables(g.draft) : 0 };
     const machStock = mach && m.stockMesh && shown(m.stockMesh) ? 1 : 0;
     const simFinal = mach && g.simFinal ? drawables(g.simFinal) : 0;

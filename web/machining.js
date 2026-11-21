@@ -477,6 +477,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       cut: [lines([geo.cut[0].slice(), geo.cut[1].slice()], 0.9), lines(geo.cut, 0.22)],
       rapid: [lines(geo.rapid, 0.6), lines(geo.rapid, 0.15)],
     };
+    // (what each line is: for whoever looks at the scene, e.g. the tests)
+    for (const [k, pair] of Object.entries(m.paths)) for (const o of pair) o.userData.path = k;
     m.pathLine = m.paths.cut[0];
     // (the selection's dimming and folding work from these)
     m.pathBase = { pos: geo.cut[0].slice(), col: geo.cut[1].slice() };
