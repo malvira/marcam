@@ -194,7 +194,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (!s) {
       const lib = window.__marcam.tools?.summary?.() || "";
       setTree(`<div class="tree-list"><div class="tree-lib ${t.focus === "library" ? "sel" : ""}"><div class="tree-setuphead"><span class="twisty-pad"></span><span class="tree-label" data-act="library" title="The tools of every project: add, edit, import, export">Tool library</span> <span class="muted">${esc(lib)}</span></div></div>
-        <div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup, then add its operations.</div></div>
+        <div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup, then add its operations.</div>
+        <div class="row small"><button type="button" id="treeAddSetup" title="A setup: its type, machine, stock and (if any) model">+ Add setup</button></div></div>
         ${t.focus === "library" ? '<div class="tree-details" id="treeDetails"><div class="tree-outname">Tool library</div><div id="libHost"></div></div>' : ""}`);
       window.__marcam.tools?.host?.($("libHost"));
       window.__marcam.project?.hostSetup?.(null);
@@ -257,9 +258,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       html += `</div>`;
     }
     const opts = t.types.filter((x) => fits(x, s)).map((x) => `<option value="${x.kind}">${esc(x.title)}</option>`).join("");
-    const outs = s.outputs.map((o) => `<option value="${esc(o.name)}">${esc(o.name)}</option>`).join("");
     html += `<div class="row small"><select id="treeAddType" aria-label="Operation type">${opts}</select>
-      <select id="treeAddOut" aria-label="Output file">${outs}<option value="__new">new file</option></select>
       <button type="button" id="treeAdd">Add operation</button></div>`;
     if (t.problems.length) html += `<div class="error small">${t.problems.map(esc).join("<br>")}</div>`;
     if (t.draft) html += `<div class="muted small">New operation ${esc(t.draft.op.id)} (not saved until Apply)</div>`;
@@ -355,7 +354,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   }
   const isOpen = (x) => (t.fold?.has(x.id) ? t.fold.get(x.id) : x.id === t.setup);
   /** Delete setup `id` (Mar): with its operations, and the tools and models nothing else
-   *  uses; asked first when it has operations; never the last. The setups that took their
+   *  uses; asked first when it has operations. The last one too: what is left is a new
+   *  project's (no setups, models, tools or part; the tool library kept). The setups that took their
    *  stock from it take it from the one before it (or, with none, the stock it had), and say
    *  so. Undoable. */
   async function deleteSetup(id) {
@@ -363,11 +363,30 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const k = doc.setups.findIndex((x) => x.id === id);
     if (k < 0) return;
     const s = doc.setups[k];
-    if (doc.setups.length === 1) return showError("The last setup cannot be deleted: a project has one at least.");
     const n = s.operations.length;
     if (n && !window.confirm(`Delete "${s.name || s.id}" and its ${n} operation${n === 1 ? "" : "s"}? (Edit > Undo brings it back.)`)) return;
     if (t.picking) endPicking(false);
     const name = s.name || s.id;
+    if (doc.setups.length === 1) {
+      // (Mar) the last: as a new project, its name kept (the part goes with it; Undo
+      // brings it all back)
+      doc.setups = [];
+      doc.models = [];
+      doc.tools = [];
+      t.setup = null;
+      t.focus = null;
+      t.selected = null;
+      t.draft = null;
+      t.retype = null;
+      // (the part goes as an edit: the snapshot before it keeps the part, for Undo)
+      const h = window.__marcam.project?.history;
+      if (h) h.loading = false;
+      state.extraMeshes?.clear();
+      window.__marcam.setMesh?.(null, "");
+      await commit({ label: `Deleted the setup "${name}" (the last).` });
+      window.__marcam.clearResults?.("No setups: import an STL (button or drop it here), add a setup, or open a project.", ["import", "open"]);
+      return;
+    }
     const before = doc.setups[k - 1] || null;
     doc.setups.splice(k, 1);
     t.setupNotes ||= {};
@@ -1162,7 +1181,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const id = newOpId(s);
       // a draft with every field filled by the engine's defaults (from the setup's tools,
       // spindle, machine limits and part faces); it joins the project on Apply
-      const out = $("treeAddOut").value;
+      // (into the setup's last output file, or a new one when it has none: Mar dropped the
+      // chooser; an operation dragged in the tree goes to another file)
+      const out = s.outputs[s.outputs.length - 1]?.name ?? "__new";
       // a draft already open is replaced; picking for it ends without writing anything
       if (t.picking) endPicking(false);
       t.retype = null;

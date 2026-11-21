@@ -1319,7 +1319,8 @@ export function setupProject(ctx) {
     const s = { id: `setup${n}`, name: cfg.setupName || KINDS[cfg.kind], stock: { shape: "cylinder", radius: 1, length: 1 }, clearance: 3, part: model ? [model.id] : [], spindle_rpm: 12000, operations: [], outputs: [] };
     doc.setups.push(s);
     const report = await applySetup(doc, s, cfg, tris);
-    if (state.tree) state.tree.setup = s.id;
+    // (the new setup's details shown, not what was selected before)
+    if (state.tree) Object.assign(state.tree, { setup: s.id, focus: "setup", selected: null });
     await commitSetupChange(doc, report, { label: `Setup "${s.name}" added.`, job: before });
     if (cfg.machine) ctx.selectMachine(cfg.machine);
     return report;

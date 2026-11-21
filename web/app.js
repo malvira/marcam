@@ -610,7 +610,7 @@ export function fmtTime(sec) {
   if (s >= 60) return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
   return `${s} s`;
 }
-window.__marcam = Object.assign(window.__marcam || {}, { fmtTime });
+window.__marcam = Object.assign(window.__marcam || {}, { fmtTime, setMesh, clearResults });
 
 async function generate(opts = {}) {
   // (a click passes an event)

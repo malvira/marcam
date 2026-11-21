@@ -520,7 +520,7 @@ try {
   const took = [];
   for (const kind of String(typesAll).split(",")) {
     const t0 = Date.now();
-    await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true`);
+    await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAdd').click(); true`);
     await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__marcam.state.tree.draft && window.__marcam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 60000);
     // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
     const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
@@ -550,7 +550,7 @@ try {
   await settle();
 
   // add an operation from the registry's form
-  await js("document.getElementById('treeAddType').value = 'flank_chamfer'; document.getElementById('treeAddOut').value = 'knob_2_knurl'; document.getElementById('treeAdd').click(); true");
+  await js("document.getElementById('treeAddType').value = 'flank_chamfer'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("!!document.getElementById('opForm')"), "the operation form", 10000);
   await js("const f0 = document.getElementById('opForm'); f0.elements.edge.value = ''; f0.requestSubmit(); true");
   const probs = await waitFor(() => js("document.getElementById('opErrors')?.textContent || ''"), "the missing-field message", 10000);
@@ -656,7 +656,7 @@ try {
   const plateMachine = await js("document.getElementById('machine').value");
   const plateTypes = (await addTypes()).join(",");
   check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,chamfer,thread_mill,bore,contour,raster3d,waterline,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
-  await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
+  await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 60000);
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
   const plateOps = await js("document.querySelectorAll('#tree .tree-op').length");
@@ -665,7 +665,7 @@ try {
   const drillPts = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.type === 'drill' && o.points.length === 2)?.points)");
   check("3-axis form: fully filled, and points are typed as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}`);
   // a V-carve whose outline comes from an SVG file, through the form's file input
-  await js("document.getElementById('treeAddType').value = 'vcarve'; document.getElementById('treeAddOut').value = 'plate_1_flat'; document.getElementById('treeAdd').click(); true");
+  await js("document.getElementById('treeAddType').value = 'vcarve'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'vcarve' && !!document.getElementById('opForm')"), "the V-carve form", 60000);
   await js("const inp = document.querySelector('#opForm input[data-svg]'); const dt = new DataTransfer(); dt.items.add(new File(['<svg xmlns=\"http://www.w3.org/2000/svg\"><polygon points=\"0,0 20,0 10,8\"/></svg>'], 'tri.svg', { type: 'image/svg+xml' })); inp.files = dt.files; document.getElementById('opForm').elements.__svg_height.value = '8'; inp.dispatchEvent(new Event('change', { bubbles: true })); true");
   await waitFor(() => js("document.getElementById('opForm').elements.paths.value.includes('30 16')"), "the SVG outline in the form", 60000);
@@ -2264,7 +2264,7 @@ try {
   {
     await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
     await settle();
-    await js("document.getElementById('treeAddType').value = 'parting'; document.getElementById('treeAddOut').value = '__new'; document.getElementById('treeAdd').click(); true");
+    await js("document.getElementById('treeAddType').value = 'parting'; document.getElementById('treeAdd').click(); true");
     await waitFor(() => js("!!document.getElementById('opForm')"), "the parting form", 60000);
     const x0 = await js("document.getElementById('opForm').elements.x.value");
     // pick: a click on the taper, mid-way (not near its ends)
@@ -3138,6 +3138,56 @@ try {
     check("deleting a setup: the next one carries from the one before, said in its details; undone by Undo; asked first when it has operations",
       after.length === 2 && after[1].id === ids[2] && after[1].stock.shape === "from_previous" && !after[1].stock.from && /deleted/.test(note) && asked0 === (ops2 ? 1 : 0) && undone === 3 && /operation/.test(asked1) && kept === 3,
       `${JSON.stringify(after)}; note "${note}"; asked ${asked0} (${ops2} ops); undone ${undone}; asked "${asked1.slice(0, 80)}"; kept ${kept}`);
+  }
+
+  // (Mar) deleting the last setup: a new project's state (no setups, models, tools or part;
+  // the tool library kept), asked first, the app working with none; Undo brings it back
+  {
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle();
+    await clickGenerate();
+    await waitDone("the plate generated", 240000);
+    const lib0 = await js("window.__marcam.tools?.summary?.() || ''");
+    const exc = () => cdp.events.filter((e) => e.method === "Runtime.exceptionThrown").map((e) => e.params.exceptionDetails.exception?.description || e.params.exceptionDetails.text);
+    const errs0 = exc().length;
+    const d0 = cdp.dialogs.length;
+    const only = await js("JSON.parse(document.getElementById('job').value).setups[0].id");
+    await js(`document.querySelector('#tree .tree-setup[data-setup="${only}"] [data-act=delsetup]').click(); true`);
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups.length === 0"), "the last setup deleted", 30000);
+    await settle(800);
+    const asked = cdp.dialogs.length - d0;
+    const st = await js(`(() => { const d = JSON.parse(document.getElementById('job').value); const g = window.__marcam.state.three.groups; return { setups: d.setups.length, models: d.models.length, tools: d.tools.length, mesh: !!window.__marcam.state.mesh, empty: !!document.getElementById('treeEmpty'), add: !!document.getElementById('treeAddSetup'), lib: !!document.querySelector('#tree [data-act=library]'), part: g.part.children.length, stock: g.stock.children.length, path: (g.path?.children.length || 0), result: !!window.__marcam.state.result, emptyState: !!document.getElementById('emptyState'), download: document.getElementById('download').disabled }; })()`);
+    const lib1 = await js("window.__marcam.tools?.summary?.() || ''");
+    // with none: Generate, the simulation, save (TOML), the library panel, Add setup's dialog
+    await js("document.getElementById('generate').click(); true");
+    await settle(800);
+    await js("document.getElementById('simulate').click(); true");
+    await settle(800);
+    const toml = await js("await window.__marcam.engine('toToml', JSON.parse(document.getElementById('job').value)).then((r) => r.result.text)");
+    await js("document.querySelector('#tree [data-act=library]').click(); true");
+    await settle();
+    const libShown = await js("!!document.getElementById('libHost')");
+    await js("document.getElementById('treeAddSetup').click(); true");
+    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
+    await waitFor(() => js(modal), "Add setup with no setups", 30000);
+    const choices = await js("[...document.getElementById('sdModel').options].map((o) => o.value).join(',')");
+    await js("document.getElementById('sdCancel').click(); true");
+    await settle();
+    const errs = exc().slice(errs0);
+    await shot("41_no_setups");
+    // Undo: the plate back, its part too; Redo: none again
+    await js("document.getElementById('menuUndo').click(); true");
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups.length === 1 && !!window.__marcam.state.mesh"), "the plate back", 30000);
+    await settle();
+    const back = await js("({ ops: JSON.parse(document.getElementById('job').value).setups[0].operations.length, mesh: document.getElementById('meshInfo').textContent })");
+    await js("document.getElementById('menuRedo').click(); true");
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups.length === 0"), "none again", 30000);
+    await settle();
+    check("deleting the last setup: asked first, a new project's state (no setups, models, tools or part; library kept, + Add setup), Generate, simulate, save and Add setup with none; Undo / Redo",
+      asked === 1 && st.setups === 0 && st.models === 0 && st.tools === 0 && !st.mesh && st.empty && st.add && st.lib && st.part === 0 && st.stock === 0 && st.path === 0 && !st.result && st.download && lib0 === lib1 &&
+      /schema_version/.test(toml) && libShown && choices === "none,file" && errs.length === 0 && back.ops > 0 && /dome\.stl/.test(back.mesh),
+      `asked ${asked}; ${JSON.stringify(st)}; lib "${lib0}" -> "${lib1}"; toml ${toml.length} chars; library ${libShown}; choices ${choices}; errors ${errs.join(" | ").slice(0, 300)}; back ${JSON.stringify(back)}`);
   }
 
   // (Mar) the cut result as the next setup's stock, any way round and across kinds: the knob,
