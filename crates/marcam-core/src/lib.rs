@@ -176,6 +176,30 @@ fn moves_key(prior: &[Vec<Move>], before: &[Move]) -> u64 {
     w.0.finish()
 }
 
+/// Where the moves before cut (not how fast), for an in-process operation's cache key: a
+/// feed changed before it does not plan it again.
+fn cuts_key(prior: &[Vec<Move>], before: &[Move]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for m in prior.iter().flatten().chain(before) {
+        match m {
+            Move::Line3 { x, y, z, .. } => {
+                (0u8, x.to_bits(), y.to_bits(), z.to_bits()).hash(&mut h)
+            }
+            Move::Rapid3 { x, y, z } => (
+                1u8,
+                x.map(f64::to_bits),
+                y.map(f64::to_bits),
+                z.map(f64::to_bits),
+            )
+                .hash(&mut h),
+            Move::ToolChange { tool, .. } => (2u8, *tool).hash(&mut h),
+            _ => {}
+        }
+    }
+    h.finish()
+}
+
 /// The block left by the moves before a rest roughing (the programs before it and its own
 /// program so far), widened by its tool: see [`strategy::three_axis::RestMap`]. Its work
 /// counts against the operation's budget.
@@ -206,6 +230,107 @@ fn rest_heightmap(
 ) -> Result<sim3::Heightmap3, String> {
     // cells an eighth of the tool's radius (between 0.02 and 0.25 mm)
     let cell = (c.radius() / 8.0).clamp(0.02, 0.25);
+    cut_heightmap(job, prior, before, sb, cell, c.radius(), "rest roughing")
+}
+
+/// Whether an in-process stock is planned from (the operation's `in_process`; 2D vise
+/// operations).
+fn in_process(op: &Operation) -> bool {
+    match op {
+        Operation::Face(o) => o.in_process,
+        Operation::Pocket(o) => o.in_process,
+        Operation::Contour(o) => o.in_process,
+        Operation::Drill(o) => o.in_process,
+        Operation::Bore(o) => o.in_process,
+        _ => false,
+    }
+}
+
+/// Whether the moves before cut anything (a feed move).
+fn has_cuts(prior: &[Vec<Move>], before: &[Move]) -> bool {
+    prior.iter().flatten().chain(before).any(|m| {
+        matches!(
+            m,
+            Move::Line3 { .. } | Move::Cut { .. } | Move::Plunge { .. }
+        )
+    })
+}
+
+/// The highest a move of `moves` cuts at (its feed moves' ends).
+fn highest_cut(moves: &[Move]) -> f64 {
+    moves
+        .iter()
+        .filter_map(|m| match m {
+            Move::Line3 { z, .. } => Some(*z),
+            _ => None,
+        })
+        .fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// (Mar) The highest material the moves before (`prior`, `before`) left in the way of `ops`
+/// (an operation planned from the stock's top): within its tool's radius `r` of its feed
+/// moves. None: none in its way.
+fn material_in_way(
+    job: &Job,
+    prior: &[Vec<Move>],
+    before: &[Move],
+    ops: &[Move],
+    sb: &job::StockBox,
+    r: f64,
+) -> Result<Option<f64>, String> {
+    let cell = (r / 4.0).clamp(0.05, 0.25);
+    let hm = cut_heightmap(job, prior, before, sb, cell, r, "in-process stock")?;
+    let reach = r + cell * 0.75;
+    let mut top: Option<f64> = None;
+    for seg in sim3::segments_of3(ops, 0) {
+        let (Some(a), false) = (seg.from, seg.rapid) else {
+            continue;
+        };
+        let b = seg.to;
+        let lo = |v: f64, o: f64| (((v - reach - o) / hm.cell).floor().max(0.0)) as usize;
+        let hi = |v: f64, o: f64, n: usize| {
+            ((((v + reach - o) / hm.cell).ceil()) as isize).min(n as isize - 1)
+        };
+        let (i0, j0) = (lo(a[0].min(b[0]), hm.x0), lo(a[1].min(b[1]), hm.y0));
+        let (i1, j1) = (
+            hi(a[0].max(b[0]), hm.x0, hm.nx),
+            hi(a[1].max(b[1]), hm.y0, hm.ny),
+        );
+        if i1 < i0 as isize || j1 < j0 as isize {
+            continue;
+        }
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let l2 = dx * dx + dy * dy;
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let (x, y) = hm.centre(i, j);
+                let t = if l2 > 1e-18 {
+                    (((x - a[0]) * dx + (y - a[1]) * dy) / l2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let (ex, ey) = (a[0] + t * dx - x, a[1] + t * dy - y);
+                if ex * ex + ey * ey <= reach * reach {
+                    let z = hm.z[j * hm.nx + i];
+                    top = Some(top.map_or(z, |t: f64| t.max(z)));
+                }
+            }
+        }
+    }
+    Ok(top)
+}
+
+/// What the moves before leave of the stock, at `cell` mm cells (for a tool of `radius`;
+/// `what` for the error).
+fn cut_heightmap(
+    job: &Job,
+    prior: &[Vec<Move>],
+    before: &[Move],
+    sb: &job::StockBox,
+    cell: f64,
+    radius: f64,
+    what: &str,
+) -> Result<sim3::Heightmap3, String> {
     let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
     let mut segs: Vec<sim::Segment> = Vec::new();
     for (p, moves) in prior.iter().map(Vec::as_slice).chain([before]).enumerate() {
@@ -213,10 +338,10 @@ fn rest_heightmap(
     }
     let work = sim3::work_estimate3(cell, sb.min[2], sb.max[2], &segs, &cutter_of, cell);
     let mut hm = sim3::Heightmap3::of_job(job, sb, cell);
-    let disc = (c.radius() / cell).ceil().powi(2) * 4.0;
+    let disc = (radius / cell).ceil().powi(2) * 4.0;
     if !budget::spend((work + (hm.nx * hm.ny) as f64 * disc) as u64) {
         return Err(format!(
-            "rest roughing: the operations before it are too much to simulate at {cell} mm cells"
+            "{what}: the operations before it are too much to simulate at {cell} mm cells"
         ));
     }
     for seg in &segs {
@@ -657,6 +782,12 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 _,
             ) => return Err(wrong("flat")),
         };
+        // (Mar) in-process stock: a 2D operation after cuts in the setup (or on a stock carried
+        // in) starts at the material they left in its way
+        let aware = three
+            && op.index_a().unwrap_or(0.0) == 0.0
+            && in_process(op)
+            && (job.carried.is_some() || has_cuts(&ctx.prior, &b.moves));
         // planned before with everything the same: replay it (renumbered)
         let key = ctx.cache.as_ref().map(|_| {
             hash_of(&(
@@ -675,6 +806,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     // a rest roughing: and the moves before it
                     matches!(op, Operation::Rough3d(r) if r.rest)
                         .then(|| moves_key(&ctx.prior, &b.moves)),
+                    // in-process stock: and the moves before it (what they left)
+                    aware.then(|| cuts_key(&ctx.prior, &b.moves)),
                 ))
                 .unwrap_or_default(),
             ))
@@ -869,242 +1002,281 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 };
                 let err = |e: String| Error::Invalid(format!("program {}: {e}", prog.name));
                 use strategy::three_axis as t3;
-                match op3 {
-                    // several picked faces / pockets / outlines: each in turn, nearest next
-                    Operation::Face(o) if !o.regions.is_empty() => {
-                        for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
-                            let r = &o.regions[i];
-                            let mut one = o.clone();
-                            one.regions.clear();
-                            one.paths = r.paths.clone();
-                            one.depth = r.depth;
-                            t3::face(&mut b, d, sb, safe_r, &one).map_err(err)?
-                        }
-                    }
-                    Operation::Pocket(o) if !o.regions.is_empty() => {
-                        for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
-                            let r = &o.regions[i];
-                            let mut one = o.clone();
-                            one.regions.clear();
-                            one.paths = r.paths.clone();
-                            one.top = r.top.or(o.top);
-                            one.depth = r.depth;
-                            t3::pocket(&mut b, d, sb, safe_r, &one).map_err(err)?
-                        }
-                    }
-                    Operation::Contour(o) if !o.regions.is_empty() => {
-                        for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
-                            let r = &o.regions[i];
-                            let mut one = o.clone();
-                            one.regions.clear();
-                            one.path = r.path.clone();
-                            if let Some(side) = &r.side {
-                                one.side = side.clone();
+                // (in-process stock: planned once, then again from the material left in the
+                // way of its moves, when they start above it)
+                let start = (b.moves.len(), b.warnings.len(), b.x, b.r, b.a, b.p3);
+                let mut material: Option<f64> = None;
+                loop {
+                    let guard = t3::MaterialGuard::set(material);
+                    match op3 {
+                        // several picked faces / pockets / outlines: each in turn, nearest next
+                        Operation::Face(o) if !o.regions.is_empty() => {
+                            for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
+                                let r = &o.regions[i];
+                                let mut one = o.clone();
+                                one.regions.clear();
+                                one.paths = r.paths.clone();
+                                one.depth = r.depth;
+                                t3::face(&mut b, d, sb, safe_r, &one).map_err(err)?
                             }
-                            one.top = r.top.or(o.top);
-                            one.depth = r.depth;
-                            t3::contour(&mut b, d, sb, safe_r, &one).map_err(err)?
                         }
-                    }
-                    Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o).map_err(err)?,
-                    Operation::Pocket(o) => t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?,
-                    // (a canned cycle: on a vise, the drill along Z)
-                    Operation::Drill(o) => t3::drill(
-                        &mut b,
-                        sb,
-                        safe_r,
-                        o,
-                        o.canned && job.stock_box.is_some() && o.index_a == 0.0,
-                    ),
-                    Operation::Bore(o) => {
-                        strategy::bore::bore(&mut b, d, sb, safe_r, o).map_err(err)?
-                    }
-                    Operation::Contour(o) => t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?,
-                    Operation::Chamfer(o) => {
-                        let half = match tool.shape {
-                            ToolShape::Vbit { angle, .. } => (angle / 2.0).to_radians(),
-                            _ => unreachable!("checked above"),
-                        };
-                        strategy::edges::chamfer(&mut b, half, sb, safe_r, o).map_err(err)?
-                    }
-                    Operation::ThreadMill(o) => {
-                        // the thread mill's radius at its tip: a single-form one's diameter
-                        let r = match tool.shape {
-                            ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0) / 2.0,
-                            ToolShape::Flat { diameter } => diameter / 2.0,
-                            _ => unreachable!("checked above"),
-                        };
-                        if r <= 0.0 {
-                            return Err(err(
-                                "thread mill: the tool needs a diameter (its cutting width)"
-                                    .to_string(),
-                            ));
-                        }
-                        // its helices written as G2/G3 arcs on a vise
-                        if let Some(Move::Operation { arcs, .. }) = b
-                            .moves
-                            .iter_mut()
-                            .rev()
-                            .find(|m| matches!(m, Move::Operation { .. }))
-                        {
-                            *arcs = Some(0.005);
-                        }
-                        strategy::edges::thread_mill(&mut b, r, sb, safe_r, o).map_err(err)?
-                    }
-                    Operation::Raster3d(o) | Operation::Rough3d(o) | Operation::Waterline(o) => {
-                        let adaptive = o.pattern == "adaptive";
-                        if adaptive && !matches!(op, Operation::Rough3d(_)) {
-                            return Err(err(
-                                "the adaptive pattern is for 3D roughing only".to_string()
-                            ));
-                        }
-                        if adaptive && !three {
-                            return Err(err(
-                                "adaptive roughing needs a 3-axis vise setup".to_string()
-                            ));
-                        }
-                        // rest roughing: only where the moves before it left material (and
-                        // in a setup whose stock the one before left: always)
-                        let carried_rough =
-                            three && job.carried.is_some() && matches!(op, Operation::Rough3d(_));
-                        let rest = if (o.rest || carried_rough) && !adaptive {
-                            if !matches!(op, Operation::Rough3d(_)) {
-                                return Err(err("rest is for 3D roughing only".to_string()));
+                        Operation::Pocket(o) if !o.regions.is_empty() => {
+                            for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
+                                let r = &o.regions[i];
+                                let mut one = o.clone();
+                                one.regions.clear();
+                                one.paths = r.paths.clone();
+                                one.top = r.top.or(o.top);
+                                one.depth = r.depth;
+                                t3::pocket(&mut b, d, sb, safe_r, &one).map_err(err)?
                             }
-                            if !three {
+                        }
+                        Operation::Contour(o) if !o.regions.is_empty() => {
+                            for i in job::region_order(&o.regions, [sb.min[0], sb.min[1]]) {
+                                let r = &o.regions[i];
+                                let mut one = o.clone();
+                                one.regions.clear();
+                                one.path = r.path.clone();
+                                if let Some(side) = &r.side {
+                                    one.side = side.clone();
+                                }
+                                one.top = r.top.or(o.top);
+                                one.depth = r.depth;
+                                t3::contour(&mut b, d, sb, safe_r, &one).map_err(err)?
+                            }
+                        }
+                        Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o).map_err(err)?,
+                        Operation::Pocket(o) => {
+                            t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?
+                        }
+                        // (a canned cycle: on a vise, the drill along Z)
+                        Operation::Drill(o) => t3::drill(
+                            &mut b,
+                            sb,
+                            safe_r,
+                            o,
+                            o.canned && job.stock_box.is_some() && o.index_a == 0.0,
+                        ),
+                        Operation::Bore(o) => {
+                            strategy::bore::bore(&mut b, d, sb, safe_r, o).map_err(err)?
+                        }
+                        Operation::Contour(o) => {
+                            t3::contour(&mut b, d, sb, safe_r, o).map_err(err)?
+                        }
+                        Operation::Chamfer(o) => {
+                            let half = match tool.shape {
+                                ToolShape::Vbit { angle, .. } => (angle / 2.0).to_radians(),
+                                _ => unreachable!("checked above"),
+                            };
+                            strategy::edges::chamfer(&mut b, half, sb, safe_r, o).map_err(err)?
+                        }
+                        Operation::ThreadMill(o) => {
+                            // the thread mill's radius at its tip: a single-form one's diameter
+                            let r = match tool.shape {
+                                ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0) / 2.0,
+                                ToolShape::Flat { diameter } => diameter / 2.0,
+                                _ => unreachable!("checked above"),
+                            };
+                            if r <= 0.0 {
                                 return Err(err(
-                                    "rest roughing needs a 3-axis vise setup".to_string()
+                                    "thread mill: the tool needs a diameter (its cutting width)"
+                                        .to_string(),
                                 ));
                             }
-                            let c = cutter.expect("set above");
-                            Some(rest_map(job, &ctx.prior, &b.moves, sb, &c).map_err(err)?)
-                        } else {
-                            None
-                        };
-                        let mesh: &Mesh = if three {
-                            ctx.mesh.ok_or_else(|| {
-                                Error::Invalid(format!(
-                                    "program {}: raster3d needs part.mesh",
-                                    prog.name
-                                ))
-                            })?
-                        } else {
-                            ctx.surface(&prog.name)?
-                        };
-                        let turned = (index != 0.0).then(|| mesh.rotated_x(index));
-                        let c = cutter.expect("set above");
-                        let dc = t3::DropCutter3::new(turned.as_ref().unwrap_or(mesh), c);
-                        // rest finishing: the earlier finish's tool, to find where it could not reach
-                        let bigger = if o.rest_tool > 0 && matches!(op, Operation::Raster3d(_)) {
-                            let t = job.tool(o.rest_tool).ok_or_else(|| {
-                                err(format!(
-                                    "rest_tool {}: the project has no such tool",
-                                    o.rest_tool
-                                ))
-                            })?;
-                            let gc = cutter_for(o.rest_tool, t.shape)?;
-                            let surface = turned.as_ref().unwrap_or(mesh);
-                            let big_dc = t3::DropCutter3::new(surface, gc);
-                            let point =
-                                t3::DropCutter3::new(surface, Cutter::Flat { radius: 1e-4 });
-                            Some(t3::RestFinish::new(
-                                &big_dc,
-                                &point,
-                                o.x_range,
-                                o.y_range,
-                                gc.radius(),
-                                c.radius(),
-                                o.floor,
-                            ))
-                        } else {
-                            None
-                        };
-                        if adaptive {
-                            // the material's top: the stock, or what the moves before left
-                            let c = cutter.expect("set above");
-                            let hm = if o.rest || carried_rough {
-                                rest_heightmap(job, &ctx.prior, &b.moves, sb, &c).map_err(err)?
-                            } else {
-                                sim3::Heightmap3::of_job(
-                                    job,
-                                    sb,
-                                    (c.radius() / 8.0).clamp(0.02, 0.25),
-                                )
-                            };
-                            // (a block carried over: its other side's cuts below)
-                            let bots = job.carried.as_ref().map(|k| k.bottoms(&hm));
-                            let bottom = |x: f64, y: f64| match &bots {
-                                Some(bs) => {
-                                    let i =
-                                        (((x - hm.x0) / hm.cell).max(0.0) as usize).min(hm.nx - 1);
-                                    let j =
-                                        (((y - hm.y0) / hm.cell).max(0.0) as usize).min(hm.ny - 1);
-                                    bs[j * hm.nx + i]
-                                }
-                                None => f64::NEG_INFINITY,
-                            };
-                            t3::adaptive_rough(
-                                &mut b,
-                                &dc,
-                                &|x, y| hm.at(x, y),
-                                &bottom,
-                                sb,
-                                safe_r,
-                                o,
-                            )
-                            .map_err(err)?
-                        } else if matches!(op, Operation::Waterline(_)) {
-                            t3::waterline(&mut b, &dc, sb, safe_r, o).map_err(err)?
-                        } else if o.faces.is_empty() {
-                            t3::raster3d_on(
-                                &mut b,
-                                &dc,
-                                None,
-                                rest.as_ref(),
-                                bigger.as_ref(),
-                                sb,
-                                safe_r,
-                                o,
-                            )
-                            .map_err(err)?
-                        } else {
-                            let sub = face_subset(mesh, &o.faces).map_err(err)?;
-                            let sub = if index != 0.0 {
-                                sub.rotated_x(index)
-                            } else {
-                                sub
-                            };
-                            // the passes need cover only the faces, and the tool beside them
-                            let mut o = o.clone();
-                            if let Some((lo, hi)) = sub.bounds() {
-                                let r = c.radius();
-                                let clip = |range: [f64; 2], a: f64, b: f64| {
-                                    let (l, h) = (range[0].min(range[1]), range[0].max(range[1]));
-                                    let (l, h) = (l.max(a - r), h.min(b + r));
-                                    if range[0] <= range[1] {
-                                        [l, h]
-                                    } else {
-                                        [h, l]
-                                    }
-                                };
-                                o.x_range = clip(o.x_range, lo[0], hi[0]);
-                                o.y_range = clip(o.y_range, lo[1], hi[1]);
+                            // its helices written as G2/G3 arcs on a vise
+                            if let Some(Move::Operation { arcs, .. }) = b
+                                .moves
+                                .iter_mut()
+                                .rev()
+                                .find(|m| matches!(m, Move::Operation { .. }))
+                            {
+                                *arcs = Some(0.005);
                             }
-                            let seld = t3::DropCutter3::new(&sub, c);
-                            t3::raster3d_on(
-                                &mut b,
-                                &dc,
-                                Some(&seld),
-                                rest.as_ref(),
-                                bigger.as_ref(),
-                                sb,
-                                safe_r,
-                                &o,
-                            )
-                            .map_err(err)?
+                            strategy::edges::thread_mill(&mut b, r, sb, safe_r, o).map_err(err)?
                         }
+                        Operation::Raster3d(o)
+                        | Operation::Rough3d(o)
+                        | Operation::Waterline(o) => {
+                            let adaptive = o.pattern == "adaptive";
+                            if adaptive && !matches!(op, Operation::Rough3d(_)) {
+                                return Err(err(
+                                    "the adaptive pattern is for 3D roughing only".to_string()
+                                ));
+                            }
+                            if adaptive && !three {
+                                return Err(err(
+                                    "adaptive roughing needs a 3-axis vise setup".to_string()
+                                ));
+                            }
+                            // rest roughing: only where the moves before it left material (and
+                            // in a setup whose stock the one before left: always)
+                            let carried_rough = three
+                                && job.carried.is_some()
+                                && matches!(op, Operation::Rough3d(_));
+                            let rest = if (o.rest || carried_rough) && !adaptive {
+                                if !matches!(op, Operation::Rough3d(_)) {
+                                    return Err(err("rest is for 3D roughing only".to_string()));
+                                }
+                                if !three {
+                                    return Err(err(
+                                        "rest roughing needs a 3-axis vise setup".to_string()
+                                    ));
+                                }
+                                let c = cutter.expect("set above");
+                                Some(rest_map(job, &ctx.prior, &b.moves, sb, &c).map_err(err)?)
+                            } else {
+                                None
+                            };
+                            let mesh: &Mesh = if three {
+                                ctx.mesh.ok_or_else(|| {
+                                    Error::Invalid(format!(
+                                        "program {}: raster3d needs part.mesh",
+                                        prog.name
+                                    ))
+                                })?
+                            } else {
+                                ctx.surface(&prog.name)?
+                            };
+                            let turned = (index != 0.0).then(|| mesh.rotated_x(index));
+                            let c = cutter.expect("set above");
+                            let dc = t3::DropCutter3::new(turned.as_ref().unwrap_or(mesh), c);
+                            // rest finishing: the earlier finish's tool, to find where it could not reach
+                            let bigger = if o.rest_tool > 0 && matches!(op, Operation::Raster3d(_))
+                            {
+                                let t = job.tool(o.rest_tool).ok_or_else(|| {
+                                    err(format!(
+                                        "rest_tool {}: the project has no such tool",
+                                        o.rest_tool
+                                    ))
+                                })?;
+                                let gc = cutter_for(o.rest_tool, t.shape)?;
+                                let surface = turned.as_ref().unwrap_or(mesh);
+                                let big_dc = t3::DropCutter3::new(surface, gc);
+                                let point =
+                                    t3::DropCutter3::new(surface, Cutter::Flat { radius: 1e-4 });
+                                Some(t3::RestFinish::new(
+                                    &big_dc,
+                                    &point,
+                                    o.x_range,
+                                    o.y_range,
+                                    gc.radius(),
+                                    c.radius(),
+                                    o.floor,
+                                ))
+                            } else {
+                                None
+                            };
+                            if adaptive {
+                                // the material's top: the stock, or what the moves before left
+                                let c = cutter.expect("set above");
+                                let hm = if o.rest || carried_rough {
+                                    rest_heightmap(job, &ctx.prior, &b.moves, sb, &c)
+                                        .map_err(err)?
+                                } else {
+                                    sim3::Heightmap3::of_job(
+                                        job,
+                                        sb,
+                                        (c.radius() / 8.0).clamp(0.02, 0.25),
+                                    )
+                                };
+                                // (a block carried over: its other side's cuts below)
+                                let bots = job.carried.as_ref().map(|k| k.bottoms(&hm));
+                                let bottom = |x: f64, y: f64| match &bots {
+                                    Some(bs) => {
+                                        let i = (((x - hm.x0) / hm.cell).max(0.0) as usize)
+                                            .min(hm.nx - 1);
+                                        let j = (((y - hm.y0) / hm.cell).max(0.0) as usize)
+                                            .min(hm.ny - 1);
+                                        bs[j * hm.nx + i]
+                                    }
+                                    None => f64::NEG_INFINITY,
+                                };
+                                t3::adaptive_rough(
+                                    &mut b,
+                                    &dc,
+                                    &|x, y| hm.at(x, y),
+                                    &bottom,
+                                    sb,
+                                    safe_r,
+                                    o,
+                                )
+                                .map_err(err)?
+                            } else if matches!(op, Operation::Waterline(_)) {
+                                t3::waterline(&mut b, &dc, sb, safe_r, o).map_err(err)?
+                            } else if o.faces.is_empty() {
+                                t3::raster3d_on(
+                                    &mut b,
+                                    &dc,
+                                    None,
+                                    rest.as_ref(),
+                                    bigger.as_ref(),
+                                    sb,
+                                    safe_r,
+                                    o,
+                                )
+                                .map_err(err)?
+                            } else {
+                                let sub = face_subset(mesh, &o.faces).map_err(err)?;
+                                let sub = if index != 0.0 {
+                                    sub.rotated_x(index)
+                                } else {
+                                    sub
+                                };
+                                // the passes need cover only the faces, and the tool beside them
+                                let mut o = o.clone();
+                                if let Some((lo, hi)) = sub.bounds() {
+                                    let r = c.radius();
+                                    let clip = |range: [f64; 2], a: f64, b: f64| {
+                                        let (l, h) =
+                                            (range[0].min(range[1]), range[0].max(range[1]));
+                                        let (l, h) = (l.max(a - r), h.min(b + r));
+                                        if range[0] <= range[1] {
+                                            [l, h]
+                                        } else {
+                                            [h, l]
+                                        }
+                                    };
+                                    o.x_range = clip(o.x_range, lo[0], hi[0]);
+                                    o.y_range = clip(o.y_range, lo[1], hi[1]);
+                                }
+                                let seld = t3::DropCutter3::new(&sub, c);
+                                t3::raster3d_on(
+                                    &mut b,
+                                    &dc,
+                                    Some(&seld),
+                                    rest.as_ref(),
+                                    bigger.as_ref(),
+                                    sb,
+                                    safe_r,
+                                    &o,
+                                )
+                                .map_err(err)?
+                            }
+                        }
+                        _ => unreachable!(),
                     }
-                    _ => unreachable!(),
+                    drop(guard);
+                    if !aware || material.is_some() {
+                        break;
+                    }
+                    let m = material_in_way(
+                        job,
+                        &ctx.prior,
+                        &b.moves[..start.0],
+                        &b.moves[start.0..],
+                        sb,
+                        d / 2.0,
+                    )
+                    .map_err(err)?;
+                    match m {
+                        Some(m) if highest_cut(&b.moves[start.0..]) >= m - 1e-6 => {
+                            b.moves.truncate(start.0);
+                            b.warnings.truncate(start.1);
+                            (b.x, b.r, b.a, b.p3) = (start.2, start.3, start.4, start.5);
+                            material = Some(m);
+                        }
+                        _ => break,
+                    }
                 }
                 // (past the budget: failing, nothing to smooth)
                 if budget::over() {

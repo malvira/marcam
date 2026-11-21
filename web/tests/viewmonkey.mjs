@@ -101,7 +101,24 @@ const INSTALL = `(() => {
   };
   const longs = [];
   try { new PerformanceObserver((l) => { for (const e of l.getEntries()) longs.push(Math.round(e.duration)); }).observe({ type: 'longtask', buffered: false }); } catch {}
-  window.__monkey = { census, audit, frames, longs, recording: false };
+  /** (Mar) the toolpaths drawn are the eyes that are on: the playback's operations against the
+   *  planned ones of the setup shown, less those hidden. Null: nothing to judge now. */
+  function eyes() {
+    const m = M.machining.state, j = M.state.job, sid = M.state.tree?.setup;
+    if (!m.open || m.swapping || M.state.stale || !M.state.result || j?.schema_version !== '0.2') return null;
+    // (open with no playback, all settled: one stopped and never made again)
+    if (!m.session) return { want: 'a playback', drawn: 'none (lost)', lines: 0, segments: 0, paths: m.view.paths };
+    const s = j.setups?.find((x) => x.id === sid);
+    if (!s) return null;
+    const tools = new Set((j.tools || []).map((t) => t.number));
+    const planned = s.outputs.flatMap((o) => o.operations).map((id) => s.operations.find((o) => o.id === id)).filter((o) => o && o.enabled !== false && !o.error && tools.has(o.tool)).map((o) => o.id);
+    const want = planned.filter((id) => !M.state.hidden.has(sid + '/' + id));
+    const drawn = [...new Set(m.session.ops.map((o) => o.project_id))];
+    const cut = [];
+    v.groups.work?.traverse((o) => o.userData.path === 'cut' && o.visible && cut.push(o.geometry.drawRange.count));
+    return { want: want.join(','), drawn: drawn.join(','), lines: cut.reduce((a, b) => a + b, 0), segments: m.session.segments, paths: m.view.paths };
+  }
+  window.__monkey = { census, audit, eyes, frames, longs, recording: false };
   return true;
 })()`;
 
@@ -282,6 +299,9 @@ try {
       await js("window.__monkey.recording = false; true");
       const after = await js(SNAP);
       for (const x of await js("window.__monkey.audit()")) fail(seed, i, `${a.name}: ${x} (settled)`);
+      // (Mar) after any eye toggles: the toolpaths drawn are exactly those whose eyes are on
+      const ey = await js("window.__monkey.eyes()");
+      if (ey && (ey.want !== ey.drawn || (ey.want && ey.paths !== 'off' && !ey.lines))) fail(seed, i, `${a.name}: the toolpaths drawn (${ey.drawn || "none"}, ${ey.lines} line points) are not the eyes on (${ey.want || "none"}) ${JSON.stringify(ey)}`);
       // what the action did not touch stays as it was
       const may = new Set([...a.may, ...carry]);
       const late = [...carry].filter((k) => k.startsWith("#")).join(", ");

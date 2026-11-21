@@ -96,7 +96,8 @@ pub fn bore(
     };
     let sgn = if ccw { 1.0 } else { -1.0 };
     let pitch = op.helix_pitch.max(0.01);
-    let start_z = top + 0.5;
+    // (the operations before it having cut the material down: the helix starts there)
+    let start_z = super::three_axis::material_top(top) + 0.5;
     b.comment("--- boring ---");
     for &[cx, cy] in &op.points {
         for &r in &passes {

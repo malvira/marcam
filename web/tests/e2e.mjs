@@ -3225,12 +3225,16 @@ try {
     await clickGenerate();
     await waitDone("the knob faced in the vise", 240000);
     const ktabs = await js("[...document.querySelectorAll('#tabs button')].map((b) => b.textContent)");
+    // (Mar's knob on end: the simulated stock is this setup's, not the first setup's)
+    await js("document.getElementById('simulate').click(); true");
+    await waitDone("the knob in the vise simulated", 240000);
+    const ksim = await js("({ kind: window.__marcam.state.sim?.kind, z: !!window.__marcam.state.sim?.stocks?.[0]?.z })");
     await shot("40a_knob_in_vise");
     const kb = k.frame.stock_box;
     check("the turned knob lies in a vise (no model): a block X 0..100 round it, drawn as cut, its STL, faced and verified clean",
       k.gate.vise && k.gate.model === "none" && k.s.kind === "vise" && k.s.stock.shape === "from_previous" && k.s.part.length === 0 && kb && Math.abs(kb.max[0] - kb.min[0] - 100) < 1e-6 && Math.abs(kb.max[1] - kb.min[1] - 25) < 1e-6 &&
-      k.m.total > 100 && k.m.stl === 84 + 50 * k.m.total && k.button && ktabs.length >= 1 && ktabs.every((t) => t.endsWith("OK")),
-      `${JSON.stringify(k.gate)}; ${JSON.stringify(k.s.stock)} part ${JSON.stringify(k.s.part)}; box ${JSON.stringify(kb)}; mesh ${JSON.stringify(k.m)}; tabs ${ktabs}`);
+      k.m.total > 100 && k.m.stl === 84 + 50 * k.m.total && k.button && ktabs.length >= 1 && ktabs.every((t) => t.endsWith("OK")) && ksim.kind === "xyz" && ksim.z,
+      `${JSON.stringify(k.gate)}; ${JSON.stringify(k.s.stock)} part ${JSON.stringify(k.s.part)}; box ${JSON.stringify(kb)}; mesh ${JSON.stringify(k.m)}; tabs ${ktabs}; simulated ${JSON.stringify(ksim)}`);
     // the plate, chucked in the rotary; then stood on its end in a vise
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);

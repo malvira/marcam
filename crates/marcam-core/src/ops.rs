@@ -27,6 +27,9 @@ pub struct ParamSpec {
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub choices: &'static [&'static str],
     pub help: &'static str,
+    /// Shown folded away in the form (under More), with the rarely changed settings.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub advanced: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -64,10 +67,15 @@ const fn p(
         max: None,
         choices: &[],
         help,
+        advanced: false,
     }
 }
 
 impl ParamSpec {
+    fn adv(mut self) -> Self {
+        self.advanced = true;
+        self
+    }
     fn opt(mut self, default: Value) -> Self {
         self.required = false;
         self.default = default;
@@ -134,6 +142,17 @@ fn ramp() -> ParamSpec {
 
 /// Every operation type marcam can plan.
 pub fn registry() -> Vec<OperationType> {
+    let mut all = types();
+    // (Mar) in-process stock: the 2D vise operations start at the material left
+    for t in all.iter_mut() {
+        if ["face", "pocket", "contour", "drill", "bore"].contains(&t.kind) {
+            t.params.push(p("in_process", "boolean", "", "Start where the operations before it in the setup (and a stock carried in) left the material: no passes in the air above it. Off: from the stock's top.").opt(json!(true)).adv());
+        }
+    }
+    all
+}
+
+fn types() -> Vec<OperationType> {
     vec![
         OperationType {
             kind: "rotary_turning",

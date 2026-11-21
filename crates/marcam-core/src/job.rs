@@ -767,6 +767,11 @@ pub fn region_order(regions: &[Region], start: [f64; 2]) -> Vec<usize> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Face {
     pub tool: u32,
+    /// Start from the stock as the operations before it in the setup (and a stock carried
+    /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
+    /// stock's top, as planned before.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub in_process: bool,
     /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
     /// operation (indexed 3+1). Vise setups: must be 0.
     #[serde(default)]
@@ -794,6 +799,11 @@ pub struct Face {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pocket {
     pub tool: u32,
+    /// Start from the stock as the operations before it in the setup (and a stock carried
+    /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
+    /// stock's top, as planned before.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub in_process: bool,
     /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
     /// operation (indexed 3+1). Vise setups: must be 0.
     #[serde(default)]
@@ -834,6 +844,11 @@ pub struct Pocket {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Drill {
     pub tool: u32,
+    /// Start from the stock as the operations before it in the setup (and a stock carried
+    /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
+    /// stock's top, as planned before.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub in_process: bool,
     /// Written as a canned cycle (G81, or G83 with pecks) on a machine whose post has them
     /// (a vise setup); else the moves as planned.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -859,6 +874,11 @@ pub struct Drill {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Bore {
     pub tool: u32,
+    /// Start from the stock as the operations before it in the setup (and a stock carried
+    /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
+    /// stock's top, as planned before.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub in_process: bool,
     /// Rotary setups: the A angle (deg) the part is indexed to (indexed 3+1, a radial hole).
     #[serde(default)]
     pub index_a: f64,
@@ -917,6 +937,11 @@ fn default_bore_tolerance() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Contour {
     pub tool: u32,
+    /// Start from the stock as the operations before it in the setup (and a stock carried
+    /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
+    /// stock's top, as planned before.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub in_process: bool,
     /// Rotary setups: the A angle (deg) the part is indexed to before this 3-axis
     /// operation (indexed 3+1). Vise setups: must be 0.
     #[serde(default)]
@@ -966,6 +991,10 @@ pub struct Contour {
     /// tool's radius: a hole cut bigger, an outline left bigger. The tabs move with it.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub boundary_offset: f64,
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 fn is_zero_f64(v: &f64) -> bool {

@@ -656,15 +656,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       ${t.typeNote && t.typeNote.id === op.id ? `<div class="muted small" id="typeNote">${esc(t.typeNote.text)}</div>` : ""}
       ${t.retype && t.retype.op.id === op.id ? `<div class="muted small">${t.retype.from !== op.type ? `Type changed from ${esc(typeOf(t.retype.from)?.title || t.retype.from)}: ` : "Changed: "}not saved until Apply</div>` : ""}
       <label>Name <input name="__name" value="${esc(op.name || "")}"></label>`;
-    for (const p of ty.params) {
+    // (the rarely changed settings folded away under More)
+    let more = "";
+    const field = (p) => {
       const v = op[p.name];
       // rotary_finish uses one stepover or the other, depending on the pattern
-      if (p.name === "stepover_deg" && op.pattern === "around") continue;
-      if (p.name === "stepover_mm" && op.pattern === "along" && op.stepover_deg != null) continue;
+      if (p.name === "stepover_deg" && op.pattern === "around") return;
+      if (p.name === "stepover_mm" && op.pattern === "along" && op.stepover_deg != null) return;
       // a vise has no rotary axis to index
-      if (p.name === "index_a" && isBox(setup())) continue;
+      if (p.name === "index_a" && isBox(setup())) return;
       // several picked features: shown in the Geometry list, set by picking
-      if (p.kind === "regions") continue;
+      if (p.kind === "regions") return;
       const label = `${p.name.replace(/_/g, " ")}${p.unit ? ` (${p.unit})` : ""}`;
       if (p.name === "tool") {
         // the project's tools, those the type cannot use greyed with the reason; a tool the
@@ -698,7 +700,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         const text = v == null ? "" : Array.isArray(v) ? v.join(", ") : v;
         html += `<label title="${esc(p.help)}">${label}<input name="${p.name}" value="${esc(text)}" placeholder="${p.default != null ? esc(Array.isArray(p.default) ? p.default.join(", ") : p.default) : p.required ? "required" : ""}"></label>`;
       }
+    };
+    for (const p of ty.params) {
+      const at = html.length;
+      field(p);
+      if (p.advanced) {
+        more += html.slice(at);
+        html = html.slice(0, at);
+      }
     }
+    if (more) html += `<details class="op-more" id="opMore" ${t.moreOpen ? "open" : ""}><summary>More</summary>${more}</details>`;
     const faces = op.geometry?.find((g) => g.kind === "faces");
     const ax = op.geometry?.find((g) => g.kind === "axial_range");
     if (op.type === "raster3d") html += `<div class="muted small" id="rasterInfo">${esc(rasterInfo(op))}</div>`;
@@ -1672,6 +1683,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   $("tree").addEventListener("input", (ev) => {
     if (t.draft && ev.target.closest?.("#opForm")) previewDraft();
   });
+  // (the operation form's More: kept open or shut as the person left it)
+  $("tree").addEventListener("toggle", (ev) => {
+    if (ev.target.id === "opMore") t.moreOpen = ev.target.open;
+  }, true);
   $("tree").addEventListener("submit", async (ev) => {
     // (the operation's form; the setup's form in the details is the setup dialog's own)
     if (ev.target.id !== "opForm") return;

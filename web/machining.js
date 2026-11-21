@@ -303,7 +303,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** The tree's eyes changed: the playback plays the visible operations, so it is opened
    *  again at the same place (nothing is planned again). */
   async function applyHidden() {
-    if (!m.session) return;
+    // (open, its playback stopped by a newer plan: made again now with these eyes; else the
+    // eyes changed nothing on it until a plan came: Mar's "can't get both to show")
+    if (!m.session && !m.open) return;
     if (m.open) {
       // (a view action: opened again by itself, the status line keeps the job's times; at
       // the place last asked for, a scrub still under way included: the reopen keeps it)

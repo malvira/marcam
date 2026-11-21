@@ -703,9 +703,12 @@ function simOpts(res) {
   const v = res || $("simRes").value;
   // operations hidden in the tree are not simulated (their material stays)
   const hide = hiddenPlanned();
-  if (v !== "custom") return { res: v, hide };
+  // (the setup shown: without it the engine simulated the first setup, and its stock was
+  // drawn in another's view; Mar's knob on end)
+  const at = state.job?.schema_version === "0.2" && state.tree?.setup ? { setup: state.tree.setup } : {};
+  if (v !== "custom") return { res: v, hide, ...at };
   const deg = Number($("simDeg").value) || 1.5;
-  return { dx: Number($("simDx").value) || 0.1, na: Math.max(8, Math.round(360 / deg)), cell: Number($("simCell").value) || 0.25, hide };
+  return { dx: Number($("simDx").value) || 0.1, na: Math.max(8, Math.round(360 / deg)), cell: Number($("simCell").value) || 0.25, hide, ...at };
 }
 
 /** The planning numbers of the operations hidden in the tree (those the engine planned: enabled,
@@ -939,6 +942,8 @@ async function simulateLocked(opts = {}) {
     const t0 = performance.now();
     let result = null;
     const epoch = state.epoch;
+    // (a plan landing meanwhile, of another setup or an edit: this one is not its stock)
+    const forJob = state.job;
     const { gpu, why } = await simGpu();
     let backend = `CPU (${why})`;
     if (gpu) {
@@ -954,7 +959,7 @@ async function simulateLocked(opts = {}) {
     }
     if (!result) result = (await engine("simulate", state.job, simOpts(opts.res), state.mesh)).result;
     const ms = performance.now() - t0;
-    if (epoch !== state.epoch) return;
+    if (epoch !== state.epoch || forJob !== state.job) return;
     showBackend(backend);
     result.stocks.forEach((st) => (st.hidden = hiddenPlanned().length));
     state.sim = result;

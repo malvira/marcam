@@ -11,15 +11,59 @@ use crate::toolpath::Builder;
 
 const UP: [f64; 3] = [0.0, 0.0, 1.0];
 
-/// Levels from `top` down to `bottom`, at most `step` apart, ending exactly at `bottom`.
+thread_local! {
+    /// The highest material left in the way of the operation being planned (the stock as the
+    /// operations before it left it), when lower than the stock's top: see [`with_material`].
+    static MATERIAL: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Plan with the material in the tool's way no higher than `top` (Mar: in-process stock):
+/// [`levels`] leaves out the passes wholly above it, [`material_top`] starts there.
+pub fn with_material<T>(top: Option<f64>, f: impl FnOnce() -> T) -> T {
+    MATERIAL.with(|m| m.set(top));
+    let out = f();
+    MATERIAL.with(|m| m.set(None));
+    out
+}
+
+/// [`MATERIAL`] set while it lives (cleared when it goes, on an error too).
+pub struct MaterialGuard;
+
+impl MaterialGuard {
+    pub fn set(top: Option<f64>) -> MaterialGuard {
+        MATERIAL.with(|m| m.set(top));
+        MaterialGuard
+    }
+}
+
+impl Drop for MaterialGuard {
+    fn drop(&mut self) {
+        MATERIAL.with(|m| m.set(None));
+    }
+}
+
+/// Where the material in the way of the operation being planned starts: `top`, or lower
+/// when the operations before it cut it down.
+pub fn material_top(top: f64) -> f64 {
+    MATERIAL.with(|m| m.get()).map_or(top, |t| t.min(top))
+}
+
+/// Levels from `top` down to `bottom`, at most `step` apart, ending exactly at `bottom`. (The
+/// operations before it having cut the material down: those wholly above it left out, the
+/// last always kept.)
 pub fn levels(top: f64, bottom: f64, step: f64) -> Vec<f64> {
     if bottom >= top - 1e-9 {
         return vec![bottom];
     }
     let n = ((top - bottom) / step.max(1e-3)).ceil().max(1.0) as usize;
-    (1..=n)
-        .map(|k| top - (top - bottom) * k as f64 / n as f64)
-        .collect()
+    let all = (1..=n).map(|k| top - (top - bottom) * k as f64 / n as f64);
+    match MATERIAL.with(|m| m.get()) {
+        // (a level cuts what is above it, down to it: in air when the material is no higher)
+        Some(m) => all
+            .filter(|&z| z < m - 1e-6 || (z - bottom).abs() < 1e-9)
+            .collect(),
+        None => all.collect(),
+    }
 }
 
 /// Feed down to `z` at the plunge feed, from the safe height above (x, y).
@@ -68,6 +112,7 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> 
             adaptive: false,
             smoothing: None,
             regions: Vec::new(),
+            in_process: op.in_process,
         };
         b.comment("--- facing (bounded by a face) ---");
         return path_pocket(b, d, stock, safe, &p, op.boundary_offset);
@@ -472,16 +517,18 @@ pub fn drill(b: &mut Builder, stock: &StockBox, safe: f64, op: &Drill, canned: b
         }
     }
     b.comment("--- drilling ---");
+    // (the operations before it having cut the material down: the pecks start there)
+    let from = material_top(top);
     for &[x, y] in &op.points {
         b.rapid3(None, None, Some(safe));
         b.rapid3(Some(x), Some(y), None);
-        b.rapid3(None, None, Some(top + op.retract));
+        b.rapid3(None, None, Some(from + op.retract));
         // peck: feed down a peck, rapid back out, rapid down to just above the last depth
-        let mut z = top;
+        let mut z = from;
         while z > bottom + 1e-9 {
             let next = (z - op.peck).max(bottom);
             b.line3(x, y, next, UP, op.feed);
-            b.rapid3(None, None, Some(top + op.retract));
+            b.rapid3(None, None, Some(from + op.retract));
             if next > bottom + 1e-9 {
                 b.rapid3(None, None, Some(next + 0.2));
             }
