@@ -3140,6 +3140,67 @@ try {
       `${JSON.stringify(after)}; note "${note}"; asked ${asked0} (${ops2} ops); undone ${undone}; asked "${asked1.slice(0, 80)}"; kept ${kept}`);
   }
 
+  // (Mar) the cut result as the next setup's stock, any way round and across kinds: the knob,
+  // turned, lying in a vise (no model) and faced; the plate, cut in the vise, chucked in the
+  // rotary; the plate stood on its end (Turned Y 90). Drawn as the engine has it; its STL.
+  {
+    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
+    const addCarried = async (kind, rot) => {
+      await js("document.getElementById('treeAddSetup').click(); true");
+      await waitFor(() => js(modal), "the add setup dialog", 30000);
+      await js(`const r = document.querySelector('input[name="sdStock"][value="previous"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true }));
+        document.querySelector('.sd-kind[data-kind="${kind}"]').click();
+        ${rot ? `const y = document.getElementById('sdRotY'); y.value = '${rot}'; y.dispatchEvent(new Event('input', { bubbles: true }));` : ""} true`);
+      await sleep(200);
+      const gate = await js(`({ vise: !document.querySelector('.sd-kind[data-kind="vise"] input').disabled, model: document.getElementById('sdModel').value, kind: document.querySelector('input[name="sdKind"]:checked')?.value })`);
+      await js("document.getElementById('sdOk').click(); true");
+      await waitFor(() => js(`!${modal}`), "the carried setup added", 60000);
+      await settle();
+      const d = JSON.parse(await js("document.getElementById('job').value"));
+      const s = d.setups[d.setups.length - 1];
+      const frame = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${s.id}' }).then((r) => r.result)`);
+      await waitFor(() => js("window.__marcam.state.three.groups.stock.children.some((o) => o.userData.carried) && !window.__marcam.state.three.drawing"), "the carried stock drawn as a mesh", 120000);
+      const m = await js(`await window.__marcam.engine('carriedMesh', JSON.parse(document.getElementById('job').value), { setup: '${s.id}', stl: true }, window.__marcam.state.mesh).then((r) => ({ total: r.result.total, bounds: r.result.bounds, stl: r.result.stl.length }))`);
+      const button = await js("!!document.getElementById('treeStockStl')");
+      return { gate, s, frame, m, button };
+    };
+    // the knob, lying in a vise
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await settle();
+    const k = await addCarried("vise");
+    await js("document.getElementById('treeAddType').value = 'face'; document.getElementById('treeAdd').click(); true");
+    await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'face' && !!document.getElementById('opForm')"), "the facing form", 60000);
+    await js("document.getElementById('opForm').requestSubmit(); true");
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups[1].operations.some((o) => o.type === 'face')"), "the facing added", 60000);
+    await clickGenerate();
+    await waitDone("the knob faced in the vise", 240000);
+    const ktabs = await js("[...document.querySelectorAll('#tabs button')].map((b) => b.textContent)");
+    await shot("40a_knob_in_vise");
+    const kb = k.frame.stock_box;
+    check("the turned knob lies in a vise (no model): a block X 0..100 round it, drawn as cut, its STL, faced and verified clean",
+      k.gate.vise && k.gate.model === "none" && k.s.kind === "vise" && k.s.stock.shape === "from_previous" && k.s.part.length === 0 && kb && Math.abs(kb.max[0] - kb.min[0] - 100) < 1e-6 && Math.abs(kb.max[1] - kb.min[1] - 25) < 1e-6 &&
+      k.m.total > 100 && k.m.stl === 84 + 50 * k.m.total && k.button && ktabs.length >= 1 && ktabs.every((t) => t.endsWith("OK")),
+      `${JSON.stringify(k.gate)}; ${JSON.stringify(k.s.stock)} part ${JSON.stringify(k.s.part)}; box ${JSON.stringify(kb)}; mesh ${JSON.stringify(k.m)}; tabs ${ktabs}`);
+    // the plate, chucked in the rotary; then stood on its end in a vise
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle();
+    const r = await addCarried("rotary");
+    await shot("40b_plate_in_rotary");
+    const st = r.frame.stock;
+    check("the plate cut in the vise goes into the rotary: a bar 60 long round it, front at X0, drawn as cut",
+      r.s.kind === "rotary" && !r.frame.stock_box && Math.abs(st.length - 60) < 1e-6 && Math.abs(st.radius - Math.hypot(20, 5)) < 1e-6 && Math.abs(r.m.bounds[0][0] + 60) < 0.5 && Math.abs(r.m.bounds[1][0]) < 0.5,
+      `${JSON.stringify(r.s.stock)}; ${JSON.stringify(st)}; bounds ${JSON.stringify(r.m.bounds)}`);
+    await js(`document.querySelector('#tree .tree-setup[data-setup="${r.s.id}"] [data-act=delsetup]').click(); true`);
+    await settle();
+    const e = await addCarried("vise", 90);
+    await shot("40c_plate_on_end");
+    const eb = e.frame.stock_box;
+    check("the plate stood on its end (Turned Y 90): its stock turned, a block 10 x 40 x 60, drawn as cut",
+      JSON.stringify(e.s.stock.rotate) === "[0,90,0]" && JSON.stringify(eb.min.map(Math.round)) === "[0,0,-60]" && JSON.stringify(eb.max.map(Math.round)) === "[10,40,0]" && e.m.total > 12,
+      `${JSON.stringify(e.s.stock)}; ${JSON.stringify(eb)}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

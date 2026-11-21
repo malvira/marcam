@@ -534,6 +534,50 @@ pub mod api {
         }
     }
 
+    /// The stock a setup starts with when it takes what a setup before left (`opts.setup`):
+    /// that cut result, turned and moved into this setup, as triangles (flattened xyz, f32)
+    /// for drawing, and (`opts.stl`) as a binary STL (base64).
+    pub fn carried_mesh(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let Some(c) = job.carried.as_deref() else {
+            return err("this setup's stock is not what a setup before left");
+        };
+        let m = match c {
+            marcam::carry::Carried::Block {
+                x0,
+                y0,
+                cell,
+                nx,
+                ny,
+                top,
+                bot,
+            } => marcam::carry_mesh::block_mesh(*x0, *y0, *cell, *nx, *ny, top, bot),
+            marcam::carry::Carried::Bar(map) => marcam::carry_mesh::bar_mesh(map),
+        };
+        let tri: Vec<f32> = m
+            .triangles
+            .iter()
+            .flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32)))
+            .collect();
+        let mut out = json!({ "triangles": tri, "total": m.triangles.len(), "bounds": m.bounds() });
+        if opts["stl"].as_bool() == Some(true) {
+            out["stl"] = json!(b64(&marcam::carry_mesh::to_stl(
+                &m,
+                "marcam: the stock a setup starts with"
+            )));
+        }
+        out
+    }
+
     /// Oriented mesh triangles (flattened xyz, f32) for display, thinned to about
     /// `max_triangles` (`opts`, default 200000).
     pub fn mesh_triangles(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
@@ -1831,6 +1875,7 @@ pub mod api {
             "sim_close" => sim_close(),
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&d(a), &s(b), c),
+            "carried_mesh" => carried_mesh(&d(a), &s(b), c),
             "svg_paths" => svg_paths(&s(a), &s(b)),
             "estimate_gcode" => estimate_gcode(&s(a), &s(b)),
             "sim_grid" => sim_grid(&d(a), &s(b), c),

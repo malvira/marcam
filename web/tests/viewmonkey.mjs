@@ -192,6 +192,22 @@ function actions(r, app) {
     { name: "tool", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-tool [data-act=tool]')")) || null },
     { name: "delsetup", w: 1, may: ["project", "selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=delsetup]')")) || null },
     { name: "foldtree", w: 1, may: [], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=fold]')")) || null },
+    { name: "carry", w: 1, may: ["project", "selected", "form", "pos", "hidden", "cam"], run: async () => {
+      // (Mar) a setup taking what the last one left: a vise or the rotary, maybe stood on end
+      if (!(await click("document.getElementById('treeAddSetup')"))) return null;
+      const modal = "document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded')";
+      for (let i = 0; i < 50 && !(await js(modal)); i++) await sleep(100);
+      if (!(await js(modal))) return "(no dialog)";
+      const kind = r.pick(["vise", "rotary"]), rot = r.pick([0, 0, 90]);
+      await js(`(() => { const p = document.querySelector('input[name="sdStock"][value="previous"]'); if (p.closest('label').classList.contains('hidden')) return false; p.checked = true; p.dispatchEvent(new Event('change', { bubbles: true }));
+        const k = document.querySelector('.sd-kind[data-kind="${kind}"] input'); if (!k.disabled) document.querySelector('.sd-kind[data-kind="${kind}"]').click();
+        const y = document.getElementById('sdRotY'); y.value = '${rot}'; y.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+      await js("document.getElementById('sdOk').click(); true");
+      for (let i = 0; i < 100 && (await js(modal)); i++) await sleep(100);
+      if (await js(modal)) await js("document.getElementById('sdCancel').click(); true");
+      return `${kind} ${rot}`;
+    } },
+    { name: "othersetup", w: 1, may: ["selected", "form", "pos", "hidden", "cam"], run: async () => { const k = r.f(); const id = await js(`(() => { const e = [...document.querySelectorAll('#tree .tree-setup:not(.active) [data-act=setup]')]; return e.length ? e[Math.floor(${k} * e.length)].closest('.tree-setup').dataset.setup : null; })()`); if (id) await click(`document.querySelector('#tree .tree-setup[data-setup="${id}"] [data-act=setup]')`); return id; } },
     { name: "generate", w: 1, may: ["pos"], run: async () => { await click("document.getElementById('generate')"); } },
   ];
 }

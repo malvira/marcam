@@ -877,6 +877,8 @@ export function setupProject(ctx) {
       if (cfg.carry.from && at > 0 && cfg.carry.from !== doc.setups[at - 1].id) s.stock.from = cfg.carry.from;
       if (cfg.carry.turn && cfg.carry.turn !== "none") s.stock.turn = cfg.carry.turn;
       if (cfg.carry.offset?.some((v) => v)) s.stock.offset = cfg.carry.offset.map(r3);
+      // (Mar) turned any way: the cut result goes on as a mesh
+      if (cfg.carry.rotate?.some((v) => v)) s.stock.rotate = cfg.carry.rotate.map((v) => Math.round(v * 1e4) / 1e4);
       // the starter tools, for the stock it started from (the first setup back with its own)
       let k = doc.setups.indexOf(s) - 1;
       while (k > 0 && doc.setups[k].stock?.shape === "from_previous") k--;
@@ -1170,11 +1172,11 @@ export function setupProject(ctx) {
       stockBox, partBox,
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
       stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && window.__marcam.meshFor(m.file)), tris: m && window.__marcam.meshFor(m.file) ? parseStl(window.__marcam.meshFor(m.file)).tris : null, previewTris, post: s.post,
-      canCarry: doc.setups.indexOf(s) > 0, setupId: s.id, rotate: m?.rotate,
+      canCarry: doc.setups.indexOf(s) > 0, setupId: s.id, rotate: s.stock?.shape === "from_previous" ? s.stock.rotate : m?.rotate,
       // (Mar) this setup's part: its own, another setup's, or another file
       modelChoices: m ? [{ value: "own", label: `its own: ${m.file}` }]
         .concat(doc.setups.filter((o) => o !== s).map((o) => [o, doc.models.find((x) => o.part.includes(x.id) && x.kind === "mesh")]).filter(([, om]) => om && om.file !== m.file && window.__marcam.meshFor(om.file)).map(([o, om]) => ({ value: `setup:${o.id}`, label: `as ${o.name || o.id}: ${om.file}` })))
-        .concat([{ value: "file", label: "another file..." }]) : [],
+        .concat([{ value: "none", label: "no model" }, { value: "file", label: "another file..." }]) : [],
       trisOf: (id) => {
         const o = doc.setups.find((x) => x.id === id);
         const om = o && doc.models.find((x) => o.part.includes(x.id) && x.kind === "mesh");
@@ -1227,7 +1229,14 @@ export function setupProject(ctx) {
     const ownBytes = m && window.__marcam.meshFor(m.file);
     let tris = ownBytes ? parseStl(ownBytes).tris : null;
     let found = null;
-    if (cfg.model?.kind === "setup") {
+    if (cfg.model?.kind === "none") {
+      // (Mar) no model: its stock and its operations on the stock only
+      const s1 = doc.setups.find((x) => x.id === s.id);
+      s1.part = [];
+      const used = new Set(doc.setups.flatMap((x) => x.part || []));
+      doc.models = doc.models.filter((x) => used.has(x.id));
+      tris = null;
+    } else if (cfg.model?.kind === "setup") {
       const o = doc.setups.find((x) => x.id === cfg.model.id);
       const om = o && doc.models.find((x) => o.part.includes(x.id) && x.kind === "mesh");
       if (om) {
@@ -1266,20 +1275,50 @@ export function setupProject(ctx) {
       return showError(e.message);
     }
     if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
-    const meshModel = doc.models.find((x) => x.kind === "mesh");
-    if (!meshModel || !state.mesh) return showError("Import an STL first: a new setup needs the part as a mesh.");
+    // (Mar) its model: the part's mesh, another setup's, a new file, or none
+    const meshModel = doc.models.find((x) => x.kind === "mesh" && window.__marcam.meshFor(x.file));
+    const meshOf = (o) => doc.models.find((x) => o.part.includes(x.id) && x.kind === "mesh" && window.__marcam.meshFor(x.file));
+    const others = doc.setups.map((o) => [o, meshOf(o)]).filter(([, om]) => om && om.file !== meshModel?.file);
+    const seen = new Set();
+    const modelChoices = (meshModel ? [{ value: "own", label: `the part: ${meshModel.file}` }] : [])
+      .concat(others.filter(([, om]) => !seen.has(om.file) && seen.add(om.file)).map(([o, om]) => ({ value: `setup:${o.id}`, label: `as ${o.name || o.id}: ${om.file}` })))
+      .concat([{ value: "none", label: "no model" }, { value: "file", label: "another file..." }]);
     let n = doc.setups.length + 1;
     while (doc.setups.some((s) => s.id === `setup${n}`)) n++;
-    const cfg = await dialog.open("add", { kind: "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: true, tris: parseStl(state.mesh).tris, canCarry: true,
+    const cfg = await dialog.open("add", { kind: "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: !!meshModel, tris: meshModel ? parseStl(window.__marcam.meshFor(meshModel.file)).tris : null, canCarry: doc.setups.length > 0,
+      modelChoices,
+      trisOf: (id) => {
+        const o = doc.setups.find((x) => x.id === id);
+        const om = o && meshOf(o);
+        return om ? parseStl(window.__marcam.meshFor(om.file)).tris : null;
+      },
       carrySources: doc.setups.map((x) => ({ id: x.id, name: x.name || x.id })) });
     if (!cfg) return false;
     setStatus(`Adding a ${KINDS[cfg.kind]} setup...`, "busy");
     const before = $("job").value;
-    const model = { ...meshModel, id: `setup${n}_part` };
-    doc.models.push(model);
-    const s = { id: `setup${n}`, name: cfg.setupName || KINDS[cfg.kind], stock: { shape: "cylinder", radius: 1, length: 1 }, clearance: 3, part: [model.id], spindle_rpm: 12000, operations: [], outputs: [] };
+    let model = null, tris = null;
+    if (cfg.model?.kind === "setup") {
+      const om = meshOf(doc.setups.find((x) => x.id === cfg.model.id));
+      model = { ...om, id: `setup${n}_part` };
+      tris = parseStl(window.__marcam.meshFor(om.file)).tris;
+    } else if (cfg.model?.kind === "file") {
+      const part = cfg.model.parsed;
+      const taken = new Set([...doc.models.map((x) => x.file), ...state.extraMeshes.keys()]);
+      let name = `${slug(cfg.model.file.name)}.stl`;
+      for (let k = 2; taken.has(name); k++) name = `${slug(cfg.model.file.name)}_${k}.stl`;
+      const bytes = part.step ? part.step.stl : encodeStl(part.tris, `marcam: ${cfg.model.file.name}`);
+      state.extraMeshes.set(name, { bytes, name: cfg.model.file.name });
+      state.meshesGen++;
+      model = { id: `setup${n}_part`, name: cfg.model.file.name, kind: "mesh", file: name };
+      tris = part.tris;
+    } else if (cfg.model?.kind !== "none" && meshModel) {
+      model = { ...meshModel, id: `setup${n}_part` };
+      tris = parseStl(window.__marcam.meshFor(meshModel.file)).tris;
+    }
+    if (model) doc.models.push(model);
+    const s = { id: `setup${n}`, name: cfg.setupName || KINDS[cfg.kind], stock: { shape: "cylinder", radius: 1, length: 1 }, clearance: 3, part: model ? [model.id] : [], spindle_rpm: 12000, operations: [], outputs: [] };
     doc.setups.push(s);
-    const report = await applySetup(doc, s, cfg, parseStl(state.mesh).tris);
+    const report = await applySetup(doc, s, cfg, tris);
     if (state.tree) state.tree.setup = s.id;
     await commitSetupChange(doc, report, { label: `Setup "${s.name}" added.`, job: before });
     if (cfg.machine) ctx.selectMachine(cfg.machine);

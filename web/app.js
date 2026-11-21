@@ -124,7 +124,7 @@ function showSimRing() {
 }
 /** Engine calls by command, since the page loaded (window.__marcam.calls). */
 const calls = {};
-const WITH_LIBRARIES = new Set(["opDefaults", "setMaterial", "simulate", "meshTriangles", "simGrid", "simOpen", "gpuOpen"]);
+const WITH_LIBRARIES = new Set(["opDefaults", "setMaterial", "simulate", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
 function engine(cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
   // (Mar) setups with their own parts: the part file and theirs, given together
@@ -1388,12 +1388,13 @@ async function drawModel() {
   const { THREE, groups } = v;
   const v2 = doc.schema_version === "0.2";
   const setup = v2 ? doc.setups?.find((s) => s.id === state.tree?.setup) || doc.setups?.[0] : null;
-  const ids = v2 ? (setup?.part?.length ? setup.part : doc.models?.map((m) => m.id) || []) : [];
+  // (a setup with no model: none, as the engine has it)
+  const ids = v2 ? (Array.isArray(setup?.part) ? setup.part : doc.models?.map((m) => m.id) || []) : [];
   const models = v2 ? (doc.models || []).filter((m) => ids.includes(m.id)) : [];
   // (with the colours' generation: a draw begun before a colour changed is dropped)
   // (a setup whose stock the one before left: that one's stock and part too)
   const carried = v2 && setup?.stock?.shape === "from_previous";
-  const key = JSON.stringify([setup?.id, setup?.stock, setup?.kind, setup?.holding, models, v2 ? null : [doc.stock, doc.part], carried ? [doc.setups.map((s) => [s.id, s.stock, s.part, s.kind]), doc.models] : null, state.mesh?.length || 0, colorsGen]);
+  const key = JSON.stringify([setup?.id, setup?.stock, setup?.kind, setup?.holding, models, v2 ? null : [doc.stock, doc.part], carried ? [doc.setups.map((s) => [s.id, s.stock, s.part, s.kind, s === setup ? null : s.operations]), doc.models, doc.tools] : null, state.mesh?.length || 0, colorsGen]);
   // the work zero's triad: where X0 Y0 Z0 of the programs is (a vise setup's own)
   const z0 = setup?.post?.origin;
   if (v.axes) v.axes.position.set(...(Array.isArray(z0) && (setup?.stock?.shape === "box" || setup?.kind === "vise") ? z0 : [0, 0, 0]));
@@ -1414,9 +1415,10 @@ async function drawModel() {
     }
     if (v.modelKey !== key) return;
   }
-  const prof = frame?.profile ? frame.profile.points : v2 ? models.find((m) => m.kind === "profile")?.points : doc.part?.profile?.points;
+  // (carried: the part as the engine turns it, if it goes on at all)
+  const prof = frame ? frame.profile?.points : v2 ? models.find((m) => m.kind === "profile")?.points : doc.part?.profile?.points;
   let bounds = null;
-  if (mesh && state.mesh) {
+  if (mesh && state.mesh && (!frame || frame.mesh)) {
     try {
       // (a part being drawn: tests wait for it)
       v.drawing = (v.drawing || 0) + 1;
@@ -1482,6 +1484,36 @@ async function drawModel() {
     v.bounds = { xmin, xmax, R };
     fitKey = JSON.stringify([R, Math.round(xmin), Math.round(xmax)]);
   }
+  // (Mar) carried: what the setup before left, as this setup starts with it (the box or bar
+  // above until it is worked out, and if it cannot be)
+  if (carried && frame) {
+    try {
+      v.drawing = (v.drawing || 0) + 1;
+      let r;
+      try {
+        ({ result: r } = await engine("carriedMesh", doc, { setup: setup.id }, state.mesh));
+      } finally {
+        v.drawing--;
+      }
+      if (v.modelKey !== key) return;
+      if (r?.triangles?.length) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.Float32BufferAttribute(r.triangles, 3));
+        g.computeVertexNormals();
+        const o = stockObject(THREE, g);
+        o.userData.carried = true;
+        stockNew.length = 0;
+        stockNew.push(o);
+      }
+    } catch (e) {
+      if (e?.message === "cancelled" || e?.message === "superseded") {
+        if (v.modelKey === key) v.modelKey = null;
+        setTimeout(drawModel, 50);
+        return;
+      }
+      console.warn(`the carried stock is drawn as its box: ${e?.message}`);
+    }
+  }
   clear(groups.stock);
   clear(groups.part);
   for (const o of partNew) groups.part.add(o);
@@ -1511,7 +1543,8 @@ async function drawModel() {
   // frame the view when the stock changes; keep the person's orbit otherwise
   if (fitKey && v.fitted !== fitKey && v.fitted !== "picking") {
     if (sb) {
-      const c = [0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2), span = Math.max(sb.max[0] - sb.min[0], sb.max[1] - sb.min[1]);
+      // (a block standing tall, as a plate stood on its end: its height counts too)
+      const c = [0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2), span = Math.max(sb.max[0] - sb.min[0], sb.max[1] - sb.min[1], sb.max[2] - sb.min[2]);
       v.camera.position.set(c[0] - span * 0.3, c[1] - span * 1.2, c[2] + span * 0.9);
       v.controls.target.set(...c);
     } else {

@@ -280,7 +280,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         ${t.setupNotes?.[s.id] ? `<div class="small setup-note" id="setupNote">${esc(t.setupNotes[s.id])}</div>` : ""}
         <div class="row small"><button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
         <button type="button" id="treeReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button>
-        <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button></div>
+        <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button>
+        ${s.stock?.shape === "from_previous" ? `<button type="button" id="treeStockStl" title="The stock this setup starts with (what the setup before left, turned as here) as an STL">Incoming stock STL</button>` : ""}</div>
         <div id="setupHost" class="setup-host"></div>`;
     }
     html += `<div id="opEditor"></div></div>`;
@@ -1118,15 +1119,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     return fits.sort((a, b) => b.diameter - a.diameter)[0]?.number;
   }
 
+  /** A new operation id for setup `s`: unused in the whole project (ids are project-wide). */
+  function newOpId(s) {
+    const used = new Set(t.doc.setups.flatMap((x) => x.operations.map((o) => o.id)));
+    for (let k = s.operations.length + 1; ; k++) if (!used.has(`op${k}`)) return `op${k}`;
+  }
+
   /** A new operation of `type` for the features `ids`: engine defaults, then the picks. */
   async function startFromDetected(type, ids) {
     const s = setup();
-    let id;
-    for (let k = s.operations.length + 1; ; k++)
-      if (!s.operations.some((o) => o.id === `op${k}`)) {
-        id = `op${k}`;
-        break;
-      }
+    const id = newOpId(s);
     try {
       // drilling: the flat tool of the holes' size; boring: the largest that fits inside
       let tool;
@@ -1157,8 +1159,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const kind = $("treeAddType").value;
       const ty = typeOf(kind);
       const s = setup();
-      let id;
-      for (let k = s.operations.length + 1; ; k++) if (!s.operations.some((o) => o.id === `op${k}`)) { id = `op${k}`; break; }
+      const id = newOpId(s);
       // a draft with every field filled by the engine's defaults (from the setup's tools,
       // spindle, machine limits and part faces); it joins the project on Apply
       const out = $("treeAddOut").value;
@@ -1247,6 +1248,26 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "treeAddSetup") {
       await window.__marcam.project.addSetup();
+      return;
+    }
+    if (el.id === "treeStockStl") {
+      // (Mar) the stock this setup starts with, as a file
+      try {
+        const s = setup();
+        el.disabled = true;
+        const { result } = await engine("carriedMesh", t.doc, { setup: s.id, stl: true }, state.mesh);
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([result.stl], { type: "model/stl" }));
+        a.download = `${s.id}_incoming_stock.stl`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      } catch (e) {
+        showError(`The incoming stock: ${e.message}`);
+      } finally {
+        el.disabled = false;
+      }
       return;
     }
     if (el.id === "treeReplace") {

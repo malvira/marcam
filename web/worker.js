@@ -27,6 +27,7 @@ const BASE64 = {
   simOpen: [["path"], ["times"]],
   simSeek: [["r"], ["z"], ["op"]],
   faceRegions: [["triangles"], ["region_of"]],
+  carriedMesh: [["stl"]],
 };
 
 function prepare(cmd, result, transfer) {
@@ -49,7 +50,7 @@ function prepare(cmd, result, transfer) {
     o[k] = Float32Array.from(a);
     transfer.push(o[k].buffer);
   };
-  if (cmd === "meshTriangles") floats(result, "triangles");
+  if (cmd === "meshTriangles" || cmd === "carriedMesh") floats(result, "triangles");
   if (cmd === "simulate" || cmd === "gpuStats") {
     for (const s of result.stocks || []) {
       floats(s, "r");

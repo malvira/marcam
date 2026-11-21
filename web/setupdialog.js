@@ -34,6 +34,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
   /** The part's triangles in mm, if there is a part (the chosen file, else the project's). */
   function tris() {
     // (another part chosen for this setup: that one)
+    if (cur?.modelPick?.kind === "none") return null;
     if (cur?.modelPick?.tris) return cur.modelPick.tris;
     const t = cur?.parsed?.tris ?? cur?.preset?.tris ?? cur?.preset?.previewTris ?? null;
     if (!t) return null;
@@ -121,6 +122,20 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     preview();
   });
 
+  const ORIENT_TITLE = $("sdOrient").title;
+
+  /** A vise holds the part as a mesh, the stock a setup before left (Mar), or a block given
+   *  for no model. */
+  function viseGate() {
+    if (!cur) return;
+    const off = !!cur.noMesh && stockMode() !== "previous" && cur.modelPick?.kind !== "none";
+    for (const el of dlg.querySelectorAll(".sd-kind")) {
+      if (el.dataset.kind !== "vise") continue;
+      el.classList.toggle("disabled", off);
+      el.querySelector("input").disabled = off;
+    }
+  }
+
   /** The shapes the setup type takes (a vise: a block; the rotary axis: bars), the fields of
    *  the one chosen, the common sizes. */
   function stockLayout() {
@@ -136,6 +151,9 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     $("sdCarry").classList.toggle("hidden", !carried);
     for (const id of ["sdMargins", "sdDims"]) $(id).classList.toggle("hidden", carried);
     for (const el of dlg.querySelectorAll(".sd-shape")) if (carried) el.classList.add("hidden");
+    viseGate();
+    // (Mar) turned any way: carried, the stock (and its part) turns, its cut shape as a mesh
+    $("sdOrient").title = carried ? "How the stock from the setup before (and its part) is turned: about X, Y and Z, in that order; any angle (its cut shape goes on as a mesh)" : ORIENT_TITLE;
     for (const l of $("sdMargins").querySelectorAll("label")) {
       const f = l.dataset.for;
       // (a bar in a vise: no chuck)
@@ -470,19 +488,16 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       for (const r of dlg.querySelectorAll('input[name="sdKind"]')) r.checked = r.value === k;
       dlg.dataset.kind = k;
       // a vise needs the part as a mesh
-      const noMesh = (mode === "edit" || mode === "add") && !preset.hasMesh;
-      for (const el of dlg.querySelectorAll(".sd-kind")) {
-        const off = noMesh && el.dataset.kind === "vise";
-        el.classList.toggle("disabled", off);
-        el.querySelector("input").disabled = off;
-      }
+      cur.noMesh = (mode === "edit" || mode === "add") && !preset.hasMesh;
       $("sdFileRow").classList.toggle("hidden", mode !== "new");
       // (Mar) this setup's part: its own, another setup's, or another file
       const choices = preset.modelChoices || [];
       $("sdModelRow").classList.toggle("hidden", !choices.length);
       $("sdModel").innerHTML = choices.map((c) => `<option value="${c.value}">${c.label}</option>`).join("");
-      $("sdModel").value = "own";
-      cur.modelPick = null;
+      // (its own by default; no model when there is none)
+      const first = preset.modelDefault ?? (choices.some((c) => c.value === "own") ? "own" : choices[0]?.value);
+      $("sdModel").value = first ?? "";
+      cur.modelPick = first === "none" ? { kind: "none" } : null;
       $("sdFile").value = "";
       $("sdFileName").textContent = cur.parsed ? `${preset.file.name}: ${partSummary(cur.parsed)}` : "";
       $("sdUnits").value = preset.units ?? "mm";
@@ -524,7 +539,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       ["sdOffX", "sdOffY", "sdOffZ"].forEach((id, i) => ($(id).value = off[i]));
       // (a setup added after others: it carries on from the last by default, Mar)
       if (preset.canCarry && (st?.shape === "from_previous" || (mode === "add" && sources.length))) dlg.querySelector('input[name="sdStock"][value="previous"]').checked = true;
-      cur.presetCarry = st?.shape === "from_previous" ? JSON.stringify([st.turn ?? "none", off, from ?? null]) : null;
+      cur.presetCarry = st?.shape === "from_previous" ? JSON.stringify([st.turn ?? "none", off, from ?? null, (st.rotate ?? [0, 0, 0]).map((v) => +v || 0)]) : null;
       if (sp?.dims) {
         const d = sp.dims;
         setMm("sdDia", d.radius != null ? 2 * d.radius : null);
@@ -599,10 +614,11 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     if (ok) {
       const k = kind();
       const spec = stockSpec();
-      const carry = stockMode() === "previous" ? { turn: $("sdTurn").value, offset: ["sdOffX", "sdOffY", "sdOffZ"].map((id) => num(id) || 0), from: $("sdCarryFrom").value || null } : null;
-      const need = carry ? [] : missing(spec);
+      const carry = stockMode() === "previous" ? { turn: $("sdTurn").value, offset: ["sdOffX", "sdOffY", "sdOffZ"].map((id) => num(id) || 0), from: $("sdCarryFrom").value || null, rotate: rotate() } : null;
+      const noModel = c.modelPick?.kind === "none";
+      const need = carry ? [] : noModel && spec.mode !== "given" ? ["no model to fit it to"] : missing(spec);
       if (need.length) {
-        $("sdWarn").textContent = `Give every stock size (${need.join(", ")}), or fit the stock to the part.`;
+        $("sdWarn").textContent = noModel && spec.mode !== "given" ? "With no model, give the stock's sizes, or take the stock from a setup before." : `Give every stock size (${need.join(", ")}), or fit the stock to the part.`;
         $("sdWarn").classList.remove("hidden");
         return;
       }
@@ -612,7 +628,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         const place = placePart(c.preset.previewTris, options());
         ex = { ...stockSpecOf(place.stock), mode: "given", chuck: spec.chuck };
       }
-      if (k === "vise" && !c.parsed && !c.preset.tris && c.mode !== "new") {
+      if (k === "vise" && !c.parsed && !c.preset.tris && !c.modelPick?.tris && !carry && !noModel && c.mode !== "new") {
         $("sdWarn").textContent = "A vise setup needs the part as a mesh: import an STL.";
         $("sdWarn").classList.remove("hidden");
         return;
@@ -644,7 +660,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         carry,
         jaws: k === "vise" ? mm("sdJaws") : undefined,
         // (the stock changed: given sizes, another shape, a margin typed)
-        stockChanged: carry ? JSON.stringify([carry.turn, carry.offset, carry.from]) !== c.presetCarry : !!ex || shape() !== c.presetShape || c.presetCarry !== null || STOCK_FIELDS.some((id) => id !== "sdJaws" && $(id).dataset.edited),
+        stockChanged: carry ? JSON.stringify([carry.turn, carry.offset, carry.from, carry.rotate]) !== c.presetCarry : !!ex || shape() !== c.presetShape || c.presetCarry !== null || STOCK_FIELDS.some((id) => id !== "sdJaws" && $(id).dataset.edited),
         tailstock: bar(k) && $("sdTail").checked,
         material: $("sdMaterial").value.trim() || null,
         // the placement fields typed in (others are the type's defaults)
@@ -739,7 +755,9 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     if (v.startsWith("setup:")) {
       const id = v.slice(6);
       cur.modelPick = { kind: "setup", id, tris: cur.preset.trisOf?.(id) ?? null };
-    } else cur.modelPick = null;
+    } else if (v === "none") cur.modelPick = { kind: "none" };
+    else cur.modelPick = null;
+    stockLayout();
     preview();
   });
   $("sdModelFile").addEventListener("change", async () => {
@@ -759,7 +777,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     } catch (e) {
       $("sdWarn").textContent = `${f.name}: ${e.message}`;
       $("sdWarn").classList.remove("hidden");
-      $("sdModel").value = "own";
+      $("sdModel").value = cur.preset.modelChoices?.some((c) => c.value === "own") ? "own" : "none";
+      cur.modelPick = $("sdModel").value === "none" ? { kind: "none" } : null;
     }
   });
   $("sdForm").addEventListener("submit", (ev) => {
