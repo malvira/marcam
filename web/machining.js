@@ -492,7 +492,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** The toolpath drawn: at rest all of it alike; while moving, what has been played and
    *  (faint) what is to come; "up to the playhead": only what has been played. */
   function showRange() {
-    if (!m.paths || !m.session) return;
+    // (a new playback being built: the old one shown as it is, its toolpath drawn as it was)
+    if (!m.paths || !m.session || m.swapping) return;
     const n = m.session.segments;
     const at = Math.min(m.pos, n);
     const upTo = m.expanded && view.paths === "playhead" ? at : moving() ? at : n;
@@ -607,6 +608,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   }
 
   function placeTool() {
+    // (as showRange: the old playback untouched while the new one is built)
+    if (m.swapping) return;
     const v = state.three;
     // (every operation hidden: nothing to play, no tool to place)
     if (!v || v.failed || !m.session || !m.session.segments) return;
@@ -902,6 +905,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         m.pos = at;
         await buildScene();
         m.swapping = false;
+        // (the new one's toolpath drawn to its place, its tool there)
+        showRange();
+        placeTool();
         $("simScrub").max = String(result.segments);
         $("simScrub").value = String(m.pos);
         $("simControls").classList.toggle("hidden", !m.expanded);
@@ -958,6 +964,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       }
       await buildScene();
       m.swapping = false;
+      showRange();
+      placeTool();
       $("simScrub").max = String(result.segments);
       $("simScrub").value = String(m.pos);
       $("simControls").classList.toggle("hidden", !m.expanded);
