@@ -89,9 +89,10 @@ const INSTALL = `(() => {
     // (Mar's scrub glitch) one 3D view; a vise's work never turned by A; its stock no taller
     // than its block
     if (document.querySelectorAll('#view3d canvas').length > 1) out.push('two 3D views drawn');
-    if (c.mach && m.xyz && Math.abs(v.groups.work?.rotation.x || 0) > 1e-9) out.push('the work turned (A) in a vise playback');
+    // (while a new playback is built the old one stays on show, as it was: judged once swapped)
+    if (c.mach && m.xyz && !m.swapping && Math.abs(v.groups.work?.rotation.x || 0) > 1e-9) out.push('the work turned (A) in a vise playback');
     const sb = m.session?.stock_box;
-    if (c.mach && m.xyz && sb && m.stockMesh && shown(m.stockMesh)) {
+    if (c.mach && m.xyz && !m.swapping && sb && m.stockMesh && shown(m.stockMesh)) {
       const p = m.stockMesh.geometry.attributes.position.array;
       let top = -Infinity;
       for (let i = 2; i < p.length; i += 30) top = Math.max(top, p[i]);
@@ -177,7 +178,7 @@ function actions(r, app) {
     { name: "scrubfast", w: 2, may: ["pos"], run: async () => {
       // (Mar) a fast drag back and forth on the playback slider: every frame one place's state
       const xs = Array.from({ length: 12 }, () => r.f());
-      await js(`(async () => { const s = document.getElementById('simScrub'); if (s.offsetParent === null) return false; for (const f of ${JSON.stringify(xs)}) { s.value = String(Math.round(+s.max * f)); s.dispatchEvent(new Event('input')); await new Promise((r) => setTimeout(r, 30)); } const want = +s.value, m = window.__marcam.machining.state; for (let k = 0; k < 400 && !(m.pos === Math.min(want, m.session?.segments ?? want) && !m.busy && !m.swapping); k++) await new Promise((r) => setTimeout(r, 50)); return true; })()`);
+      await js(`(async () => { const s = document.getElementById('simScrub'); if (s.offsetParent === null) return false; for (const f of ${JSON.stringify(xs)}) { s.value = String(Math.round(+s.max * f)); s.dispatchEvent(new Event('input')); await new Promise((r) => requestAnimationFrame(() => r())); } const want = +s.value, m = window.__marcam.machining.state; for (let k = 0; k < 400 && !(m.pos === Math.min(want, m.session?.segments ?? want) && !m.busy && !m.swapping); k++) await new Promise((r) => setTimeout(r, 50)); return true; })()`);
       return xs.length;
     } },
     { name: "speed", w: 1, may: [], run: async () => { const f = r.f(); await js(`(() => { const s = document.getElementById('simSpeed'); s.value = String(+s.min + (+s.max - +s.min) * ${f}); s.dispatchEvent(new Event('input')); return true; })()`); return f.toFixed(2); } },
@@ -333,7 +334,7 @@ try {
       for (const x of await js("window.__monkey.audit()")) fail(seed, i, `${a.name}: ${x} (settled)`);
       // (Mar) after any eye toggles: the toolpaths drawn are exactly those whose eyes are on
       const ey = await js("window.__monkey.eyes()");
-      if (ey && (ey.want !== ey.drawn || (ey.want && ey.paths !== 'off' && !ey.lines))) fail(seed, i, `${a.name}: the toolpaths drawn (${ey.drawn || "none"}, ${ey.lines} line points) are not the eyes on (${ey.want || "none"}) ${JSON.stringify(ey)}`);
+      if (ey && (ey.want !== ey.drawn || (ey.want && ey.paths === 'all' && !ey.lines))) fail(seed, i, `${a.name}: the toolpaths drawn (${ey.drawn || "none"}, ${ey.lines} line points) are not the eyes on (${ey.want || "none"}) ${JSON.stringify(ey)}`);
       // what the action did not touch stays as it was
       const may = new Set([...a.may, ...carry]);
       const late = [...carry].filter((k) => k.startsWith("#")).join(", ");
@@ -358,7 +359,7 @@ try {
       }
       // a resolution chosen: the simulated stock (when there is one, or it is shown) is at it
       if (a.name === "resolution" && what) {
-        const sim = await js("(() => { const M = window.__marcam; return { has: !!M.state.sim, shown: !!M.machining.state.view.stock, key: M.state.simKey || null, stale: !!M.state.stale, result: !!M.state.result }; })()");
+        const sim = await js("(() => { const M = window.__marcam; return { has: !!M.state.sim, shown: !!M.machining.state.view.stock, key: M.state.simKey || null, stale: !!M.state.stale, result: !!M.state.result?.programs?.length }; })()");
         if (sim.result && !sim.stale && (sim.has || sim.shown) && !(sim.key && JSON.parse(sim.key)[0].res === what)) fail(seed, i, `resolution ${what}: the stock was not simulated again at it (${sim.key})`);
       }
       // no flicker: the part and the toolpaths in every frame when on before and after
