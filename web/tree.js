@@ -773,7 +773,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       } else if (p.kind === "points3") {
         html += `<label title="${esc(p.help)}">${label} <span class="muted">x y diameter; ...</span><input name="${p.name}" value="${esc(Array.isArray(v) ? v.map((q) => q.join(" ")).join("; ") : "")}" placeholder="none"></label>`;
       } else {
-        const text = v == null ? "" : Array.isArray(v) ? v.join(", ") : v;
+        // (a number left at its default, not written in the project: its default shown)
+        const text = v == null ? (typeof p.default === "number" ? p.default : "") : Array.isArray(v) ? v.join(", ") : v;
         html += `<label title="${esc(p.help)}">${label}<input name="${p.name}" value="${esc(text)}" placeholder="${p.default != null ? esc(Array.isArray(p.default) ? p.default.join(", ") : p.default) : p.required ? "required" : ""}"></label>`;
       }
     };

@@ -2328,7 +2328,7 @@ try {
     const res = await js("(() => { const r = window.__marcam.state.result; const p = r.programs.find((q) => /--- parting at X/.test(q.gcode)); return p ? { name: p.name, head: p.gcode.split('\\n').find((l) => /--- parting at X/.test(l)), ops: p.time?.ops || p.ops || null, issues: p.issues.length, total: r.time_total_s } : null; })()");
     check("parting: a new operation at the part's back by default, placed by a click on the part (in the project at once, no Apply), cut as a groove to a radius, planned with a time",
       Math.abs(+x0 - -21.7) < 1e-6 && /band at -/.test(hit) && Math.abs(picked.x - hitX) < 0.01 && hitX > -14 && hitX < -1.8 && res && new RegExp(`X${picked.x.toFixed(3)}: down to a radius of 7\.000`).test(res.head) && res.issues === 0 && res.total > 0,
-      `default ${x0}; ${hit}; preview ${JSON.stringify(preview)}, gone after Apply ${previewGone}; picked ${JSON.stringify(picked)}; ${JSON.stringify(res)}`);
+      `default ${x0}; ${hit}; picked ${JSON.stringify(picked)}; ${JSON.stringify(res)}`);
   }
 
   // 8t. (Mar) a long simulation: asked about first with how long it takes (and a quicker
