@@ -3263,14 +3263,20 @@ try {
   {
     const job = () => js("document.getElementById('job').value").then(JSON.parse);
     const drag = async (mode, axis, dx, dy) => {
-      const p = JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('${mode}', '${axis}'))`));
-      if (!p) return false;
-      await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1] });
-      await sleep(60);
+      // (a ring: from a point round it that no arrow covers)
+      let p = null, a0 = 45;
+      for (const ang of mode === "rotate" ? [45, 60, 30, 75, 15, 120, 150] : [45]) {
+        p = JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('${mode}', '${axis}', ${ang}))`));
+        if (!p) return false;
+        await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1] });
+        await sleep(60);
+        a0 = ang;
+        if (mode !== "rotate" || (await js(`window.__marcam.handles.state.tc.axis == null && window.__marcam.handles.state.rc.axis === '${axis}'`))) break;
+      }
       await S("Input.dispatchMouseEvent", { type: "mousePressed", x: p[0], y: p[1], button: "left", clickCount: 1 });
       for (let i = 1; i <= 12; i++) {
         // (a ring: round it, a quarter turn and a bit; an arrow: straight)
-        const q = mode === "rotate" ? JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('rotate', '${axis}', ${45 + (dx > 0 ? 1 : -1) * 10 * i}))`)) : [p[0] + (dx * i) / 12, p[1] + (dy * i) / 12];
+        const q = mode === "rotate" ? JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('rotate', '${axis}', ${a0 + (dx > 0 ? 1 : -1) * 10 * i}))`)) : [p[0] + (dx * i) / 12, p[1] + (dy * i) / 12];
         await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: q[0], y: q[1], button: "left", buttons: 1 });
       }
       const readout = await js("document.getElementById('handleReadout')?.textContent || ''");
