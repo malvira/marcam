@@ -798,7 +798,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
   let liveTimer = null;
   dlg.addEventListener("change", (ev) => {
     if (!cur?.embedded) return;
-    if (ev.target?.closest?.("#sdPartSet")) return;
+    if (ev.target?.id === "sdModel" || ev.target?.id === "sdModelFile" || ev.target?.id === "sdFile") return;
     clearTimeout(liveTimer);
     liveTimer = setTimeout(() => cur?.embedded && finish(true), 250);
   });

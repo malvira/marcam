@@ -1460,5 +1460,39 @@ export function setupProject(ctx) {
     if (f) await replaceModel(f);
   });
 
-  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, hostSetup, addSetup, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p, settings };
+  /**
+   * (Mar: no import dialog) The part of setup `id` scaled by `k` (an inch file: 25.4): its
+   * mesh file written again at that scale, its stock fitted round it again. Undo brings it
+   * back.
+   */
+  async function scalePart(id, k) {
+    let doc;
+    try {
+      doc = readJob();
+    } catch (e) {
+      return showError(e.message);
+    }
+    if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
+    const s = doc.setups.find((x) => x.id === id);
+    const m = s && doc.models.find((x) => s.part.includes(x.id) && x.kind === "mesh");
+    const bytes = m && window.__marcam.meshFor(m.file);
+    if (!bytes) return;
+    const before = $("job").value;
+    const tris = parseStl(bytes).tris.map((v) => v * k);
+    const out = encodeStl(tris, `marcam: ${m.file} x${k}`);
+    // (the part's file changes with the edit: the snapshot before keeps the old one, for Undo)
+    checkpoint();
+    // (the part's file: the project's own, or a setup's own)
+    if (state.extraMeshes.has(m.file)) {
+      state.extraMeshes.set(m.file, { ...state.extraMeshes.get(m.file), bytes: out });
+      state.meshesGen++;
+    } else {
+      ctx.setMesh(out, state.meshName, state.meshSource);
+    }
+    m.translate = (m.translate || [0, 0, 0]).map((v) => r3(v * k));
+    await applySetup(doc, s, { kind: kindOf(s), axis: kindOf(s) === "vise" ? Object.entries(UP_AXIS).find(([, v]) => v === (m.axis ?? "x"))?.[0] ?? "z" : m.axis ?? "x", tailstock: s.holding?.tailstock, rotate: m.rotate, machine: s.machine }, tris);
+    await commitSetupChange(doc, { removed: [], added: [] }, { label: `Setup "${s.name || s.id}": its part ${k > 1 ? "in inches (x25.4)" : `scaled x${+k.toFixed(4)}`}.`, job: before });
+  }
+
+  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, hostSetup, addSetup, scalePart, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p, settings };
 }

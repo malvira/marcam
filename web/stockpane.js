@@ -89,7 +89,8 @@ export function partPane(doc, s, esc, opts = {}) {
     const own = m ? `<option value="own" selected>its own: ${esc(m.file)}</option>` : s.part?.length ? `<option value="own" selected>its revolved profile</option>` : "";
     const others = (opts.choices || []).map((c) => `<option value="${esc(c.value)}">${esc(c.label)}</option>`).join("");
     html += `<label>Model <select id="ptModel" aria-label="This setup's part">${own}${others}<option value="none" ${s.part?.length ? "" : "selected"}>no model</option></select></label>
-      <div class="row small"><button type="button" id="ptReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button></div>`;
+      <div class="row small"><button type="button" id="ptReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button>
+      ${m ? '<button type="button" id="ptInch" title="The file was drawn in inches: the part made 25.4 times bigger, its stock fitted again (Undo takes it back)">File in inches (x25.4)</button>' : ""}</div>`;
   }
   if (from) return html + `<div class="muted small">It goes with the stock ${esc(from.name || from.id)} left: move and turn them together with the Stock's handles.</div></div>`;
   if (!m) return html + `<div class="muted small">${s.part?.length ? "A revolved profile stays on the rotary axis." : "This setup has no model: its operations work on the stock."}</div></div>`;

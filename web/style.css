@@ -307,4 +307,4 @@ details.menu[open] > summary { border-color: var(--accent); }
 
 /* (Mar) the setup's form in its details applies as it is changed: no OK or Cancel; the part's
    model and placement are the Part's */
-#setupDialog.embedded #sdOk, #setupDialog.embedded #sdCancel, #setupDialog.embedded #sdPartSet { display: none; }
+#setupDialog.embedded #sdOk, #setupDialog.embedded #sdCancel, #setupDialog.embedded #sdModelRow, #setupDialog.embedded #sdFileRow, #setupDialog.embedded #sdFileName { display: none; }

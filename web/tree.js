@@ -1243,7 +1243,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   // ------------------------------------------------------------ events
   $("tree").addEventListener("click", async (ev) => {
-    const el = ev.target;
+    // (a line's grey text is part of its label: a click there is a click on the line; the
+    // Stock and Part lines did nothing clicked on their sizes or file name, as a person does)
+    const label = !ev.target.closest?.("button, input, select, textarea, a") && ev.target.closest?.(".tree-label[data-act]");
+    const el = label || ev.target;
     if (el.id === "treeAdd") {
       const kind = $("treeAddType").value;
       const ty = typeOf(kind);
@@ -1279,6 +1282,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "treeEditSetup") {
       await window.__marcam.project.editSetup(t.setup);
+      return;
+    }
+    if (el.id === "ptInch") {
+      await window.__marcam.project.scalePart(t.setup, 25.4);
       return;
     }
     if (el.id === "ptReplace") {

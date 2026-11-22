@@ -143,7 +143,7 @@ const check = (name, ok, detail = "") => {
 // ---- visible things, by what a person sees
 const VISIBLE = `(e) => { if (!e) return false; const r = e.getBoundingClientRect(); if (r.width < 2 || r.height < 2) return false; const s = getComputedStyle(e); if (s.visibility === 'hidden' || s.display === 'none' || +s.opacity === 0) return false; const c = document.elementFromPoint(Math.min(innerWidth - 1, Math.max(0, r.left + r.width / 2)), Math.min(innerHeight - 1, Math.max(0, r.top + r.height / 2))); return !!c && (c === e || e.contains(c) || c.contains(e)); }`;
 /** The centre of the visible element (`css` selector, its text matching `text`). */
-const where = (css, text) => read(`(() => { const vis = ${VISIBLE}; const re = ${text ? `new RegExp(${JSON.stringify(text)}, 'i')` : "null"}; for (const e of document.querySelectorAll(${JSON.stringify(css)})) { if (re && !re.test(e.textContent.trim() || e.value || e.title || '')) continue; if (!vis(e)) continue; e.scrollIntoView({ block: 'nearest' }); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; } return null; })()`);
+const where = (css, text) => read(`(() => { const vis = ${VISIBLE}; const re = ${text ? `new RegExp(${JSON.stringify(text)}, 'i')` : "null"}; for (const e of document.querySelectorAll(${JSON.stringify(css)})) { if (re && !re.test(e.textContent.trim() || e.value || e.title || '')) continue; if (e.getBoundingClientRect().width < 2) continue; e.scrollIntoView({ block: 'nearest' }); if (!vis(e)) continue; const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; } return null; })()`);
 const click = async (css, text) => {
   const p = await where(css, text);
   if (!p) throw new Error(`nothing visible to click: ${css} ${text ?? ""}`);
@@ -270,6 +270,8 @@ try {
   // the Stock: its handles; its X size typed digit by digit, drawn wider as typed
   await click("#tree [data-act=stock]");
   await sleep(1000);
+  const paneShown = (id) => read(`(() => { const vis = ${VISIBLE}; const e = document.getElementById('${id}'); if (!e) return false; e.scrollIntoView({ block: 'nearest' }); return vis(e.querySelector('.tree-outname') || e); })()`);
+  check("clicking the Stock line (on its sizes) shows the Stock's pane", await paneShown("stockPane") && !(await paneShown("setupHost")));
   img = await shot("stock_selected");
   hc = handleColours(img, r);
   check("the Stock selected: handles in the view", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
@@ -292,6 +294,7 @@ try {
   // the Part: its handles; the X arrow dragged, the part moved on screen, its value shown
   await click("#tree [data-act=part]");
   await sleep(1000);
+  check("clicking the Part line (on its file name) shows the Part's pane", await paneShown("partPane"));
   img = await shot("part_selected");
   hc = handleColours(img, r);
   check("the Part selected: handles in the view", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
@@ -320,6 +323,19 @@ try {
   // planned again with nothing pressed: the status moves on by itself
   const status = await read("document.getElementById('status').textContent");
   check("planned again by itself (no Generate pressed)", !/Generate/.test(status), status);
+  // an inch file: the Part's button makes it 25.4 times bigger (the stock fitted round it),
+  // Ctrl+Z takes it back
+  const stockLine = () => read("document.querySelector('#tree .tree-setup.active ~ * [data-act=stock], #tree [data-act=stock]')?.textContent || ''");
+  const firstNum = (t) => +(/([\d.]+)\s*x/.exec(t)?.[1] ?? NaN);
+  const s0 = await stockLine();
+  await click("#ptInch");
+  await sleep(2500);
+  const s1 = await stockLine();
+  await key("z", 2);
+  await sleep(2000);
+  const s2 = await stockLine();
+  check("an inch file: the Part's button makes it 25.4 times bigger, the stock fitted round it; Ctrl+Z takes it back", firstNum(s1) > 500 && firstNum(s2) === firstNum(s0), `${s0} | ${s1} | ${s2}`);
+  await clean("the part in inches");
   // ---------------------------------------------------------------- the cut result carried
   await click("#treeAddSetup");
   await sleep(2500);
