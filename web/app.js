@@ -30,6 +30,7 @@ const $ = (id) => document.getElementById(id);
 // in the background never holds up an edit. A cancel ends the simulating one only.
 const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simClose", "gpuOpen", "gpuStats"]);
 const workers = { main: null, sim: null };
+const TEST_SIM_DELAY = Math.max(0, +new URLSearchParams(location.search).get("testSimDelayMs") || 0);
 let nextId = 1;
 const pending = new Map();
 /** A worker: started at load, and the simulating one again after a cancel (which ends it,
@@ -44,6 +45,13 @@ function startWorker(which = "main") {
     if (ev.data.phase) {
       p.phase = ev.data.phase;
       p.phaseT = performance.now();
+      return;
+    }
+    // (a test's knob, ?testSimDelayMs=N: a simulation answered N ms late, its ring up
+    // meanwhile, so a test can cancel it or open another project over it; timing only)
+    if (TEST_SIM_DELAY && (p.cmd === "simulate" || p.cmd === "simOpen") && !p.delayed) {
+      p.delayed = true;
+      setTimeout(() => pending.get(id) === p && w.onmessage(ev), TEST_SIM_DELAY);
       return;
     }
     pending.delete(id);

@@ -584,6 +584,58 @@ try {
     await click("#loadExample");
     await settled();
   } else console.log("      (the impeller check skipped: no local fixture)");
+  // (the simulation answered late, ?testSimDelayMs, a test's knob for timing only: its
+  // ring up long enough to cancel it, or to open the project again over it)
+  {
+    const slow = url + (url.includes("?") ? "&" : "?") + "testSimDelayMs=2500";
+    await S("Page.navigate", { url: slow });
+    await waitFor(() => read("!!document.getElementById('loadExample') && !!window.__marcam?.project"), "the page (slow simulation)", 60000);
+    await read("window.confirm = () => true; (() => { const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    // the playback open (late), then the stock simulated along again (off, on): late too, its
+    // ring up while the playback is open
+    // (the play button does nothing until the playback is made: pressed again until it opens)
+    const openPlayback = async () => {
+      for (let i = 0; i < 30 && !(await where("#simPlay")); i++) {
+        if (await read("!document.getElementById('vtPlay').disabled")) await click("#vtPlay").catch(() => {});
+        await sleep(3000);
+      }
+      return where("#simPlay");
+    };
+    const resimulate = async () => {
+      const on = (await read("document.querySelector('button[data-v=stock]')?.dataset.state")) === "on";
+      if (on) await click("button[data-v=stock]");
+      await sleep(300);
+      await click("button[data-v=stock]");
+      return waitFor(() => where("#simRing"), "the simulation's ring", 20000).catch(() => null);
+    };
+    const left = async () => !!((await where("#simPlay")) || (await where("#vtPlay")));
+    const opened = !!(await openPlayback());
+    if (!opened) await shot("slow_playback_not_open");
+    check("the playback opens (its simulation answered late)", opened, opened ? "" : await read("JSON.stringify({ctl: !document.getElementById('simControls').classList.contains('hidden'), m: document.body.dataset.machining, p: document.body.dataset.playback, st: document.getElementById('status').textContent.slice(0, 90), title: document.title, url: location.search})"));
+    let ring = await resimulate();
+    check("cancel: the simulation's ring shows while the playback is open", !!ring);
+    if (ring) {
+      await click("#simRing");
+      await sleep(1500);
+      check("a playback cancelled from the ring: its controls or the play button on the screen", await left());
+    }
+    await openPlayback();
+    ring = await resimulate();
+    check("superseded: the simulation's ring shows while the playback is open", !!ring);
+    if (ring) {
+      await click("#loadExample");
+      await settled();
+      await sleep(1000);
+      check("a playback superseded (the project opened again meanwhile): its controls or the play button on the screen", await left());
+    }
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('loadExample') && !!window.__marcam?.project"), "the page", 60000);
+    await read("window.confirm = () => true; (() => { const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+  }
   await controls("setup 1 after a lost playback");
   // setup 2, continuing: a facing on it, planned; its playback
   await click("#treeAddSetup");
