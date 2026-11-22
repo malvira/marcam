@@ -1050,16 +1050,48 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         })
                         .collect()
                 });
-                let stock_at = |x: f64| match (column, &tops) {
-                    (Some(m), Some(t)) => {
-                        let i = ((x - m.grid.x0) / m.grid.dx - 0.5).round();
-                        if i < 0.0 || i as usize >= m.grid.nx {
-                            job.stock.radius
-                        } else {
-                            t[i as usize]
+                // (Mar's impeller: its part and its range lay in front of the bar, X 0..43 with
+                // the bar X -63..0; every layer from the bar's radius cut air for 28 h) only
+                // where the bar is, the tool's width reaching it: none in front of its face
+                // or past its back
+                let tr = match tool.shape {
+                    ToolShape::Flat { diameter } | ToolShape::Ball { diameter } => diameter / 2.0,
+                    ToolShape::Vbit { diameter, .. } => diameter.unwrap_or(0.0) / 2.0,
+                    ToolShape::TaperedBall { diameter, .. } => diameter / 2.0,
+                };
+                let (back, front) = match column {
+                    Some(m) => (m.grid.x0, m.grid.x0 + m.grid.nx as f64 * m.grid.dx),
+                    None => (-job.stock.length, 0.0),
+                };
+                let on_bar = |x: f64| x - tr <= front + 1e-9 && x + tr >= back - 1e-9;
+                // (and said: the part where there is no bar)
+                if let Some((lo, hi)) = mesh.bounds() {
+                    let bar = if column.is_some() { (-job.stock.length, 0.0) } else { (back, front) };
+                    if hi[0] > bar.1 + 1.0 || lo[0] < bar.0 - 1.0 {
+                        let w = format!(
+                            "the part lies outside the stock: X {:.1}..{:.1} against the bar's X {:.1}..{:.1}; nothing is cut where there is no bar (Center on axis and Flush to front, in its Part)",
+                            lo[0], hi[0], bar.0, bar.1
+                        );
+                        if !b.warnings.contains(&w) {
+                            b.warnings.push(w);
                         }
                     }
-                    _ => job.stock.radius,
+                }
+                let stock_at = |x: f64| {
+                    if !on_bar(x) {
+                        return 0.0;
+                    }
+                    match (column, &tops) {
+                        (Some(m), Some(t)) => {
+                            let i = ((x - m.grid.x0) / m.grid.dx - 0.5).round();
+                            if i < 0.0 || i as usize >= m.grid.nx {
+                                job.stock.radius
+                            } else {
+                                t[i as usize]
+                            }
+                        }
+                        _ => job.stock.radius,
+                    }
                 };
                 let r_min = strategy::rotary_rough(
                     &mut b,
@@ -1067,7 +1099,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     job.stock.radius,
                     safe_r,
                     o,
-                    column.map(|_| &stock_at as &dyn Fn(f64) -> f64),
+                    Some(&stock_at as &dyn Fn(f64) -> f64),
                 )
                 .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
