@@ -458,6 +458,19 @@ impl Playback3 {
     }
 }
 
+/// Whether (`u`, `v`) is inside the closed `outline` (even-odd).
+fn inside(outline: &[[f64; 2]], u: f64, v: f64) -> bool {
+    let mut c = false;
+    for k in 0..outline.len() {
+        let [ua, va] = outline[k];
+        let [ub, vb] = outline[(k + 1) % outline.len()];
+        if (va > v) != (vb > v) && u < ua + (v - va) * (ub - ua) / (vb - va) {
+            c = !c;
+        }
+    }
+    c
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,17 +555,4 @@ mod tests {
         assert_eq!((d.cells, d.gouge_cells), (10, 1));
         assert!((d.max_left - 1.0).abs() < 1e-9 && (d.max_gouge - 0.5).abs() < 1e-9);
     }
-}
-
-/// Whether (`u`, `v`) is inside the closed `outline` (even-odd).
-fn inside(outline: &[[f64; 2]], u: f64, v: f64) -> bool {
-    let mut c = false;
-    for k in 0..outline.len() {
-        let [ua, va] = outline[k];
-        let [ub, vb] = outline[(k + 1) % outline.len()];
-        if (va > v) != (vb > v) && u < ua + (v - va) * (ub - ua) / (vb - va) {
-            c = !c;
-        }
-    }
-    c
 }
