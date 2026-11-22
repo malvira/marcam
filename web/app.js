@@ -1514,6 +1514,7 @@ async function drawModel() {
         v.drawing--;
       }
       if (v.modelKey !== key) return;
+      v.carriedError = r?.triangles?.length ? null : "no triangles";
       if (r?.triangles?.length) {
         const g = new THREE.BufferGeometry();
         g.setAttribute("position", new THREE.Float32BufferAttribute(r.triangles, 3));
@@ -1530,6 +1531,7 @@ async function drawModel() {
         return;
       }
       console.warn(`the carried stock is drawn as its box: ${e?.message}`);
+      v.carriedError = e?.message || String(e);
     }
   }
   clear(groups.stock);

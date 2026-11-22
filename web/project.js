@@ -861,7 +861,15 @@ export function setupProject(ctx) {
     const base = `${slug(doc.name)}${doc.setups.length > 1 ? `_${slug(s.id)}` : ""}`;
     const outs = {};
     const added = [];
-    for (const [type, tool, a] of STARTERS[kindOf(s)].map((x) => x.slice(0, 3))) {
+    // (a setup with no model, or none of the kind a type works from: not that type)
+    const types = state.tree?.types?.length ? state.tree.types : (await engine("opTypes")).result;
+    const has = (k) => s.part.some((id) => doc.models.find((x) => x.id === id)?.kind === k);
+    const fits = (type) => {
+      const g = types.find((t) => t.kind === type)?.geometry || [];
+      const need = g.filter((k) => k === "mesh" || k === "profile");
+      return !need.length || need.some(has);
+    };
+    for (const [type, tool, a] of STARTERS[kindOf(s)].map((x) => x.slice(0, 3)).filter(([type]) => fits(type))) {
       const what = STARTERS[kindOf(s)].find((x) => x[0] === type)[3];
       const { result } = await engine("opDefaults", doc, { type, setup: s.id, tool, machine: engineMachine() }, state.mesh);
       const op = { id: nextOpId(doc), ...result };

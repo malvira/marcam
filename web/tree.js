@@ -1742,6 +1742,24 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   $("tree").addEventListener("input", (ev) => {
     if (t.draft && ev.target.closest?.("#opForm")) previewDraft();
   });
+  // (Mar) the Stock and Part panes apply as they are typed in (a moment after the last key),
+  // as the other forms do; the field typed in keeps the focus
+  let paneTimer = null;
+  $("tree").addEventListener("input", (ev) => {
+    const el = ev.target;
+    if (!(el.closest?.("#stockPane") || el.closest?.("#partPane")) || el.tagName !== "INPUT" || el.id === "stMargin") return;
+    clearTimeout(paneTimer);
+    paneTimer = setTimeout(async () => {
+      const s = setup();
+      if (!s || !el.isConnected || el.value === "" || !Number.isFinite(+el.value)) return;
+      const id = el.id;
+      const label = el.closest("#stockPane") ? applyStockField(t.doc, s, id, el.value, null) : applyPartField(t.doc, s, id, el.value);
+      if (!label) return;
+      await commit({ label });
+      const again = document.getElementById(id);
+      if (again && document.activeElement !== again) again.focus({ preventScroll: true });
+    }, 600);
+  });
   // (the operation form's More: kept open or shut as the person left it)
   $("tree").addEventListener("toggle", (ev) => {
     if (ev.target.id === "opMore") t.moreOpen = ev.target.open;

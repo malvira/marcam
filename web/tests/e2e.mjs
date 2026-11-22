@@ -3209,7 +3209,10 @@ try {
       const d = JSON.parse(await js("document.getElementById('job').value"));
       const s = d.setups[d.setups.length - 1];
       const frame = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${s.id}' }).then((r) => r.result)`);
-      await waitFor(() => js("window.__marcam.state.three.groups.stock.children.some((o) => o.userData.carried) && !window.__marcam.state.three.drawing"), "the carried stock drawn as a mesh", 120000);
+      // (why not, if not: the engine's error, the drawing's state)
+      await waitFor(() => js("window.__marcam.state.three.groups.stock.children.some((o) => o.userData.carried) && !window.__marcam.state.three.drawing"), "the carried stock drawn as a mesh", 240000).catch(async (e) => {
+        throw new Error(`${e.message}: ${await js("JSON.stringify({ kind: '" + kind + "', error: window.__marcam.state.three.carriedError, drawing: window.__marcam.state.three.drawing, stock: window.__marcam.state.three.groups.stock.children.length, modelKey: !!window.__marcam.state.three.modelKey, stock0: JSON.parse(document.getElementById('job').value).setups.map((s) => s.stock?.shape) })")}`);
+      });
       const m = await js(`await window.__marcam.engine('carriedMesh', JSON.parse(document.getElementById('job').value), { setup: '${s.id}', stl: true }, window.__marcam.state.mesh).then((r) => ({ total: r.result.total, bounds: r.result.bounds, stl: r.result.stl.length }))`);
       const button = await js("!!document.getElementById('treeStockStl')");
       return { gate, s, frame, m, button };
@@ -3285,6 +3288,10 @@ try {
     await js("const x = document.getElementById('stX'); x.value = '70'; x.dispatchEvent(new Event('change', { bubbles: true })); true");
     await settle();
     const sized = (await job()).setups[0].stock;
+    // typed in (no change event): applied a moment after, the field keeping the focus
+    await js("const y = document.getElementById('stY'); y.focus(); y.value = '45'; y.dispatchEvent(new Event('input', { bubbles: true })); true");
+    await sleep(1500);
+    const typed = { y: (await job()).setups[0].stock.max[1], focus: await js("document.activeElement?.id") };
     // the part: moved along X by its arrow, turned about Z by its ring
     await js("document.querySelector('#tree [data-act=part]').click(); true");
     await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible"), "the handles", 30000);
@@ -3305,9 +3312,9 @@ try {
     const undone = (await job()).models.find((m) => m.id === "dome");
     const dx = t1.translate[0] - (t0.translate?.[0] ?? 0);
     check("the Stock item: its type and sizes (the plate 70 wide); the part moved by its X arrow (snapped to 0.1 mm) and turned by its Z ring (quarter turns), each drag one edit, planned again",
-      pane.types === "block,round,square,hex,rect" && pane.x === "60" && !pane.setupShown && sized.max[0] === 70 && dx > 0.5 && Math.abs(dx * 10 - Math.round(dx * 10)) < 1e-6 && /X \+/.test(moved) &&
+      pane.types === "block,round,square,hex,rect" && pane.x === "60" && !pane.setupShown && sized.max[0] === 70 && typed.y === 45 && typed.focus === "stY" && dx > 0.5 && Math.abs(dx * 10 - Math.round(dx * 10)) < 1e-6 && /X \+/.test(moved) &&
       t2.rotate?.[0] === 0 && t2.rotate?.[1] === 0 && t2.rotate[2] % 90 === 0 && t2.rotate[2] !== 0 && /Z [+-]\d+°/.test(turned) && planned && JSON.stringify(undone.translate) === JSON.stringify(t1.translate) && !undone.rotate,
-      `pane ${JSON.stringify(pane)}; stock ${JSON.stringify(sized)}; moved ${JSON.stringify(t0.translate)} -> ${JSON.stringify(t1.translate)} "${moved}"; turned ${JSON.stringify(t2.rotate)} "${turned}"; planned ${planned}; undone ${JSON.stringify(undone)}`);
+      `pane ${JSON.stringify(pane)}; stock ${JSON.stringify(sized)}; typed ${JSON.stringify(typed)}; moved ${JSON.stringify(t0.translate)} -> ${JSON.stringify(t1.translate)} "${moved}"; turned ${JSON.stringify(t2.rotate)} "${turned}"; planned ${planned}; undone ${JSON.stringify(undone)}`);
     // a round bar standing up in the vise: the block round it is its length tall
     await js("document.querySelector('#tree [data-act=stock]').click(); true");
     await settle();
