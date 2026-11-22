@@ -202,7 +202,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const lib = window.__marcam.tools?.summary?.() || "";
       setTree(`<div class="tree-list"><div class="tree-lib ${t.focus === "library" ? "sel" : ""}"><div class="tree-setuphead"><span class="twisty-pad"></span><span class="tree-label" data-act="library" title="The tools of every project: add, edit, import, export">Tool library</span> <span class="muted">${esc(lib)}</span></div></div>
         <div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup, then add its operations.</div>
-        <div class="row small"><button type="button" id="treeAddSetup" title="A setup: its type, machine, stock and (if any) model">+ Add setup</button></div></div>
+        <div class="row small add-setup"><button type="button" id="treeAddSetup" title="A new setup, made at once (its type and where it starts from chosen beside)">+ Add setup</button>
+        <select id="treeAddKind" aria-label="The new setup's type" title="The new setup's type"><option value="vise">3-axis</option><option value="rotary">4th axis</option></select>
+        ${t.doc?.setups?.length ? `<select id="treeAddFrom" aria-label="Where the new setup starts" title="Continue from the setup before (its cut result and part), or its own new stock and part"><option value="carry">continue from previous</option><option value="own">independent</option></select>` : ""}</div></div>
         ${t.focus === "library" ? '<div class="tree-details" id="treeDetails"><div class="tree-outname">Tool library</div><div id="libHost"></div></div>' : ""}`);
       window.__marcam.tools?.host?.($("libHost"));
       window.__marcam.project?.hostSetup?.(null);
@@ -274,7 +276,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     html += `</div></div>`;
     // the setups after the one being worked on
     for (const x of t.doc.setups.slice(t.doc.setups.indexOf(s) + 1)) html += setupHead(x, false) + otherOps(x) + `</div>`;
-    html += `<div class="row small"><button type="button" id="treeAddSetup" title="Another setup for the same part (e.g. the other side, or a vise setup)">+ Add setup</button></div></div>`;
+    html += `<div class="row small add-setup"><button type="button" id="treeAddSetup" title="A new setup, made at once (its type and where it starts from chosen beside)">+ Add setup</button>
+        <select id="treeAddKind" aria-label="The new setup's type" title="The new setup's type"><option value="vise">3-axis</option><option value="rotary">4th axis</option></select>
+        ${t.doc?.setups?.length ? `<select id="treeAddFrom" aria-label="Where the new setup starts" title="Continue from the setup before (its cut result and part), or its own new stock and part"><option value="carry">continue from previous</option><option value="own">independent</option></select>` : ""}</div></div>`;
     // the details of what is selected: the setup (nothing else selected), or the operation
     html += `<div class="tree-details" id="treeDetails">`;
     const tool = t.focus === "tool" && !t.selected ? t.doc.tools.find((x) => x.number === t.tool) : null;
@@ -294,6 +298,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       html += `<div class="tree-outname">${esc(s.name || s.id)} <span class="muted">setup</span></div>
         <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
         ${t.setupNotes?.[s.id] ? `<div class="small setup-note" id="setupNote">${esc(t.setupNotes[s.id])}</div>` : ""}
+        ${sourcePick(s)}
         ${stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore })}
         <div class="row small">${window.__marcam.project?.settings?.dialogs ? '<button type="button" id="treeEditSetup" title="The older setup dialog (tests)">Edit setup...</button> <button type="button" id="treeReplace">Replace model...</button> ' : ""}<button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button>
         ${s.stock?.shape === "from_previous" ? `<button type="button" id="treeStockStl" title="The stock this setup starts with (what the setup before left, turned as here) as an STL">Incoming stock STL</button>` : ""}</div>
@@ -333,6 +338,18 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const row = (act, name, what, title) =>
       `<div class="tree-stock ${t.focus === act && !t.selected ? "sel" : ""}" data-node="${act}"><span class="tree-label" data-act="${act}" title="${esc(title)}">${name} <span class="muted">${esc(what)}</span></span></div>`;
     return row("stock", "Stock", st, "The stock: its type and sizes (and handles to move it, carried)") + row("part", "Part", part, "Where the part sits in the stock (handles in the 3D view)");
+  }
+
+  /** (Mar) Where setup `x` starts (setup 2 and after): continuing from the setup before (its
+   *  cut result, its part locked to it), or independent (its own stock and part, as setup 1). */
+  function sourcePick(x) {
+    const at = t.doc.setups.indexOf(x);
+    if (at < 1) return "";
+    const from = carriedFrom(t.doc, x);
+    const prev = t.doc.setups[at - 1];
+    return `<label class="source-pick" title="Continue from a setup before (its cut result, its part with it) or start independent (its own stock and part, placed freely)">Starts <select id="stSource" aria-label="Where this setup starts">
+      <option value="carry" ${from ? "selected" : ""}>continuing from ${esc((from || prev).name || (from || prev).id)}</option>
+      <option value="own" ${from ? "" : "selected"}>independent (its own stock and part)</option></select></label>`;
   }
 
   /** The models a setup's part may be: its own, another setup's (by file), or none. */
@@ -1369,7 +1386,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return render();
     }
     if (el.id === "treeAddSetup") {
-      await window.__marcam.project.addSetup();
+      const kind = $("treeAddKind")?.value || "vise";
+      await window.__marcam.project.addSetup({ kind, independent: $("treeAddFrom")?.value === "own" });
       return;
     }
     if (el.id === "treeStockStl") {
@@ -1770,6 +1788,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   $("tree").addEventListener("change", async (ev) => {
     const el = ev.target;
     // (Mar) the Stock and Part panes: each field an edit (undoable), planned again
+    if (el.id === "stSource") {
+      const s = setup();
+      if (!s) return;
+      await window.__marcam.project.setSource(s.id, el.value);
+      return;
+    }
     if (el.closest?.("#stockPane") || el.closest?.("#partPane")) {
       const s = setup();
       if (!s) return;

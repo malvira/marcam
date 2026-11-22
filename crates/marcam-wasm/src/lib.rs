@@ -460,7 +460,8 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match job_any_mesh(job_json, &libs, mesh) {
+        // (the setup asked for: `opts.setup`)
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
             Ok(j) => j,
             Err(e) => return err(e),
         };
@@ -588,7 +589,9 @@ pub mod api {
             Ok(l) => l,
             Err(e) => return err(e),
         };
-        let job = match job_plain(job_json, &libs, mesh) {
+        // (Mar's "they just snap back": without `opts.setup` this drew the first setup's part
+        // in every setup, so a part moved in setup 2 never moved on screen)
+        let job = match with_setup(&opts, || job_plain(job_json, &libs, mesh)) {
             Ok(j) => j,
             Err(e) => return err(e),
         };

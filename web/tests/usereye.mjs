@@ -336,6 +336,79 @@ try {
   const s2 = await stockLine();
   check("an inch file: the Part's button makes it 25.4 times bigger, the stock fitted round it; Ctrl+Z takes it back", firstNum(s1) > 500 && firstNum(s2) === firstNum(s0), `${s0} | ${s1} | ${s2}`);
   await clean("the part in inches");
+  // ---------------------------------------------------------------- placement that sticks
+  // (Mar: "they just snap back"; "typing ... doesn't work either") every placement judged
+  // after release and after the plan has settled, on the screen: in setup 1, in setup 2
+  // continuing from setup 1 (the carried piece moves), in setup 2 independent
+  const settled = async () => {
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "the app at rest", 120000).catch(() => {});
+    await sleep(2500);
+  };
+  const partBox = (img, [x0, y0, w, h]) => {
+    let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity], sx = 0, n = 0;
+    for (let y = y0; y < y0 + h; y += 2)
+      for (let x = x0; x < x0 + w; x += 2) {
+        const [rr, g, b] = img.at(x, y);
+        if (rr > 120 && Math.abs(rr - g) < 12 && Math.abs(g - b) < 14 && rr < 245) {
+          lo = [Math.min(lo[0], x), Math.min(lo[1], y)];
+          hi = [Math.max(hi[0], x), Math.max(hi[1], y)];
+          sx += x;
+          n++;
+        }
+      }
+    return n ? { cx: sx / n, w: hi[0] - lo[0], h: hi[1] - lo[1], n } : null;
+  };
+  /** Type `text` into field `css` (its old text replaced) and Tab out. */
+  const typeInto = async (css, text) => {
+    await click(css);
+    await key("a", 2);
+    for (const ch of text) await type(ch);
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+  };
+  const openMore = async (pane) => {
+    const open = await read(`!!document.querySelector('#${pane} details.op-more[open]')`);
+    if (!open) await click(`#${pane} details.op-more > summary`);
+    await sleep(300);
+  };
+  /** The red arrow dragged 60 px outward; then where the part is, settled. */
+  const dragArrow = async () => {
+    const img0 = await shot("before_drag");
+    const hc0 = handleColours(img0, r);
+    if (!hc0.pts.red.length) return { moved: false, why: "no red handle" };
+    const mid = (ps) => ps.reduce((a, p) => [a[0] + p[0] / ps.length, a[1] + p[1] / ps.length], [0, 0]);
+    const c = mid([...hc0.pts.green, ...hc0.pts.blue]);
+    const near = hc0.pts.red.filter((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) > 12).sort((a, b) => Math.hypot(a[0] - c[0], a[1] - c[1]) - Math.hypot(b[0] - c[0], b[1] - c[1]));
+    const from = near[Math.min(near.length - 1, 6)];
+    const d = [from[0] - c[0], from[1] - c[1]];
+    const l = Math.hypot(...d) || 1;
+    const b0 = partBox(img0, r);
+    await drag(from, [from[0] + (60 * d[0]) / l, from[1] + (60 * d[1]) / l]);
+    await settled();
+    const b1 = partBox(await shot("after_drag_settled"), r);
+    return { moved: !!(b0 && b1 && Math.abs(b1.cx - b0.cx) > 3), why: `part x ${b0?.cx.toFixed(0)} -> ${b1?.cx.toFixed(0)}` };
+  };
+  /** A typed value: it stays in its field after the plan settles, and the part moves. */
+  const typed = async (pane, css, text) => {
+    await openMore(pane);
+    const b0 = partBox(await shot("before_typed"), r);
+    await typeInto(css, text);
+    await settled();
+    await openMore(pane);
+    const shown = await read(`document.querySelector('${css}')?.value`);
+    const b1 = partBox(await shot("after_typed"), r);
+    return { ok: shown === text && !!(b0 && b1 && (Math.abs(b1.cx - b0.cx) > 3 || Math.abs(b1.w - b0.w) > 3 || Math.abs(b1.h - b0.h) > 3)), why: `shown ${shown}; part ${JSON.stringify(b0 && [b0.cx.toFixed(0), b0.w, b0.h])} -> ${JSON.stringify(b1 && [b1.cx.toFixed(0), b1.w, b1.h])}` };
+  };
+  // setup 1: the part's position and angle typed (the handle drag above, settled, below)
+  await click("#tree [data-act=part]");
+  await settled();
+  let res = await dragArrow();
+  check("setup 1: the part dragged stays moved after release and the plan settling", res.moved, res.why);
+  res = await typed("partPane", "#ptTX", "7");
+  check("setup 1: a position typed (X 7) stays and moves the part", res.ok, res.why);
+  res = await typed("partPane", "#ptRZ", "90");
+  check("setup 1: an angle typed (Z 90) stays and turns the part", res.ok, res.why);
+  await clean("setup 1 placed");
   // ---------------------------------------------------------------- the cut result carried
   await click("#treeAddSetup");
   await sleep(2500);
@@ -347,6 +420,54 @@ try {
   check("the added setup's stock has handles in the view", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
   v = await views();
   check("still exactly one 3D view", v.n === 1 && v.top === "CANVAS", JSON.stringify(v));
+  // setup 2 continuing from setup 1: the carried piece moved by the handles and typed values
+  await click("#tree .tree-setup.active [data-act=part]");
+  await settled();
+  res = await dragArrow();
+  check("setup 2 (continuing): the carried piece dragged stays moved after the plan settles", res.moved, res.why);
+  await click("#tree .tree-setup.active [data-act=stock]");
+  await settled();
+  res = await typed("stockPane", "#stOffX", "5");
+  check("setup 2 (continuing): its offset typed (X 5) stays and moves the piece", res.ok, res.why);
+  await clean("setup 2 continuing placed");
+  // setup 2 independent: its own stock and part, placed as in setup 1
+  await click("#tree .tree-setup.active [data-act=setup]");
+  await settled();
+  const src = await where("#stSource");
+  check("setup 2: where it starts is a choice in its details (continuing / independent)", !!src);
+  {
+    // (an older build without the choice: its own stock picked in the Stock pane, as before)
+    if (src) await read("(() => { const s = document.getElementById('stSource'); s.value = 'own'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    else {
+      await click("#tree .tree-setup.active [data-act=stock]");
+      await settled();
+      await read("(() => { const t = document.getElementById('stType'); t.value = 'block'; t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    }
+    await settled();
+    const own = await read("document.getElementById('stType')?.selectedOptions[0]?.textContent || ''");
+    check("setup 2 independent: its own stock (not the cut result)", !!own && !/Cut result/.test(own), own);
+    await click("#tree .tree-setup.active [data-act=part]");
+    await settled();
+    res = await dragArrow();
+    check("setup 2 (independent): the part dragged stays moved after the plan settles", res.moved, res.why);
+    res = await typed("partPane", "#ptTX", "4");
+    check("setup 2 (independent): a position typed (X 4) stays and moves the part", res.ok, res.why);
+    // back to continuing, by Undo (each change one step)
+    // (out of the field first: Ctrl+Z in a field undoes its text; the app's edits undone one
+    // at a time until the setup continues again, three of them: placed, dragged, independent)
+    await read("document.activeElement?.blur?.(); true");
+    for (let i = 0; i < 3; i++) {
+      await key("z", 2);
+      await sleep(900);
+    }
+    await settled();
+    await click("#tree .tree-setup.active [data-act=setup]");
+    await settled();
+    const back = await read("document.getElementById('stSource')?.value");
+    check("Undo takes setup 2 back to continuing from setup 1", back === "carry", back);
+  }
+  await clean("setup 2 independent placed");
+
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

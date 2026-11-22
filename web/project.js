@@ -1344,7 +1344,7 @@ export function setupProject(ctx) {
   }
 
   /** Add a setup: the dialog's type, the same part, its own placement and starters. */
-  async function addSetup() {
+  async function addSetup(opts = {}) {
     let doc;
     try {
       doc = readJob();
@@ -1362,7 +1362,9 @@ export function setupProject(ctx) {
       .concat([{ value: "none", label: "no model" }, { value: "file", label: "another file..." }]);
     let n = doc.setups.length + 1;
     while (doc.setups.some((s) => s.id === `setup${n}`)) n++;
-    const cfg = await dialog.open("add", { kind: "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: !!meshModel, tris: meshModel ? parseStl(window.__marcam.meshFor(meshModel.file)).tris : null, canCarry: doc.setups.length > 0,
+    const cfg = await dialog.open("add", { kind: opts.kind || "vise", machine: currentMachine()?.id, setupName: `Setup ${n}`, hasMesh: !!meshModel, tris: meshModel ? parseStl(window.__marcam.meshFor(meshModel.file)).tris : null, canCarry: doc.setups.length > 0 && !opts.independent,
+      // (no model, nothing before it: a plate, or a bar on the 4th axis, of a usual size)
+      ...(!meshModel && (!doc.setups.length || opts.independent) ? { stockSpec: (opts.kind || "vise") === "vise" ? { shape: "block", mode: "given", dims: { x: 60, y: 40, z: 20 } } : { shape: "round", mode: "given", dims: { radius: 12.5 }, length: 60 } } : {}),
       modelChoices,
       trisOf: (id) => {
         const o = doc.setups.find((x) => x.id === id);
@@ -1494,5 +1496,46 @@ export function setupProject(ctx) {
     await commitSetupChange(doc, { removed: [], added: [] }, { label: `Setup "${s.name || s.id}": its part ${k > 1 ? "in inches (x25.4)" : `scaled x${+k.toFixed(4)}`}.`, job: before });
   }
 
-  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, hostSetup, addSetup, scalePart, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p, settings };
+  /** (Mar) Setup `id` continuing from the setup before (`carry`: its cut result, the part with
+   *  it) or independent (`own`: its own stock fitted round its own part where it now sits).
+   *  One edit; planned again. */
+  async function setSource(id, how) {
+    let doc;
+    try {
+      doc = readJob();
+    } catch (e) {
+      return showError(e.message);
+    }
+    if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
+    const s = doc.setups.find((x) => x.id === id);
+    const at = doc.setups.indexOf(s);
+    if (!s || at < 1) return;
+    const before = $("job").value;
+    if (how === "carry") {
+      if (s.stock?.shape === "from_previous") return;
+      s.stock = { shape: "from_previous" };
+    } else {
+      if (s.stock?.shape !== "from_previous") return;
+      // its own part: the model it had (or the setup before's), placed as it is drawn now
+      let m = doc.models.find((x) => s.part.includes(x.id) && x.kind === "mesh");
+      if (!m) {
+        const pm = doc.models.find((x) => doc.setups[at - 1].part.includes(x.id) && x.kind === "mesh");
+        if (pm) {
+          m = { ...structuredClone(pm), id: `${s.id}_part` };
+          doc.models = doc.models.filter((x) => x.id !== m.id).concat(m);
+          s.part = [m.id];
+        }
+      }
+      const bytes = m && window.__marcam.meshFor(m.file);
+      const kind = kindOf(s) === "vise" || s.kind === "vise" ? "vise" : "rotary";
+      s.stock = kind === "vise" ? { shape: "box", min: [0, 0, -20], max: [60, 40, 0] } : { shape: "cylinder", radius: 12.5, length: 60 };
+      if (bytes) {
+        const { fitStock } = await import("./stockpane.js");
+        fitStock(doc, s, parseStl(bytes).tris, kind === "vise" ? 2 : 0.5);
+      }
+    }
+    await commitSetupChange(doc, { removed: [], added: [] }, { label: `Setup "${s.name || s.id}": ${how === "carry" ? "continues from the setup before" : "independent"}.`, job: before });
+  }
+
+  return { changed, clean, mayDiscard, newProject, openText, openBundle, openFile, save, importMesh, replaceModel, editSetup, hostSetup, addSetup, scalePart, setSource, undo, redo, dropUndo, keepUndo, nameEdit, resetHistory, meshSet, history: h, dialog, state: p, settings };
 }
