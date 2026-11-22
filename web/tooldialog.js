@@ -35,7 +35,7 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries, e
         <label>Angle (deg, V) <input id="tpNewAngle" type="number" step="1" value="90" size="4"></label></div>
       <div class="row small"><input id="tpNewName" placeholder="Description" aria-label="New tool description"> <button type="button" id="tpNewAdd">Add this tool</button></div>
     </details>
-    <div class="muted small">Added without a tool number: give it one in Tools > Tool numbers (until then the G-code uses the next free number and says so).</div>
+    <div class="muted small">Added as the next free tool number (Tools &gt; Tool numbers to change it).</div>
     <div class="row"><button value="cancel" type="submit">Cancel</button></div>
   </form>`;
   document.body.appendChild(dlg);
@@ -53,13 +53,13 @@ export function setupToolDialogs({ $, state, readJob, writeJob, userLibraries, e
   $("tpSearch").addEventListener("input", renderList);
   $("tpKind").addEventListener("change", renderList);
 
-  /** Add `entry` (without its number) to the project, unindexed; resolves to its number. */
+  /** Add `entry` to the project as the next free tool number (the walkthrough: one added
+   *  without a number was "written as T3" with a warning, a surprise); resolves to it. */
   function addToProject(entry) {
     const doc = readJob();
     doc.tools = doc.tools || [];
     const number = Math.max(0, ...doc.tools.map((t) => t.number)) + 1;
     doc.tools.push({ number, ...entry });
-    doc.unindexed = [...new Set([...(doc.unindexed || []), number])];
     writeJob(doc);
     return number;
   }

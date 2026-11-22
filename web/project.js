@@ -546,6 +546,16 @@ export function setupProject(ctx) {
     p.dirty = true;
     show();
     if (stale) ctx.markStale();
+    // (the walkthrough: the part's line said 34 x 34 x 62.5 after the block was typed to 30
+    // x 30 x 62) the part's placement said again as it is
+    try {
+      const doc = readJob();
+      const s0 = doc.setups?.find((s) => s.id === state.tree?.setup) ?? doc.setups?.[0];
+      if (state.mesh && s0 && doc.models) {
+        const place = placeInfo(doc, s0);
+        $("meshInfo").textContent = `${state.meshName}${place ? `: ${place}` : ""}`;
+      }
+    } catch {}
   }
   function clean(name) {
     if (name) p.name = name;
@@ -620,6 +630,9 @@ export function setupProject(ctx) {
   /** Name the edit about to be written (Edit > Undo says it). */
   function nameEdit(label) {
     h.label = label;
+    // (the banner names the last edit, the one its Undo takes back: it said "Setup 2 added"
+    // after the piece had been turned)
+    if (label && !$("undoBar").classList.contains("hidden")) $("undoBar").innerHTML = `${esc(label)} <button type="button" id="undoSetup">Undo</button>`;
   }
   function dropUndo() {
     $("undoBar").classList.add("hidden");

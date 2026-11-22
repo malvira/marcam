@@ -302,23 +302,62 @@ pub fn carry_stock(
             set_carried(&mut jobs[k].1, c);
             continue;
         }
-        let tps = crate::plan_with_mesh(&prev, mesh.as_ref())
-            .map_err(|e| format!("setup {:?} (its stock goes on): {e}", jobs[p].0))?;
-        let cutters = |t: u32| {
-            prev.tool(t)
-                .and_then(|d| crate::cutter_for(t, d.shape).ok())
-        };
-        let carried = match prev.stock_box {
-            Some(sb) => {
-                let cell = block_cell(&sb);
-                let mut hm = Heightmap3::of_job(&prev, &sb, cell);
-                let bot = match &prev.carried {
-                    Some(c) => c.bottoms(&hm),
-                    None => vec![hm.bottom; hm.nx * hm.ny],
+        // (what it left, however it goes on: planned and simulated once, then only turned and
+        // sampled again as the piece is turned in the next setup; the walkthrough: each turn
+        // simulated the whole vise roughing again, 10 s before the piece was drawn)
+        let left_key = crate::hash_of(&(
+            crate::job_key(&prev, mesh.as_ref()),
+            serde_json::to_string(&prev.programs).unwrap_or_default(),
+        ));
+        let left = match LEFT.with(|m| {
+            m.borrow()
+                .iter()
+                .find(|(k, _)| *k == left_key)
+                .map(|(_, l)| l.clone())
+        }) {
+            Some(l) => l,
+            None => {
+                let tps = crate::plan_with_mesh(&prev, mesh.as_ref())
+                    .map_err(|e| format!("setup {:?} (its stock goes on): {e}", jobs[p].0))?;
+                let cutters = |t: u32| {
+                    prev.tool(t)
+                        .and_then(|d| crate::cutter_for(t, d.shape).ok())
                 };
-                for tp in &tps {
-                    crate::sim3::simulate3(&mut hm, tp, &cutters, (cell * 2.0).min(0.1));
-                }
+                let l = match prev.stock_box {
+                    Some(sb) => {
+                        let cell = block_cell(&sb);
+                        let mut hm = Heightmap3::of_job(&prev, &sb, cell);
+                        let bot = match &prev.carried {
+                            Some(c) => c.bottoms(&hm),
+                            None => vec![hm.bottom; hm.nx * hm.ny],
+                        };
+                        for tp in &tps {
+                            crate::sim3::simulate3(&mut hm, tp, &cutters, (cell * 2.0).min(0.1));
+                        }
+                        std::sync::Arc::new(Left::Block(hm, bot))
+                    }
+                    None => {
+                        let grid = bar_grid(&prev.stock);
+                        let mut map = RadialMap::of_job(grid, &prev);
+                        for tp in &tps {
+                            crate::sim::simulate(&mut map, tp, &cutters, 0.2);
+                        }
+                        std::sync::Arc::new(Left::Bar(map))
+                    }
+                };
+                LEFT.with(|m| {
+                    let mut m = m.borrow_mut();
+                    if m.len() >= 4 {
+                        m.remove(0);
+                    }
+                    m.push((left_key, l.clone()));
+                });
+                l
+            }
+        };
+        let carried = match &*left {
+            Left::Block(hm, bot) => {
+                let (hm, bot) = (hm.clone(), bot.clone());
                 if mesh_carry(&carry, true, &jobs[k].1) {
                     let m = crate::carry_mesh::block_mesh(
                         hm.x0, hm.y0, hm.cell, hm.nx, hm.ny, &hm.z, &bot,
@@ -328,12 +367,8 @@ pub fn carry_stock(
                     turn_block(&hm, &bot, &carry)
                 }
             }
-            None => {
-                let grid = bar_grid(&prev.stock);
-                let mut map = RadialMap::of_job(grid, &prev);
-                for tp in &tps {
-                    crate::sim::simulate(&mut map, tp, &cutters, 0.2);
-                }
+            Left::Bar(map) => {
+                let map = map.clone();
                 if mesh_carry(&carry, false, &jobs[k].1) {
                     from_mesh(&crate::carry_mesh::bar_mesh(&map), &carry, &jobs[k].1)
                 } else {
@@ -385,6 +420,19 @@ fn from_mesh(m: &Mesh, carry: &Carry, to: &Job) -> Carried {
             Carried::Bar(map)
         }
     }
+}
+
+/// What a setup's programs left of its stock, simulated (a block's tops and bottoms, or a
+/// bar's radii), before it is turned or moved into the next setup.
+enum Left {
+    Block(Heightmap3, Vec<f64>),
+    Bar(RadialMap),
+}
+
+thread_local! {
+    /// What the setups before left lately (by the setup and its programs).
+    static LEFT: std::cell::RefCell<Vec<(u64, std::sync::Arc<Left>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Carried stocks worked out lately (by the setup before and the carry).

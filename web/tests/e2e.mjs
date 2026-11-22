@@ -2134,8 +2134,8 @@ try {
     await waitDone("the plate with a library tool", 240000);
     const warn = await js("document.getElementById('toolWarnings')?.textContent || ''");
     const g3 = await js(`window.__marcam.state.result.programs.map((p) => p.gcode).join('\\n')`);
-    check("Add tool from library: the library opens on the operation's type, the tool joins the project without a number (— in the list) and is the operation's; the G-code uses the next free number and warns, here and in the file",
-      offered > 0 && kindFilter === "flat" && picked.unindexed.includes(picked.n) && /^— · /.test(picked.label) && /has no tool number in the project/.test(warn) && /\(Warning: .* has no tool number/.test(g3),
+    check("Add tool from library: the library opens on the operation's type, the tool joins the project as the next free number (T<n> in the list) and is the operation's; no warning about its number",
+      offered > 0 && kindFilter === "flat" && !picked.unindexed.includes(picked.n) && new RegExp(`^T${picked.n} · `).test(picked.label) && !/has no tool number in the project/.test(warn) && !/\(Warning: .* has no tool number/.test(g3),
       `${offered} offered (${kindFilter}); ${JSON.stringify(picked)}; ${warn}`);
     // numbered: no warning
     await js("document.getElementById('menuToolNumbers').click(); true");

@@ -1524,42 +1524,48 @@ async function drawModel() {
     fitKey = frameKey;
   }
   // (Mar) carried: what the setup before left, as this setup starts with it (the box or bar
-  // above until it is worked out, and if it cannot be)
-  if (carried && frame) {
-    try {
-      v.drawing = (v.drawing || 0) + 1;
-      let r;
-      try {
-        ({ result: r } = await engine("carriedMesh", doc, { setup: setup.id }, state.mesh));
-      } finally {
-        v.drawing--;
-      }
-      if (v.modelKey !== key) return;
-      v.carriedError = r?.triangles?.length ? null : "no triangles";
-      if (r?.triangles?.length) {
-        const g = new THREE.BufferGeometry();
-        g.setAttribute("position", new THREE.Float32BufferAttribute(r.triangles, 3));
-        g.computeVertexNormals();
-        const o = stockObject(THREE, g);
-        o.userData.carried = true;
-        stockNew.length = 0;
-        stockNew.push(o);
-      }
-    } catch (e) {
-      if (e?.message === "cancelled" || e?.message === "superseded") {
-        if (v.modelKey === key) v.modelKey = null;
-        setTimeout(drawModel, 50);
-        return;
-      }
-      console.warn(`the carried stock is drawn as its box: ${e?.message}`);
-      v.carriedError = e?.message || String(e);
-    }
-  }
+  // above until it is worked out, and if it cannot be). (The walkthrough: the part and the
+  // stock waited ~10 s for it each time the piece was turned) drawn at once as its box,
+  // swapped for the cut result when that comes
+  const carriedLater = !!(carried && frame);
   clear(groups.stock);
   clear(groups.part);
   setTimeout(() => window.__marcam.handles?.refresh?.(), 0);
   for (const o of partNew) groups.part.add(o);
   for (const o of stockNew) groups.stock.add(o);
+  if (carriedLater) {
+    (async () => {
+      try {
+        v.drawing = (v.drawing || 0) + 1;
+        let r;
+        try {
+          ({ result: r } = await engine("carriedMesh", doc, { setup: setup.id }, state.mesh));
+        } finally {
+          v.drawing--;
+        }
+        if (v.modelKey !== key) return;
+        v.carriedError = r?.triangles?.length ? null : "no triangles";
+        if (r?.triangles?.length) {
+          const g = new THREE.BufferGeometry();
+          g.setAttribute("position", new THREE.Float32BufferAttribute(r.triangles, 3));
+          g.computeVertexNormals();
+          const o = stockObject(THREE, g);
+          o.userData.carried = true;
+          clear(groups.stock);
+          groups.stock.add(o);
+          window.__marcam.kickView?.();
+        }
+      } catch (e) {
+        if (e?.message === "cancelled" || e?.message === "superseded") {
+          if (v.modelKey === key) v.modelKey = null;
+          setTimeout(drawModel, 50);
+          return;
+        }
+        console.warn(`the carried stock is drawn as its box: ${e?.message}`);
+        v.carriedError = e?.message || String(e);
+      }
+    })();
+  }
   // a vise's jaws: beside the stock's Y faces, up to what they grip
   if (!groups.jaws) {
     groups.jaws = new THREE.Group();
