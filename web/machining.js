@@ -144,7 +144,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
     const play = $("vtPlay");
     play.disabled = !m.session;
-    play.classList.toggle("hidden", !!m.expanded);
+    // (Mar: "the play stop and rewind controls are gone") hidden only while the playback's own
+    // controls are on the screen: never both gone
+    play.classList.toggle("hidden", !!m.expanded && !$("simControls").classList.contains("hidden"));
   }
   /** One toggle (paths cycles all, up to the playhead, off). */
   function toggle(k) {
@@ -183,7 +185,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
    *  it plays; again: pause. */
   async function playButton() {
     if (!m.session) return;
-    if (!m.expanded) await expand();
+    if (!m.expanded || $("simControls").classList.contains("hidden")) await expand();
     $("simPlay").click();
   }
   /** The playback's controls (scrubber, speed, the end): shown, the stock simulated along if
@@ -203,6 +205,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       $("simControls").classList.remove("hidden");
       if (m.pos >= m.session.segments) await seek(0);
     }
+    renderToggles();
     showRange();
     syncFrame();
   }
@@ -1017,6 +1020,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function close() {
     m.playing = false;
     m.open = false;
+    // (a playback cancelled from the ring in the view's corner, or lost with its worker, left
+    // the controls folded away and the small play button hidden: both gone) folded, the play
+    // button back to open it again
+    m.expanded = false;
+    document.body.dataset.playback = "";
     m.gpu?.destroy();
     m.gpu = null;
     $("simControls").classList.add("hidden");

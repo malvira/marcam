@@ -516,6 +516,72 @@ try {
   const d2 = diff(v0, v2, lr);
   const back = await read(`document.querySelector('${sdCss}')?.value`);
   check("Ctrl+Z: the old toolpath back on the screen (one step for the typing)", back === sd0 && d2 < d1 / 3, `field ${back} (was ${sd0}); pixels off the old ${d2} (edit ${d1})`);
+  // ---------------------------------------------------------------- the playback's controls
+  // (Mar: "the play stop and rewind controls are gone") after a plan lands: the small play
+  // button opens the controls; Play, Step, the end, the speed and the playhead on the screen
+  // (nothing over them); Play moves the playhead, Pause stops it, the playhead dragged to its
+  // start rewinds. Again after the playback was cancelled from the ring in the view's corner
+  // (that left both the controls and the play button gone). In setup 1 and in setup 2.
+  const playhead = () => read("+document.getElementById('simScrub').value");
+  const controls = async (where_) => {
+    await settled();
+    // (the playback's controls, or the small play button that opens them)
+    if (!(await where("#simPlay"))) {
+      const p = await where("#vtPlay");
+      check(`${where_}: the play button is on the screen when the controls are folded`, !!p);
+      if (!p) return;
+      await click("#vtPlay");
+      await waitFor(() => where("#simPlay"), "the playback's controls", 60000).catch(() => {});
+      await sleep(500);
+      // (the play button starts it: paused, to be judged below)
+      if (/Pause/.test(await read("document.getElementById('simPlay').textContent"))) await click("#simPlay");
+    }
+    const seen = {};
+    for (const id of ["simPlay", "simStep", "simEnd", "simSpeed", "simScrub"]) seen[id] = !!(await where(`#${id}`));
+    check(`${where_}: Play, Step, the end, the speed and the playhead on the screen`, Object.values(seen).every(Boolean), JSON.stringify(seen));
+    if (!seen.simPlay || !seen.simScrub) return;
+    const p0 = await playhead();
+    await click("#simPlay");
+    await sleep(1500);
+    const p1 = await playhead();
+    await click("#simPlay");
+    await sleep(300);
+    const p2 = await playhead();
+    await sleep(1000);
+    const p3 = await playhead();
+    check(`${where_}: Play moves the playhead, Pause stops it`, p1 > p0 && p3 === p2, `${p0} -> ${p1} (playing), ${p2} -> ${p3} (paused)`);
+    // rewound: the playhead dragged to its start
+    const sr = await read("(() => { const r = document.getElementById('simScrub').getBoundingClientRect(); return [r.left, r.top + r.height / 2, r.width]; })()");
+    const knob = [sr[0] + 6 + ((sr[2] - 12) * p3) / Math.max(1, await read("+document.getElementById('simScrub').max")), sr[1]];
+    await drag(knob, [sr[0] - 20, sr[1]]);
+    await sleep(2500);
+    const p4 = await playhead();
+    check(`${where_}: the playhead dragged to its start rewinds to 0`, p4 === 0, `${p3} -> ${p4}`);
+  };
+  await controls("setup 1 (the plate)");
+  // cancelled from the ring while the stock is simulated along: the controls (or the play
+  // button) still there
+  // (a finer grid: the playback made again, long enough to show the ring)
+  const pickRes = (v) => read(`(() => { const s = document.getElementById('simRes'); s.value = '${v}'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await pickRes("ultra");
+  const ring = await waitFor(() => where("#simRing"), "the simulation's ring", 30000).catch(() => null);
+  // (a fast machine may finish before the ring shows: then there is nothing to cancel)
+  if (!ring) console.log("      (the simulation finished before its ring showed: the cancel not tried)");
+  if (ring) {
+    await click("#simRing");
+    await sleep(1500);
+    const left = (await where("#simPlay")) || (await where("#vtPlay"));
+    check("a playback cancelled from the ring: its controls or the play button still on the screen", !!left);
+  }
+  await pickRes("normal");
+  await controls("setup 1 after a cancel");
+  // setup 2, continuing: a facing on it, planned; its playback
+  await click("#treeAddSetup");
+  await settled();
+  await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'face'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await click("#treeAdd");
+  await waitFor(() => read("(() => { try { const d = JSON.parse(document.getElementById('job').value); return d.setups[1]?.operations.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "setup 2's facing", 120000).catch(() => {});
+  await controls("setup 2 (continuing)");
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});
