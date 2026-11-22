@@ -204,6 +204,8 @@ function actions(r, app) {
       const val = await js(`(() => { const e = document.activeElement; const v = parseFloat(e.value) || 1; return String(Math.round(v * ${0.8 + 0.4 * r.f()} * 1000) / 1000); })()`);
       await S("Input.insertText", { text: val });
       if (r.chance(0.6)) await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 }), await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+      // (Mar: no Apply) what was typed applies half a second after the typing stops: its own
+      await sleep(800);
       return `${field}=${val}`;
     } },
     { name: "edit", w: 2, may: ["project", "form", "pos"], run: async () => { const d = 1 + r.int(9); await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); const ops = (j.setups ? j.setups.flatMap((s) => s.operations) : j.programs.flatMap((p) => p.operations)); const o = ops[${r.int(100)} % ops.length]; for (const k of ['feed', 'rough_feed', 'finish_feed']) if (o[k]) o[k] += ${d}; t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`); return d; } },

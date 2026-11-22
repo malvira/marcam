@@ -1968,6 +1968,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const isNew = !!(t.draft && t.draft.op.id === op.id);
     if (!isNew) {
       const was = s.operations.find((o) => o.id === op.id);
+      // (a number the form shows at its default, not written in the project: left unwritten)
+      for (const p of typeOf(op.type)?.params || []) if (was && was[p.name] === undefined && op[p.name] === p.default) delete op[p.name];
       // nothing changed: nothing to write (nor a pending type change to drop)
       if (was && JSON.stringify(was) === JSON.stringify(op) && !t.retype) {
         showFormError(null);
