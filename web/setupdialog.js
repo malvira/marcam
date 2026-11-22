@@ -791,5 +791,5 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     finish(false);
   });
 
-  return { open, close: () => finish(false), preview, embeddedFor, reattach, park, get mode() { return cur?.mode ?? null; } };
+  return { open, close: () => finish(false), preview, embeddedFor, reattach, park, get mode() { return cur?.mode ?? null; }, get modal() { return !!cur && !cur.embedded; } };
 }

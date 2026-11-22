@@ -3204,6 +3204,11 @@ try {
         document.querySelector('.sd-kind[data-kind="${kind}"]').click();
         ${rot ? `const y = document.getElementById('sdRotY'); y.value = '${rot}'; y.dispatchEvent(new Event('input', { bubbles: true }));` : ""} true`);
       await sleep(200);
+      // (the tree drawn again meanwhile, as a plan landing does: the dialog stays Add setup's)
+      await js("window.__marcam.tree.refresh(); true");
+      await sleep(300);
+      const stillAdd = await js("window.__marcam.project.dialog.mode");
+      if (stillAdd !== "add") throw new Error(`the Add setup dialog was taken over: ${stillAdd}`);
       const gate = await js(`({ vise: !document.querySelector('.sd-kind[data-kind="vise"] input').disabled, model: document.getElementById('sdModel').value, kind: document.querySelector('input[name="sdKind"]:checked')?.value })`);
       await js("document.getElementById('sdOk').click(); true");
       await waitFor(() => js(`!${modal}`), "the carried setup added", 60000);
