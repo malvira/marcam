@@ -27,6 +27,8 @@ fn preset(op: Option<&str>, material: &str, feed: f64) -> Preset {
         stepdown: None,
         stepover: None,
         ramp_angle: None,
+        leave_xy: None,
+        leave_z: None,
     }
 }
 

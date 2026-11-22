@@ -27,7 +27,7 @@ fn waterline_job(min_slope: f64) -> (Job, PathBuf) {
                 w.y_range = [10.0, 30.0];
                 w.step_down = 0.3;
                 w.sample = 0.1;
-                w.leave = 0.0;
+                w.leave_z = 0.0;
                 w.min_slope = min_slope;
                 w.lead_in = 0.0;
                 *o = Operation::Waterline(w);
