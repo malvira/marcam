@@ -625,6 +625,11 @@ async function generate(opts = {}) {
     return;
   }
   if (!hasEnabledOps(job)) {
+    // (planned by itself: nothing to plan is no error, a quiet hint to add an operation)
+    if (opts.auto) {
+      if (state.result || !$("emptyState")) clearResults(hasPart(job) ? NO_OPS : "", []);
+      return;
+    }
     showError(
       hasPart(job)
         ? "Nothing to generate: the project has no enabled operation. Add one in the project tree (or use a detected feature), or enable one."
@@ -1470,6 +1475,9 @@ async function drawModel() {
   const st = viseBar ? { shape: "box", ...viseBar.box } : st0;
   const sb = st?.shape === "box" ? st : null;
   let fitKey = null;
+  // (framed again for another setup, stock shape or part: not as a size is typed or a handle
+  // dragged, the camera jumping under the person)
+  const frameKey = JSON.stringify([setup?.id ?? null, st0?.shape ?? null, setup?.kind ?? null, setup?.holding?.along ?? null, ids]);
   if (viseBar) {
     const corners = barCorners(st0);
     const geo = corners ? prismGeometry(THREE, corners, 0, st0.length) : toGeometry(THREE, cylinder(st0.radius, 0, st0.length, 96));
@@ -1487,14 +1495,14 @@ async function drawModel() {
       geo.translate(0, viseBar.axis[0], viseBar.axis[1]);
     }
     stockNew.push(stockObject(THREE, geo));
-    fitKey = JSON.stringify(sb);
+    fitKey = frameKey;
     v.bounds = { xmin: sb.min[0], xmax: sb.max[0], R: Math.max(sb.max[1] - sb.min[1], sb.max[2] - sb.min[2]) / 2 };
   } else if (sb) {
     const size = [0, 1, 2].map((k) => sb.max[k] - sb.min[k]);
     const box = stockObject(THREE, new THREE.BoxGeometry(...size));
     box.position.set(...[0, 1, 2].map((k) => (sb.min[k] + sb.max[k]) / 2));
     stockNew.push(box);
-    fitKey = JSON.stringify(sb);
+    fitKey = frameKey;
     v.bounds = { xmin: sb.min[0], xmax: sb.max[0], R: Math.max(sb.max[1] - sb.min[1], sb.max[2] - sb.min[2]) / 2 };
   } else if (st?.radius || ["square", "rect", "hex"].includes(st?.shape)) {
     // the bar: from the part's front face back by its length (square, rectangular and hex
@@ -1505,7 +1513,7 @@ async function drawModel() {
     const R = corners ? Math.max(...corners.map(([y, z]) => Math.hypot(y, z))) : st.radius;
     stockNew.push(stockObject(THREE, corners ? prismGeometry(THREE, corners, xmin, xmax) : toGeometry(THREE, cylinder(st.radius, xmin, xmax, 96))));
     v.bounds = { xmin, xmax, R };
-    fitKey = JSON.stringify([R, Math.round(xmin), Math.round(xmax)]);
+    fitKey = frameKey;
   }
   // (Mar) carried: what the setup before left, as this setup starts with it (the box or bar
   // above until it is worked out, and if it cannot be)

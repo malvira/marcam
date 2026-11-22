@@ -286,14 +286,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const m = meshModelOf(t.doc, s);
       html += stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore });
     } else if (t.focus === "part" && !t.selected) {
-      html += partPane(t.doc, s, esc, { moreOpen: t.ptMore });
+      html += partPane(t.doc, s, esc, { moreOpen: t.ptMore, choices: modelChoices(s) });
     } else if (!t.selected) {
+      // (Mar) everything about the setup here: its stock (with handles in the view), its
+      // type, machine, holding, material, G-code options and work zero (applied as changed)
+      const m = meshModelOf(t.doc, s);
       html += `<div class="tree-outname">${esc(s.name || s.id)} <span class="muted">setup</span></div>
         <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
         ${t.setupNotes?.[s.id] ? `<div class="small setup-note" id="setupNote">${esc(t.setupNotes[s.id])}</div>` : ""}
-        <div class="row small"><button type="button" id="treeEditSetup" title="Type, machine, stock, origin and holding of this setup">Edit setup...</button>
-        <button type="button" id="treeReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button>
-        <button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button>
+        ${stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore })}
+        <div class="row small">${window.__marcam.project?.settings?.dialogs ? '<button type="button" id="treeEditSetup" title="The older setup dialog (tests)">Edit setup...</button> <button type="button" id="treeReplace">Replace model...</button> ' : ""}<button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model's faces">Knurl wizard</button>
         ${s.stock?.shape === "from_previous" ? `<button type="button" id="treeStockStl" title="The stock this setup starts with (what the setup before left, turned as here) as an STL">Incoming stock STL</button>` : ""}</div>
         <div id="setupHost" class="setup-host"></div>`;
     }
@@ -331,6 +333,22 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const row = (act, name, what, title) =>
       `<div class="tree-stock ${t.focus === act && !t.selected ? "sel" : ""}" data-node="${act}"><span class="tree-label" data-act="${act}" title="${esc(title)}">${name} <span class="muted">${esc(what)}</span></span></div>`;
     return row("stock", "Stock", st, "The stock: its type and sizes (and handles to move it, carried)") + row("part", "Part", part, "Where the part sits in the stock (handles in the 3D view)");
+  }
+
+  /** The models a setup's part may be: its own, another setup's (by file), or none. */
+  function modelChoices(x) {
+    const own = meshModelOf(t.doc, x);
+    const seen = new Set(own ? [own.file] : []);
+    const out = [];
+    for (const o of t.doc.setups) {
+      if (o === x) continue;
+      const om = meshModelOf(t.doc, o);
+      if (om && !seen.has(om.file) && window.__marcam.meshFor?.(om.file)) {
+        seen.add(om.file);
+        out.push({ value: `setup:${o.id}`, label: `as ${o.name || o.id}: ${om.file}` });
+      }
+    }
+    return out;
   }
 
   /** The tool numbers a setup lists: those it was given, and those its operations use. */
@@ -1261,6 +1279,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "treeEditSetup") {
       await window.__marcam.project.editSetup(t.setup);
+      return;
+    }
+    if (el.id === "ptReplace") {
+      $("replaceModelFile").click();
       return;
     }
     if (el.dataset?.act === "library") {

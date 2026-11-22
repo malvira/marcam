@@ -39,14 +39,14 @@ export async function waitFor(fn, what, timeoutMs = 30000) {
   throw new Error(`timed out waiting for ${what} (${last})`);
 }
 
-function freePort() {
+export function freePort() {
   return new Promise((resolve) => {
     const s = createServer();
     s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => resolve(p)); });
   });
 }
 
-function findBrowser() {
+export function findBrowser() {
   const cands = process.platform === "win32"
     ? ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe"]
     : ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser", "/opt/pw-browsers/chromium", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"];

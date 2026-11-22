@@ -284,6 +284,9 @@ try {
   await S("Page.navigate", { url });
   await waitFor(async () => (await state()) === "ready", "the engine to load", 30000);
   check("page loads and the WebAssembly engine starts", true, await js("document.getElementById('version').textContent"));
+  // (the sections here were written with the setup dialogs; a person never sees them now, Mar:
+  // usereye.mjs takes Mar's path without them)
+  await js("localStorage.setItem('marcam.dialogs', '1'); window.__marcam.project.settings.dialogs = true; true");
   // the live updating (on by default) is tested in its own section (8v): the sections before
   // it plan when they ask (Tools > Replan all), as they were written
   const liveDefault = await js("document.getElementById('autoGen').checked");

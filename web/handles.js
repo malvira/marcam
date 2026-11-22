@@ -148,7 +148,9 @@ export function setupHandles({ state, edit }) {
   function target() {
     const t = state.tree;
     const v = state.three;
-    if (!t?.doc || !v || v.failed || t.selected || t.picking || !(t.focus === "stock" || t.focus === "part")) return null;
+    // (Mar) a setup, its Stock or its Part selected (a setup selected or just added: its
+    // handles on show, nothing to find first)
+    if (!t?.doc || !v || v.failed || t.selected || t.picking || !(t.focus === "stock" || t.focus === "part" || t.focus === "setup" || !t.focus)) return null;
     const s = t.doc.setups?.find((x) => x.id === t.setup);
     if (!s) return null;
     const rotary = kindOf(s) !== "vise";

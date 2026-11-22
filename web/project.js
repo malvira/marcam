@@ -672,8 +672,9 @@ export function setupProject(ctx) {
   // ------------------------------------------------------------ new, open, save
   async function newProject() {
     if (!mayDiscard("Start a new project")) return false;
-    const cfg = await dialog.open("new", { name: "untitled", machine: currentMachine()?.id, kind: p.pending?.kind ?? "rotary" });
-    if (!cfg) return false;
+    // (Mar: no modal) a new, empty project at once: its name and setups made in the tree
+    const cfg = await dialog.open("new", { name: "untitled", machine: currentMachine()?.id, kind: p.pending?.kind ?? "rotary" }, { auto: !settings.dialogs });
+    if (!cfg || cfg.error) return false;
     await resetProject("New project: import an STL (button or drop it here) or open a project to start.");
     setStatus("New project", "ready");
     if (cfg.machine) ctx.selectMachine(cfg.machine);
@@ -854,7 +855,12 @@ export function setupProject(ctx) {
   /** Starter operations are added only when asked for (Mar: a new project starts with none;
    *  the person adds them): `settings.starters`, or "marcam.starters" = "1" in the browser's
    *  storage (the tests that import parts and plan them ask for them that way). */
-  const settings = { starters: (() => { try { return localStorage.getItem("marcam.starters") === "1"; } catch { return false; } })() };
+  const settings = {
+    starters: (() => { try { return localStorage.getItem("marcam.starters") === "1"; } catch { return false; } })(),
+    // (the older setup dialogs, for the tests written with them: "marcam.dialogs" = "1"; a
+    // person never sees them, Mar)
+    dialogs: (() => { try { return localStorage.getItem("marcam.dialogs") === "1"; } catch { return false; } })(),
+  };
 
   /** A setup's starter operations (roughing, then finishing), every field from the engine. */
   async function addStarters(doc, s) {
@@ -1071,10 +1077,11 @@ export function setupProject(ctx) {
       await refreshAll();
       setStatus("Add operations in the project tree, then Generate", "ready");
     } else {
-      // the results (if any) stay, marked out of date, until Generate
+      // (Mar: no Generate) planned again by itself, as any edit is (none to plan: a quiet
+      // hint to add one)
       await refreshAll();
-      if (!state.result) clearResults("The setup changed. Generate to plan its toolpaths.", ["generate"]);
-      setStatus("Setup changed: Generate to plan it again", "ready");
+      ctx.markStale();
+      setStatus("Setup changed", "ready");
     }
     if (notes.length) showError(`Setup changed: ${notes.join("; ")}`);
   }
@@ -1119,7 +1126,14 @@ export function setupProject(ctx) {
     const preset = s
       ? { kind: kindOf(s), machine: s.machine ?? currentMachine()?.id, setupName: s.name, tailstock: s.holding?.tailstock }
       : { kind: p.pending?.kind ?? "rotary", machine: p.pending?.machine ?? currentMachine()?.id, margin: p.pending?.margin, explicit: p.pending?.explicit, units: p.pending?.units };
-    const cfg = await dialog.open("import", { ...preset, file, parsed });
+    // (Mar: no modal) placed at once with the setup's (or the usual) defaults; its type,
+    // stock and placement are changed in the tree's Setup, Stock and Part
+    const cfg = await dialog.open("import", { ...preset, file, parsed }, { auto: !settings.dialogs });
+    if (cfg?.error) {
+      showError(`${file.name}: ${cfg.error}`);
+      setStatus("Import failed", "error");
+      return false;
+    }
     if (!cfg) {
       setStatus("Import cancelled", "ready");
       return false;
@@ -1224,7 +1238,13 @@ export function setupProject(ctx) {
     } catch {}
     // (the details' form, asked for before Add setup's dialog came up: not over it; the
     // details show it again when that one is done)
-    if (opts.host && (dialog.modal || !opts.host.isConnected)) return false;
+    if (opts.host && dialog.modal) return false;
+    if (opts.host && !opts.host.isConnected) {
+      // (the details drawn again meanwhile: into their new place, if it is this setup's)
+      const again = document.getElementById("setupHost");
+      if (!again || state.tree?.setup !== s.id) return false;
+      opts = { ...opts, host: again };
+    }
     const cfg = await dialog.open("edit", {
       stockBox, partBox,
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
@@ -1349,9 +1369,13 @@ export function setupProject(ctx) {
         const om = o && meshOf(o);
         return om ? parseStl(window.__marcam.meshFor(om.file)).tris : null;
       },
-      carrySources: doc.setups.map((x) => ({ id: x.id, name: x.name || x.id })) });
-    // (cancelled: the details' form back where it was)
-    if (!cfg) return void window.__marcam.tree?.refresh?.(), false;
+      carrySources: doc.setups.map((x) => ({ id: x.id, name: x.name || x.id })) }, { auto: !settings.dialogs });
+    // (Mar: no modal) made at once: what the setup before left as its stock (when there is
+    // one), its Stock selected to change it
+    if (!cfg || cfg.error) {
+      if (cfg?.error) showError(`Add setup: ${cfg.error}`);
+      return false;
+    }
     setStatus(`Adding a ${KINDS[cfg.kind]} setup...`, "busy");
     const before = $("job").value;
     let model = null, tris = null;
@@ -1377,8 +1401,8 @@ export function setupProject(ctx) {
     const s = { id: `setup${n}`, name: cfg.setupName || KINDS[cfg.kind], stock: { shape: "cylinder", radius: 1, length: 1 }, clearance: 3, part: model ? [model.id] : [], spindle_rpm: 12000, operations: [], outputs: [] };
     doc.setups.push(s);
     const report = await applySetup(doc, s, cfg, tris);
-    // (the new setup's details shown, not what was selected before)
-    if (state.tree) Object.assign(state.tree, { setup: s.id, focus: "setup", selected: null });
+    // (the new setup's Stock shown, its handles in the view)
+    if (state.tree) Object.assign(state.tree, { setup: s.id, focus: settings.dialogs ? "setup" : "stock", selected: null });
     await commitSetupChange(doc, report, { label: `Setup "${s.name}" added.`, job: before });
     if (cfg.machine) ctx.selectMachine(cfg.machine);
     return report;

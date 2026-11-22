@@ -84,6 +84,13 @@ export function partPane(doc, s, esc, opts = {}) {
   const m = meshModelOf(doc, s);
   const from = carriedFrom(doc, s);
   let html = `<div id="partPane" class="stock-pane" data-setup="${esc(s.id)}"><div class="tree-outname">Part <span class="muted">${esc(m?.file || (s.part?.length ? "revolved profile" : "no model"))}</span></div>`;
+  // (Mar) its model: its own, another setup's, none, or a new file (Replace model)
+  if (!from) {
+    const own = m ? `<option value="own" selected>its own: ${esc(m.file)}</option>` : s.part?.length ? `<option value="own" selected>its revolved profile</option>` : "";
+    const others = (opts.choices || []).map((c) => `<option value="${esc(c.value)}">${esc(c.label)}</option>`).join("");
+    html += `<label>Model <select id="ptModel" aria-label="This setup's part">${own}${others}<option value="none" ${s.part?.length ? "" : "selected"}>no model</option></select></label>
+      <div class="row small"><button type="button" id="ptReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button></div>`;
+  }
   if (from) return html + `<div class="muted small">It goes with the stock ${esc(from.name || from.id)} left: move and turn them together with the Stock's handles.</div></div>`;
   if (!m) return html + `<div class="muted small">${s.part?.length ? "A revolved profile stays on the rotary axis." : "This setup has no model: its operations work on the stock."}</div></div>`;
   const t = m.translate || [0, 0, 0], r = m.rotate || [0, 0, 0];
@@ -198,6 +205,23 @@ export function applyStockField(doc, s, id, val, frameBox) {
 
 /** A Part pane field (`ptTX` ..., `ptRZ`): the setup's model moved or turned. */
 export function applyPartField(doc, s, id, val) {
+  if (id === "ptModel") {
+    if (val === "own") return null;
+    if (val === "none") {
+      s.part = [];
+      const used = new Set(doc.setups.flatMap((x) => x.part || []));
+      doc.models = doc.models.filter((x) => used.has(x.id));
+      return `Setup "${s.name || s.id}": no model.`;
+    }
+    const o = doc.setups.find((x) => `setup:${x.id}` === val);
+    const om = o && meshModelOf(doc, o);
+    if (!om) return null;
+    // its own copy of that model (placed as it is there)
+    const id2 = `${s.id}_part`;
+    doc.models = doc.models.filter((x) => x.id !== id2).concat({ ...structuredClone(om), id: id2 });
+    s.part = [id2];
+    return `Setup "${s.name || s.id}": the part as ${o.name || o.id}'s.`;
+  }
   const m = meshModelOf(doc, s);
   const v = num(val) ?? 0;
   const k = /^pt([TR])([XYZ])$/.exec(id);

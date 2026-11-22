@@ -573,6 +573,18 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       setMm("sdChuckFit", preset.chuck);
       $("sdWarn").classList.add("hidden");
       layout(false);
+      // (Mar: no modal) `opts.auto`: the form's own defaults (and `opts.auto()`'s changes)
+      // taken at once, never shown; what it refuses comes back as { error }
+      if (opts.auto) {
+        if (typeof opts.auto === "function") opts.auto();
+        finish(true);
+        if (cur) {
+          const c = cur;
+          cur = null;
+          c.resolve({ error: $("sdWarn").textContent || "the setup could not be made" });
+        }
+        return;
+      }
       if (!dlg.open) {
         if (host) dlg.show();
         else dlg.showModal();
@@ -780,6 +792,15 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       $("sdModel").value = cur.preset.modelChoices?.some((c) => c.value === "own") ? "own" : "none";
       cur.modelPick = $("sdModel").value === "none" ? { kind: "none" } : null;
     }
+  });
+  // (Mar) in the setup's details the form applies as it is changed, a moment after the last
+  // change (its OK and Cancel not shown)
+  let liveTimer = null;
+  dlg.addEventListener("change", (ev) => {
+    if (!cur?.embedded) return;
+    if (ev.target?.closest?.("#sdPartSet")) return;
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(() => cur?.embedded && finish(true), 250);
   });
   $("sdForm").addEventListener("submit", (ev) => {
     ev.preventDefault();

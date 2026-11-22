@@ -27,6 +27,8 @@ if [ "$1" = "--fast" ]; then
   node web/tests/meshes.test.mjs
   node web/tests/project.test.mjs
   MARCAM_E2E_FAST=1 node web/tests/e2e.mjs
+  # (Mar) the app as a person sees it: real clicks and typing, only what is on the screen
+  node web/tests/usereye.mjs
   node web/tests/stress.mjs --only monkey --seeds 1,2 --steps 30
   # the viewer, tree and forms: what is drawn is what the toggles say, nothing changes by itself
   node web/tests/viewmonkey.mjs --seeds 1,2 --actions 30
@@ -67,6 +69,7 @@ sh scripts/test-python.sh
 node web/tests/meshes.test.mjs
 node web/tests/project.test.mjs
 node web/tests/e2e.mjs
+node web/tests/usereye.mjs
 # stateful UI tests: scripted scenarios and the seeded monkey (fixed seeds)
 node web/tests/stress.mjs
 node web/tests/viewmonkey.mjs --seeds 1,2,3,4 --actions 50
