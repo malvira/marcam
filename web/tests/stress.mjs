@@ -782,6 +782,8 @@ try {
   // (written with an import's starter operations: asked for, as a caller may; Mar: the app
   // itself starts a new project with none)
   await js("localStorage.setItem('marcam.starters', '1'); window.__marcam.project.settings.starters = true; true");
+  // (written with the setup dialogs: on, as e2e has them; a person never sees them now)
+  await js("localStorage.setItem('marcam.dialogs', '1'); window.__marcam.project.settings.dialogs = true; true");
   if (ONLY !== "monkey") {
     for (const [name, steps] of Object.entries(SCENARIOS).filter(([n]) => n.includes(MATCH))) {
       try {
