@@ -709,16 +709,72 @@ try {
   await openMore("partPane");
   const t2 = await tOf();
   check("Center on axis: back on the axis (its Y and Z as they were)", Math.abs(t2[1] - t0[1]) < 0.01 && Math.abs(t2[2] - t0[2]) < 0.01, `${JSON.stringify(t0)} -> ${JSON.stringify(t2)}`);
+  await click(".part-presets button", "^Flush to front$");
+  await settled();
+  await clean("4th axis placed");
+  await openMore("partPane");
+  const t4 = await tOf();
+  // (halfway along the bar: the knob's front then stands in the bar, which a 12 mm flute
+  // cannot cut down to the axis: the engine says so, rightly; not judged here)
   await click(".part-presets button", "^Center along stock$");
   await settled();
   await openMore("partPane");
   const t3 = await tOf();
-  await click(".part-presets button", "^Flush to front$");
+  check("Flush to front puts its front at X0 (as it came); Center along stock moves it along X", Math.abs(t4[0] - t0[0]) < 0.3 && Math.abs(t3[0] - t4[0]) > 1, `X ${t0[0]} -> ${t4[0]} -> ${t3[0]}`);
+  // ---------------------------------------------------------------- vise, then the 4th axis
+  // (Mar: "carry over the cut stock from a vise setup to a 4th axis isn't really working")
+  // a square bar stood in the vise (its top a Ø25 step and a Ø15 boss), sized 30 x 30 by
+  // typing; then on the 4th axis continuing, turned 90° about Y; a knurl added (its V-bit
+  // offered from the library): its body on the part as the 4th axis holds it (it was the part
+  // where the vise had it, X 2..32 and radii 60..68)
+  await click("#menuFile");
+  await click("#menuFile button, #menuFile [role=menuitem], #menuFile li, #menuFile a", "^New");
   await settled();
-  await openMore("partPane");
-  const t4 = await tOf();
-  check("Center along stock moves it along X; Flush to front puts its front at X0 (as it came)", Math.abs(t3[0] - t0[0]) > 1 && Math.abs(t4[0] - t0[0]) < 0.01, `X ${t0[0]} -> ${t3[0]} -> ${t4[0]}`);
-  await clean("4th axis placed");
+  {
+    const doc = await S("DOM.getDocument");
+    const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#importStlFile" });
+    await S("DOM.setFileInputFiles", { files: [join(root, "tests", "fixtures", "stepped_bar.stl")], nodeId });
+  }
+  await settled();
+  await click("#tree .tree-setup.active [data-act=setup]");
+  await settled();
+  await click("#setupHost .sd-kind[data-kind=vise]");
+  await settled();
+  check("a setup made a vise is named as one (it was 'Rotary 4th axis')", /vise/i.test(await read("JSON.parse(document.getElementById('job').value).setups[0].name")));
+  await click("#tree .tree-setup.active [data-act=stock]");
+  await settled();
+  for (const [id, v] of [["#stX", "30"], ["#stY", "30"], ["#stZ", "62"]]) {
+    await click(id);
+    await key("a", 2);
+    for (const ch of v) await type(ch);
+  }
+  await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+  await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+  await settled();
+  const placed = await read("(() => { const d = JSON.parse(document.getElementById('job').value); return { tr: d.models[0].translate, st: d.setups[0].stock }; })()");
+  check("the block typed down to 30 x 30: the part still in its middle", Math.abs(placed.tr[0] - (placed.st.min[0] + placed.st.max[0]) / 2) < 0.01 && Math.abs(placed.tr[1] - (placed.st.min[1] + placed.st.max[1]) / 2) < 0.01, JSON.stringify(placed));
+  await read("(() => { for (const [id, v] of [['treeAddKind', 'rotary'], ['treeAddFrom', 'carry']]) { const s = document.getElementById(id); if (s) { s.value = v; s.dispatchEvent(new Event('change', { bubbles: true })); } } return true; })()");
+  await click("#treeAddSetup");
+  await settled();
+  await click("#tree .tree-setup.active [data-act=stock]");
+  await settled();
+  await openMore("stockPane");
+  await typeInto("#stRotY", "90");
+  await settled();
+  await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'helical_knurl'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await click("#treeAdd");
+  const lib = await waitFor(() => where("dialog[open] button", "V-bit"), "the library offering a V-bit", 30000).catch(() => null);
+  check("a knurl with no V-bit in the setup: the library opens on V-bits (no error below the fold)", !!lib);
+  if (lib) {
+    await click("dialog[open] button", "V-bit");
+    await waitFor(() => read("!!document.querySelector('#opForm [name=body_back]')"), "the knurl's form", 60000).catch(() => {});
+    await settled();
+    const body = await read("[document.querySelector('#opForm [name=body_back]')?.value, document.querySelector('#opForm [name=body_front]')?.value]");
+    const nums = (body || []).map((t) => (t || "").split(",").map(Number));
+    const ok = nums.length === 2 && nums.every(([x, r]) => x >= -60.6 && x <= 0.01 && r > 0 && r < 21.3);
+    check("the knurl's body on the part as the 4th axis holds it (X within -60.5..0, radius under the bar's)", ok, JSON.stringify(body));
+  }
+  await clean("vise then the 4th axis");
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

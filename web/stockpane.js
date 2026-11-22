@@ -164,13 +164,11 @@ export function applyStockField(doc, s, id, val, frameBox) {
     if (k === 2) st.min[2] = r3(st.max[2] - v);
     else {
       // (the walkthrough: 34 typed down to 30 left the part 2 mm off the block's middle, and
-      // off the 4th axis when carried there; the part moves half the change, with the block)
+      // off the 4th axis when carried there) the block grows or shrinks about its middle: the
+      // part stays where it is in it, and on the screen
       const grow = v - (st.max[k] - st.min[k]);
+      st.min[k] = r3(st.min[k] - grow / 2);
       st.max[k] = r3(st.min[k] + v);
-      for (const m of doc.models || []) {
-        if (!s.part?.includes(m.id) || !m.translate) continue;
-        m.translate[k] = r3(m.translate[k] + grow / 2);
-      }
     }
     return what;
   }
@@ -219,6 +217,13 @@ export function applyStockField(doc, s, id, val, frameBox) {
   return null;
 }
 
+/** (the impeller) On the rotary axis the operations' X ranges go along with the part, moved
+ *  `dx` along X (by the handles, a typed X, a placement): they stay on it. */
+export function rangesFollow(s, dx) {
+  if (!dx || kindOf(s) === "vise") return;
+  for (const o of s.operations || []) if (Array.isArray(o.x_range) && o.x_range.length === 2) o.x_range = o.x_range.map((v) => r3(v + dx));
+}
+
 /** A Part pane field (`ptTX` ..., `ptRZ`): the setup's model moved or turned. */
 export function applyPartField(doc, s, id, val) {
   if (id === "ptModel") {
@@ -244,6 +249,7 @@ export function applyPartField(doc, s, id, val) {
   if (!m || !k) return null;
   const key = k[1] === "T" ? "translate" : "rotate";
   const a = m[key] ? [...m[key]] : [0, 0, 0];
+  if (key === "translate" && k[2] === "X") rangesFollow(s, r3(v) - a[0]);
   a["XYZ".indexOf(k[2])] = r3(v);
   if (key === "rotate" && !a.some((x) => x)) delete m.rotate;
   else m[key] = a;

@@ -6,7 +6,7 @@
 // axis only the turn about X and the slide along X apply.
 
 import { kindOf, rotation } from "./project.js";
-import { carriedFrom, meshModelOf } from "./stockpane.js";
+import { carriedFrom, meshModelOf, rangesFollow } from "./stockpane.js";
 
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const DEG = Math.PI / 180;
@@ -64,6 +64,7 @@ export function moveSetup(doc, s, { d = [0, 0, 0], k = null, deg = 0, pivot = [0
   if (carriedFrom(doc, s)) {
     const st = s.stock;
     if (d.some((v) => v)) {
+      rangesFollow(s, r3(d[0]));
       const off = (st.offset || [0, 0, 0]).map((v, i) => r3(v + d[i]));
       if (off.some((v) => v)) st.offset = off;
       else delete st.offset;
@@ -85,6 +86,7 @@ export function moveSetup(doc, s, { d = [0, 0, 0], k = null, deg = 0, pivot = [0
   const m = meshModelOf(doc, s);
   if (!m) return moveStock(s, d, k, deg, what);
   const t = m.translate || [0, 0, 0];
+  rangesFollow(s, r3(d[0]));
   let t2 = t.map((v, i) => v + d[i]);
   if (D) {
     // P = R A(p) + t, turned about the pivot: D (P - c) + c

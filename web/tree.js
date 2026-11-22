@@ -7,7 +7,7 @@ const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 import { describeStock, stockRadius } from "./project.js";
-import { applyPartField, applyStockField, carriedFrom, fitStock, meshModelOf, partPane, stockPane } from "./stockpane.js";
+import { applyPartField, applyStockField, carriedFrom, fitStock, meshModelOf, partPane, rangesFollow, stockPane } from "./stockpane.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
 
 export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree, machineArg }) {
@@ -372,7 +372,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     // (the impeller: moved into the bar, its roughing's X range stayed where the part had
     // been) the setup's X ranges go along with the part
-    if (d[0]) for (const o of s.operations) if (Array.isArray(o.x_range) && o.x_range.length === 2) o.x_range = o.x_range.map((v) => r(v + d[0]));
+    rangesFollow(s, r(d[0]));
     await commit({ label: `Setup "${s.name || s.id}": the part ${label.toLowerCase()}.` });
   }
 
