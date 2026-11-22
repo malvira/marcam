@@ -423,6 +423,8 @@ pub fn preset(f: &Feeds, material: &str, op: Option<&str>) -> crate::profiles::P
         stepdown: Some(f.stepdown),
         stepover: Some(f.stepover),
         ramp_angle: Some(f.ramp_angle),
+        leave_xy: None,
+        leave_z: None,
     }
 }
 

@@ -658,6 +658,9 @@ pub enum Operation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Chamfer {
     pub tool: u32,
+    /// Stock to leave on the floor (mm, up): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_z: f64,
     /// Rotary setups: the A angle (deg) the part is indexed to (indexed 3+1).
     #[serde(default)]
     pub index_a: f64,
@@ -698,6 +701,10 @@ fn default_tip_clearance() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ThreadMill {
     pub tool: u32,
+    /// Stock to leave on the walls (mm, across): for a finish after it (Mar). Negative: cut
+    /// past them.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_xy: f64,
     #[serde(default)]
     pub index_a: f64,
     pub points: Vec<[f64; 2]>,
@@ -799,6 +806,13 @@ pub fn region_order(regions: &[Region], start: [f64; 2]) -> Vec<usize> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Face {
     pub tool: u32,
+    /// Stock to leave on the walls (mm, across): for a finish after it (Mar). Negative: cut
+    /// past them.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_xy: f64,
+    /// Stock to leave on the floor (mm, up): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_z: f64,
     /// Start from the stock as the operations before it in the setup (and a stock carried
     /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
     /// stock's top, as planned before.
@@ -831,6 +845,13 @@ pub struct Face {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pocket {
     pub tool: u32,
+    /// Stock to leave on the walls (mm, across): for a finish after it (Mar). Negative: cut
+    /// past them.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_xy: f64,
+    /// Stock to leave on the floor (mm, up): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_z: f64,
     /// Start from the stock as the operations before it in the setup (and a stock carried
     /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
     /// stock's top, as planned before.
@@ -876,6 +897,9 @@ pub struct Pocket {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Drill {
     pub tool: u32,
+    /// Stock to leave on the floor (mm, up): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_z: f64,
     /// Start from the stock as the operations before it in the setup (and a stock carried
     /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
     /// stock's top, as planned before.
@@ -906,6 +930,13 @@ pub struct Drill {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Bore {
     pub tool: u32,
+    /// Stock to leave on the walls (mm, across): for a finish after it (Mar). Negative: cut
+    /// past them.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_xy: f64,
+    /// Stock to leave on the floor (mm, up): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_z: f64,
     /// Start from the stock as the operations before it in the setup (and a stock carried
     /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
     /// stock's top, as planned before.
@@ -969,6 +1000,13 @@ fn default_bore_tolerance() -> f64 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Contour {
     pub tool: u32,
+    /// Stock to leave on the walls (mm, across): for a finish after it (Mar). Negative: cut
+    /// past them.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_xy: f64,
+    /// Stock to leave on the floor (mm, up): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_z: f64,
     /// Start from the stock as the operations before it in the setup (and a stock carried
     /// in) left it: no pass wholly above the material in the tool's way (Mar). Off: from the
     /// stock's top, as planned before.
@@ -1060,8 +1098,13 @@ pub struct Raster3d {
     pub sample: f64,
     pub step_down: f64,
     pub floor: f64,
-    #[serde(default)]
-    pub leave: f64,
+    /// Stock to leave on the surface, up (mm; read from `leave` as before).
+    #[serde(default, alias = "leave", skip_serializing_if = "is_zero_f64")]
+    pub leave_z: f64,
+    /// Stock to leave across (mm): the tool kept this much further from the walls (flat and
+    /// ball tools).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_xy: f64,
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
     /// Pass direction, degrees from +X (0: passes along X, stepping in Y).

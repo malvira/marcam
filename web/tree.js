@@ -708,7 +708,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (p.name === "index_a" && isBox(setup())) return;
       // several picked features: shown in the Geometry list, set by picking
       if (p.kind === "regions") return;
-      const label = `${p.name.replace(/_/g, " ")}${p.unit ? ` (${p.unit})` : ""}`;
+      const label = `${p.label || p.name.replace(/_/g, " ")}${p.unit ? ` (${p.unit})` : ""}`;
       if (p.name === "tool") {
         // the project's tools, those the type cannot use greyed with the reason; a tool the
         // project no longer has stays listed, as missing

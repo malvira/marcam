@@ -27,6 +27,9 @@ pub struct ParamSpec {
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub choices: &'static [&'static str],
     pub help: &'static str,
+    /// Its name in the form (empty: from `name`).
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub label: &'static str,
     /// Shown folded away in the form (under More), with the rarely changed settings.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub advanced: bool,
@@ -67,11 +70,16 @@ const fn p(
         max: None,
         choices: &[],
         help,
+        label: "",
         advanced: false,
     }
 }
 
 impl ParamSpec {
+    fn label(mut self, l: &'static str) -> Self {
+        self.label = l;
+        self
+    }
     fn adv(mut self) -> Self {
         self.advanced = true;
         self
@@ -143,6 +151,60 @@ fn ramp() -> ParamSpec {
 /// Every operation type marcam can plan.
 pub fn registry() -> Vec<OperationType> {
     let mut all = types();
+    // (Mar) the stock each operation leaves, next to its depth: walls and floors (a drill's
+    // bottom, a bore's wall and bottom, a thread's wall, a chamfer's height)
+    for t in all.iter_mut() {
+        let lv = |n: &'static str, label: &'static str, help: &'static str| {
+            p(n, "number", "mm", help).opt(json!(0.0)).label(label)
+        };
+        let walls = lv(
+            "leave_xy",
+            "Walls (XY)",
+            "Stock to leave on the walls, across (for a finish after it; negative: past them).",
+        );
+        let floors = lv(
+            "leave_z",
+            "Floors (Z)",
+            "Stock to leave on the floor, up (for a finish after it).",
+        );
+        let add: Vec<ParamSpec> = match t.kind {
+            "face" | "pocket" | "contour" => vec![walls, floors],
+            "drill" => vec![lv(
+                "leave_z",
+                "Bottom",
+                "Stock to leave at the bottom of the holes.",
+            )],
+            "bore" => vec![
+                lv(
+                    "leave_xy",
+                    "Wall",
+                    "Stock to leave on the hole's wall (a smaller hole).",
+                ),
+                lv("leave_z", "Bottom", "Stock to leave at the bottom."),
+            ],
+            "thread_mill" => vec![lv(
+                "leave_xy",
+                "Wall (radial)",
+                "Stock to leave on the thread's flanks (a shallower thread).",
+            )],
+            "chamfer" => vec![lv(
+                "leave_z",
+                "Leave (Z)",
+                "The chamfer this much higher (less cut).",
+            )],
+            _ => vec![],
+        };
+        if !add.is_empty() {
+            let at = t
+                .params
+                .iter()
+                .position(|q| q.name == "depth" || q.name == "width")
+                .map_or(t.params.len(), |i| i + 1);
+            for (k, q) in add.into_iter().enumerate() {
+                t.params.insert(at + k, q);
+            }
+        }
+    }
     // (Mar) in-process stock: the 2D vise operations start at the material left
     for t in all.iter_mut() {
         if ["face", "pocket", "contour", "drill", "bore"].contains(&t.kind) {
@@ -872,6 +934,15 @@ pub fn apply_cutting(
     if let Some(a) = p.ramp_angle {
         set("ramp_angle", a);
     }
+    // (a roughing preset's stock to leave: walls / floors, on a bar radial / axial)
+    if let Some(l) = p.leave_xy {
+        set("leave_xy", nice(l, 0.001));
+        set("leave_radial", nice(l, 0.001));
+    }
+    if let Some(l) = p.leave_z {
+        set("leave_z", nice(l, 0.001));
+        set("leave_axial", nice(l, 0.001));
+    }
 }
 
 /// A complete, valid operation of `kind` with every parameter filled in from the context:
@@ -1260,7 +1331,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         // levels a fifth of the tool apart, sampled finely, on the walls
                         v.insert("step_down".into(), json!(nice((0.2 * d).max(0.05), 0.05)));
                         v.insert("sample".into(), json!(nice((0.05 * d).max(0.05), 0.01)));
-                        v.insert("leave".into(), json!(0.0));
+                        v.insert("leave_z".into(), json!(0.0));
                         v.insert("min_slope".into(), json!(30.0));
                         // levels, not passes: no pass direction, pattern or spacing
                         for k in ["angle", "pattern", "stepover", "scallop"] {
@@ -1271,7 +1342,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         v.insert("scallop".into(), json!(0.0));
                         v.insert("stepover".into(), json!(nice(0.4 * d, 0.05)));
                         v.insert("step_down".into(), json!(nice((0.5 * d).max(0.1), 0.05)));
-                        v.insert("leave".into(), json!(0.25));
+                        v.insert("leave_z".into(), json!(0.25));
                     } else {
                         // onto each pass from a little above the surface, not a plunge
                         v.insert("lead_in".into(), json!(nice((0.25 * d).max(0.2), 0.05)));
@@ -1301,7 +1372,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         v.insert("scallop".into(), json!(scallop));
                         v.insert("stepover".into(), json!(nice(so.max(0.01), 0.001)));
                         v.insert("step_down".into(), json!(depth));
-                        v.insert("leave".into(), json!(0.0));
+                        v.insert("leave_z".into(), json!(0.0));
                     }
                     // down to the bottom of the part (a relief's black level), else half the block
                     let floor = match cx.part_z {
@@ -1429,7 +1500,22 @@ fn raster_params() -> Vec<ParamSpec> {
             "Lowest Z (where there is no part).",
         )
         .min(-10000.0),
-        p("leave", "number", "mm", "Stock to leave on the surface.").opt(json!(0.0)),
+        p(
+            "leave_z",
+            "number",
+            "mm",
+            "Stock to leave on the surface, up (for a finish after it).",
+        )
+        .opt(json!(0.0))
+        .label("Floors (Z)"),
+        p(
+            "leave_xy",
+            "number",
+            "mm",
+            "Stock to leave across, on the walls (a flat or ball tool).",
+        )
+        .opt(json!(0.0))
+        .label("Walls (XY)"),
         p(
             "tolerance",
             "number",

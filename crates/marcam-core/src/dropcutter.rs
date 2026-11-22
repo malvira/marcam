@@ -39,6 +39,23 @@ pub enum Cutter {
 }
 
 impl Cutter {
+    /// The cutter `d` wider all round (a flat or ball tool: walls left `d` thick); None for
+    /// other shapes when `d` is not 0.
+    pub fn grown(self, d: f64) -> Option<Cutter> {
+        if d == 0.0 {
+            return Some(self);
+        }
+        match self {
+            Cutter::Flat { radius } if radius + d > 0.0 => {
+                Some(Cutter::Flat { radius: radius + d })
+            }
+            Cutter::Ball { radius } if radius + d > 0.0 => {
+                Some(Cutter::Ball { radius: radius + d })
+            }
+            _ => None,
+        }
+    }
+
     pub fn radius(&self) -> f64 {
         match *self {
             Cutter::Flat { radius }

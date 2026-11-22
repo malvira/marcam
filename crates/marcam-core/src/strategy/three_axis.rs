@@ -26,6 +26,32 @@ pub fn with_material<T>(top: Option<f64>, f: impl FnOnce() -> T) -> T {
     out
 }
 
+thread_local! {
+    /// Stock left on the walls by the operation being planned (pockets and contours: see
+    /// [`LeaveGuard`]).
+    static LEAVE_XY: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
+/// The walls' stock to leave set while it lives.
+pub struct LeaveGuard;
+
+impl LeaveGuard {
+    pub fn set(v: f64) -> LeaveGuard {
+        LEAVE_XY.with(|m| m.set(v));
+        LeaveGuard
+    }
+}
+
+impl Drop for LeaveGuard {
+    fn drop(&mut self) {
+        LEAVE_XY.with(|m| m.set(0.0));
+    }
+}
+
+fn leave_xy() -> f64 {
+    LEAVE_XY.with(|m| m.get())
+}
+
 /// [`MATERIAL`] set while it lives (cleared when it goes, on an error too).
 pub struct MaterialGuard;
 
@@ -113,6 +139,8 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> 
             smoothing: None,
             regions: Vec::new(),
             in_process: op.in_process,
+            leave_xy: 0.0,
+            leave_z: 0.0,
         };
         b.comment("--- facing (bounded by a face) ---");
         return path_pocket(b, d, stock, safe, &p, op.boundary_offset);
@@ -154,9 +182,10 @@ pub fn pocket(
         return adaptive_pocket(b, d, stock, safe, op);
     }
     if !op.paths.is_empty() {
-        return path_pocket(b, d, stock, safe, op, 0.0);
+        return path_pocket(b, d, stock, safe, op, -leave_xy());
     }
-    let r = d / 2.0;
+    // (the walls' stock to leave: the tool kept that much further in)
+    let r = d / 2.0 + leave_xy();
     let [px0, py0, px1, py1] = op.rect;
     let (x0, x1, y0, y1) = (
         px0.min(px1) + r,
@@ -597,7 +626,13 @@ pub fn contour(
     // (the outline as written: where tabs placed by hand are measured along)
     let src0 = src.clone();
     // (and the boundary offset: out from the outline when positive, whichever side)
-    let g = op.boundary_offset;
+    let lv = leave_xy();
+    let g = op.boundary_offset
+        + match op.side.as_str() {
+            "outside" => lv,
+            "inside" => -lv,
+            _ => 0.0,
+        };
     let mut path = match op.side.as_str() {
         "outside" => offset_polygon(&src, if g == 0.0 { r } else { r + g }),
         "inside" => offset_polygon(&src, if g == 0.0 { -r } else { -r + g }),
@@ -1341,7 +1376,7 @@ pub fn raster3d_on(
         if let Some(&z) = cache.borrow().get(&key) {
             return z;
         }
-        let z = dc.z_at(x, y, floor) + op.leave;
+        let z = dc.z_at(x, y, floor) + op.leave_z;
         // (past the budget nothing more is kept: the operation is failing)
         if !crate::budget::over() {
             cache.borrow_mut().insert(key, z);
@@ -1351,7 +1386,7 @@ pub fn raster3d_on(
     let top = stock.max[2];
     let feeds = [op.feed, op.plunge_feed];
     b.comment("--- 3D raster ---");
-    for level in levels(top, floor + op.leave, op.step_down.max(d * 0.05)) {
+    for level in levels(top, floor + op.leave_z, op.step_down.max(d * 0.05)) {
         if crate::budget::over() {
             break;
         }
@@ -1533,7 +1568,7 @@ pub fn waterline(
             nx * ny
         ));
     }
-    let floor = op.floor + op.leave;
+    let floor = op.floor + op.leave_z;
     let px = |i: usize| x0 + (x1 - x0) * i as f64 / (nx - 1).max(1) as f64;
     let py = |j: usize| y0 + (y1 - y0) * j as f64 / (ny - 1).max(1) as f64;
     // the tool's height over each grid point (where it rests on the part, plus what is left)
@@ -1543,7 +1578,7 @@ pub fn waterline(
             return Ok(());
         }
         for i in 0..nx {
-            v[j * nx + i] = (dc.z_at(px(i), py(j), op.floor) + op.leave).max(floor);
+            v[j * nx + i] = (dc.z_at(px(i), py(j), op.floor) + op.leave_z).max(floor);
         }
     }
     let top = v
@@ -2105,7 +2140,7 @@ pub fn adaptive_rough(
         // beside the range only off the stock (within the tool's radius of the range)
         let near_range = (p[0] - p[0].clamp(x0, x1)).dhypot(p[1] - p[1].clamp(y0, y1)) <= r;
         if in_range || (near_range && !inside_block) {
-            surf[c] = dc.z_at(p[0], p[1], op.floor) + op.leave;
+            surf[c] = dc.z_at(p[0], p[1], op.floor) + op.leave_z;
         }
         if inside_block {
             top_at[c] = stock_top(p[0], p[1]);
@@ -2117,7 +2152,7 @@ pub fn adaptive_rough(
         .cloned()
         .fold(f64::NEG_INFINITY, f64::max)
         .min(stock.max[2]);
-    let floor = op.floor + op.leave;
+    let floor = op.floor + op.leave_z;
     if top <= floor + 1e-6 {
         return Ok(());
     }

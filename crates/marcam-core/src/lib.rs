@@ -233,6 +233,105 @@ fn rest_heightmap(
     cut_heightmap(job, prior, before, sb, cell, c.radius(), "rest roughing")
 }
 
+/// (Mar) Operation `op` with the stock it leaves taken off what it cuts: its floors (a
+/// shallower depth; a drill's bottom; a chamfer raised), and a bore's or a thread's wall (a
+/// smaller hole, a shallower thread). Also the walls' stock for a pocket or contour (planned
+/// with [`strategy::three_axis::LeaveGuard`]). None: as it is.
+fn leave_of(op: &Operation, sb: &job::StockBox) -> Result<(Option<Operation>, f64), String> {
+    let less = |depth: f64, z: f64| {
+        if z != 0.0 && depth - z <= 0.0 {
+            Err(format!(
+                "stock to leave on the floor ({z} mm) is as deep as the cut ({depth} mm): nothing left to cut"
+            ))
+        } else {
+            Ok(depth - z)
+        }
+    };
+    let mut o = op.clone();
+    let walls = match &mut o {
+        Operation::Face(f) => {
+            if f.leave_z == 0.0 && f.leave_xy == 0.0 {
+                return Ok((None, 0.0));
+            }
+            f.depth = less(f.depth, f.leave_z)?;
+            for r in &mut f.regions {
+                r.depth = less(r.depth, f.leave_z)?;
+            }
+            f.boundary_offset -= f.leave_xy;
+            0.0
+        }
+        Operation::Pocket(p) => {
+            if p.leave_z == 0.0 && p.leave_xy == 0.0 {
+                return Ok((None, 0.0));
+            }
+            if p.adaptive && p.leave_xy != 0.0 {
+                return Err("stock to leave on the walls of an adaptive pocket: not yet (use a contour finish, or leave 0)".into());
+            }
+            p.depth = less(p.depth, p.leave_z)?;
+            for r in &mut p.regions {
+                r.depth = less(r.depth, p.leave_z)?;
+            }
+            p.leave_xy
+        }
+        Operation::Contour(c) => {
+            if c.leave_z == 0.0 && c.leave_xy == 0.0 {
+                return Ok((None, 0.0));
+            }
+            c.depth = less(c.depth, c.leave_z)?;
+            for r in &mut c.regions {
+                r.depth = less(r.depth, c.leave_z)?;
+            }
+            c.leave_xy
+        }
+        Operation::Drill(d) => {
+            if d.leave_z == 0.0 {
+                return Ok((None, 0.0));
+            }
+            d.depth = less(d.depth, d.leave_z)?;
+            0.0
+        }
+        Operation::Bore(b) => {
+            if b.leave_z == 0.0 && b.leave_xy == 0.0 {
+                return Ok((None, 0.0));
+            }
+            b.depth = less(b.depth, b.leave_z)?;
+            b.diameter -= 2.0 * b.leave_xy;
+            if b.diameter <= 0.0 {
+                return Err(format!(
+                    "stock to leave on the wall ({} mm) closes the hole",
+                    b.leave_xy
+                ));
+            }
+            0.0
+        }
+        Operation::Chamfer(c) => {
+            if c.leave_z == 0.0 {
+                return Ok((None, 0.0));
+            }
+            c.top = Some(c.top.unwrap_or(sb.max[2]) + c.leave_z);
+            0.0
+        }
+        Operation::ThreadMill(t) => {
+            if t.leave_xy == 0.0 {
+                return Ok((None, 0.0));
+            }
+            let full = t
+                .thread_depth
+                .unwrap_or(if t.internal { 0.5413 } else { 0.6134 } * t.pitch);
+            if full - t.leave_xy <= 0.0 {
+                return Err(format!(
+                    "stock to leave on the thread ({} mm) is as deep as the thread",
+                    t.leave_xy
+                ));
+            }
+            t.thread_depth = Some(full - t.leave_xy);
+            0.0
+        }
+        _ => return Ok((None, 0.0)),
+    };
+    Ok((Some(o), walls))
+}
+
 /// Whether an in-process stock is planned from (the operation's `in_process`; 2D vise
 /// operations).
 fn in_process(op: &Operation) -> bool {
@@ -1008,6 +1107,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let mut material: Option<f64> = None;
                 loop {
                     let guard = t3::MaterialGuard::set(material);
+                    // (Mar) the stock it leaves: its floors and its walls
+                    let left = leave_of(op3, sb).map_err(err)?;
+                    let op3 = left.0.as_ref().unwrap_or(op3);
+                    let _walls = t3::LeaveGuard::set(left.1);
                     match op3 {
                         // several picked faces / pockets / outlines: each in turn, nearest next
                         Operation::Face(o) if !o.regions.is_empty() => {
@@ -1139,6 +1242,13 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                             };
                             let turned = (index != 0.0).then(|| mesh.rotated_x(index));
                             let c = cutter.expect("set above");
+                            // (the walls' stock to leave: the tool wider by it)
+                            let c = c.grown(o.leave_xy).ok_or_else(|| {
+                                err(format!(
+                                    "stock to leave on the walls ({} mm) takes a flat or ball tool, no thinner than it",
+                                    o.leave_xy
+                                ))
+                            })?;
                             let dc = t3::DropCutter3::new(turned.as_ref().unwrap_or(mesh), c);
                             // rest finishing: the earlier finish's tool, to find where it could not reach
                             let bigger = if o.rest_tool > 0 && matches!(op, Operation::Raster3d(_))

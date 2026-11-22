@@ -448,6 +448,12 @@ pub struct Preset {
     /// Ramp angle, degrees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_angle: Option<f64>,
+    /// Stock to leave on the walls (across; on a bar: radial), mm: a roughing preset's (Mar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leave_xy: Option<f64>,
+    /// Stock to leave on the floors (up; on a bar: axial), mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leave_z: Option<f64>,
 }
 
 /// Stock materials offered for a setup. Any other name may be typed; cutting data matches
@@ -1399,6 +1405,8 @@ fn fusion_tools(v: &Value, stem: &str) -> Result<Import, String> {
                     stepover: num(p, "stepover").map(|x| x * k),
                     op: None,
                     ramp_angle: None,
+                    leave_xy: None,
+                    leave_z: None,
                 })
             })
             .collect();
