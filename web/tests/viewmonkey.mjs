@@ -207,7 +207,7 @@ function actions(r, app) {
       return `${field}=${val}`;
     } },
     { name: "edit", w: 2, may: ["project", "form", "pos"], run: async () => { const d = 1 + r.int(9); await js(`(() => { const t = document.getElementById('job'); const j = JSON.parse(t.value); const ops = (j.setups ? j.setups.flatMap((s) => s.operations) : j.programs.flatMap((p) => p.operations)); const o = ops[${r.int(100)} % ops.length]; for (const k of ['feed', 'rough_feed', 'finish_feed']) if (o[k]) o[k] += ${d}; t.value = JSON.stringify(j, null, 2); t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`); return d; } },
-    { name: "add", w: 1, may: ["selected", "form"], run: async () => {
+    { name: "add", w: 1, may: ["project", "selected", "form", "pos"], run: async () => {
       // a new operation of a random type: its form, filled by the engine (often while typing)
       const k = r.f();
       const kind = await js(`(() => { const s = document.getElementById('treeAddType'); if (!s) return null; const o = [...s.options]; s.value = o[Math.floor(${k} * o.length)].value; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()`);
