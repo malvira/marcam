@@ -1021,14 +1021,88 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let body = o.body_back[1].max(o.body_front[1]) + 0.05;
                 let mut runout = [o.runout, o.runout];
                 if let Some(m) = ctx.mesh {
-                    let reach = o.runout + top;
-                    if part_radius_over(m, o.body_back[0] - reach, o.body_back[0] - 1e-3) > body {
+                    // what stands above the tip, nearest first: the V-bit's widest, the shank
+                    // (above the flutes), the holder (above the stickout); each kept off a
+                    // shoulder that rises to its height (the holder: from the tool's data, else
+                    // the usual 20 mm collet 5 mm above the flutes)
+                    let tb = collision::ToolBody::of(tool);
+                    let tip = o.body_back[1].min(o.body_front[1]) - 2.0;
+                    let zones = [
+                        (top, 0.0),
+                        (tb.shank_radius, tb.flute_length),
+                        (tb.holder_radius, tb.stickout),
+                    ];
+                    let inset = |side: f64, x: f64| -> f64 {
+                        let mut need = 0.0f64;
+                        for (i, &(zr, from)) in zones.iter().enumerate() {
+                            let reach = if i == 0 { o.runout + zr } else { zr };
+                            let (a, b) = if side < 0.0 {
+                                (x - reach, x - 1e-3)
+                            } else {
+                                (x + 1e-3, x + reach)
+                            };
+                            let rise = part_radius_over(m, a, b);
+                            if rise > body && (i == 0 || rise > tip + from) {
+                                need = need.max(zr + 0.25);
+                            }
+                        }
+                        need
+                    };
+                    let back = inset(-1.0, o.body_back[0]);
+                    if back > 0.0 {
                         runout[0] = 0.0;
-                        o.body_back[0] += top;
+                        o.body_back[0] += back;
                     }
-                    if part_radius_over(m, o.body_front[0] + 1e-3, o.body_front[0] + reach) > body {
+                    let front = inset(1.0, o.body_front[0]);
+                    if front > 0.0 {
                         runout[1] = 0.0;
-                        o.body_front[0] -= top;
+                        o.body_front[0] -= front;
+                    }
+                    if back > top + 0.25 + 1e-9 || front > top + 0.25 + 1e-9 {
+                        b.warnings.push(format!(
+                            "the knurl stops {:.1} mm short of the part's shoulder: the tool's holder (Ø{:.0} from {:.1} mm above the tip) would touch it; a longer stickout in the tool's data lets it go nearer",
+                            back.max(front),
+                            2.0 * tb.holder_radius,
+                            tb.stickout
+                        ));
+                    }
+                    if o.body_front[0] <= o.body_back[0] + 0.5 {
+                        return Err(Error::Invalid(format!(
+                            "program {}: the knurl's body is too short once kept off the part's shoulders (the tool's holder)",
+                            prog.name
+                        )));
+                    }
+                }
+                // (the walkthrough: the knurl came in at its body's radius + 0.5 into a step
+                // the roughing had left 1 mm proud; the holder hit it 280 times) on a carried
+                // bar: its approach from the bar as it is, and said when the bar stands above
+                // the body (it was to be turned or finished first)
+                if let Some(carry::Carried::Bar(m)) = job.carried.as_deref() {
+                    let (xa, xb) = (o.body_back[0] - runout[0], o.body_front[0] + runout[1]);
+                    let mut top = 0.0f64;
+                    for i in 0..m.grid.nx {
+                        let x = m.grid.x(i);
+                        if x < xa || x > xb {
+                            continue;
+                        }
+                        for j in 0..m.grid.na {
+                            top = top.max(m.r[i * m.grid.na + j] as f64);
+                        }
+                    }
+                    let body = o.body_back[1].max(o.body_front[1]);
+                    if top > body + 1e-6 {
+                        o.approach_clearance = o.approach_clearance.max(top - body + 0.5);
+                    }
+                    if top > body + 0.1 {
+                        let w = format!(
+                            "the stock is up to {:.2} mm above the knurl's body (X {:.1}..{:.1}): turn or finish it first",
+                            top - body,
+                            o.body_back[0],
+                            o.body_front[0]
+                        );
+                        if !b.warnings.contains(&w) {
+                            b.warnings.push(w);
+                        }
                     }
                 }
                 strategy::helical_knurl(&mut b, angle, safe_r, &o, runout)
@@ -1434,6 +1508,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                     sb,
                                     safe_r,
                                     o,
+                                    matches!(op, Operation::Rough3d(_)),
                                 )
                                 .map_err(err)?
                             } else {
@@ -1470,6 +1545,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                     sb,
                                     safe_r,
                                     &o,
+                                    matches!(op, Operation::Rough3d(_)),
                                 )
                                 .map_err(err)?
                             }

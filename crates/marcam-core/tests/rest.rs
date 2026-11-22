@@ -117,14 +117,12 @@ fn rest_roughing_cuts_only_what_the_larger_tool_left() {
     assert_eq!(cuts(&tf, 0), cuts(&tr, 0));
     let (all_len, left_len) = (cuts(&tf, 1), cuts(&tr, 1));
     assert!(left_len > 0.0, "the smaller tool has something to cut");
+    // (the full pass no longer rides its lower levels over the part where an upper level
+    // already cut, so it is much shorter than it was; the rest pass, which still rides them,
+    // is not the shorter here any more: it keeps the same block, below)
     assert!(
-        left_len < 0.6 * all_len,
+        left_len < 1.5 * all_len,
         "rest roughing cuts {left_len:.0} mm, the full pass {all_len:.0} mm"
-    );
-    let (all, left) = (op_time(&tf, 1), op_time(&tr, 1));
-    assert!(
-        left < 0.7 * all,
-        "rest roughing takes {left:.0} s, the full pass {all:.0} s"
     );
     // and leaves the block as the full pass does, away from the part's walls (there the full
     // pass's moves down off the part's edge, straight between two samples, take a little of
@@ -175,11 +173,53 @@ fn rest_roughing_first_in_the_setup_cuts_the_whole_block() {
     let rest = plan(&project(json!([rough("op1", 2, true)])))
         .unwrap()
         .remove(0);
+    // the same block left (the plain pass no longer rides over what it cut a level above,
+    // so it is the shorter)
     let (p, r) = (cuts(&plain, 0), cuts(&rest, 0));
+    assert!(p <= 1.02 * r, "{r:.0} mm with rest, {p:.0} mm without");
+    let doc = project(json!([rough("op1", 2, false)]));
+    let (a, b) = (cut_block(&doc, &plain), cut_block(&doc, &rest));
+    // the plain pass never into the part, and it leaves no more than the rest pass (it may
+    // take a little more: its moves in from the side at the block's edge)
+    let mesh = load_mesh(&job(&doc), Path::new(PICKING)).unwrap().unwrap();
+    let part = marcam::sim3::part_top(&a, &mesh);
+    // (not beside the part's walls, where a cell's part top and the cut beside it mix)
+    let wall = |k: usize| {
+        let (i, j) = ((k % a.nx) as isize, (k / a.nx) as isize);
+        (-10isize..=10).any(|dj| {
+            (-10isize..=10).any(|di| {
+                let (ii, jj) = (i + di, j + dj);
+                ii >= 0
+                    && jj >= 0
+                    && (ii as usize) < a.nx
+                    && (jj as usize) < a.ny
+                    && part[jj as usize * a.nx + ii as usize].is_some() != part[k].is_some()
+            })
+        })
+    };
+    let mut gouge = (0.0f64, 0usize);
+    let mut more = (0.0f64, 0usize);
+    for k in 0..a.z.len() {
+        if wall(k) {
+            continue;
+        }
+        if let Some(pt) = part[k] {
+            if pt - a.z[k] > gouge.0 {
+                gouge = (pt - a.z[k], k);
+            }
+        }
+        if a.z[k] - b.z[k] > more.0 {
+            more = (a.z[k] - b.z[k], k);
+        }
+    }
+    let at = |k: usize| a.centre(k % a.nx, k / a.nx);
     assert!(
-        (r - p).abs() <= 0.02 * p,
-        "{r:.0} mm with rest, {p:.0} mm without"
+        gouge.0 < 0.05,
+        "the plain pass {:.3} mm into the part at {:?}",
+        gouge.0,
+        at(gouge.1)
     );
+    assert!(more.0 < 0.25, "the plain pass left {:.3} mm more than the rest pass at {:?} (part {:?}, plain {:.3}, rest {:.3})", more.0, at(more.1), part[more.1], a.z[more.1], b.z[more.1]);
 }
 
 #[test]

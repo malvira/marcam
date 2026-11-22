@@ -1000,6 +1000,41 @@ impl DropCutter3 {
     }
 
     /// Lowest tip Z at (x, y) that does not cut into the mesh (never below `floor`).
+    /// The part's own top over (x, y) (no tool round it): the highest triangle there, or
+    /// `floor`.
+    pub fn part_top(&self, x: f64, y: f64, floor: f64) -> f64 {
+        let (i, j) = ((x - self.x0) / self.cell, (y - self.y0) / self.cell);
+        if i < 0.0 || j < 0.0 || i >= self.nx as f64 || j >= self.ny as f64 {
+            return floor;
+        }
+        let mut best = floor;
+        for &k in &self.bins[j as usize * self.nx + i as usize] {
+            let bb = &self.boxes[k as usize];
+            if bb[0] > x || bb[2] < x || bb[1] > y || bb[3] < y {
+                continue;
+            }
+            let t = &self.tris[k as usize];
+            if t[0][2].max(t[1][2]).max(t[2][2]) <= best {
+                break;
+            }
+            // (x, y) in the triangle seen from above: its height there
+            let (ax, ay) = (t[1][0] - t[0][0], t[1][1] - t[0][1]);
+            let (bx, by) = (t[2][0] - t[0][0], t[2][1] - t[0][1]);
+            let det = ax * by - ay * bx;
+            if det.abs() < 1e-12 {
+                continue;
+            }
+            let (px, py) = (x - t[0][0], y - t[0][1]);
+            let u = (px * by - py * bx) / det;
+            let v = (ax * py - ay * px) / det;
+            if u < -1e-9 || v < -1e-9 || u + v > 1.0 + 1e-9 {
+                continue;
+            }
+            best = best.max(t[0][2] + u * (t[1][2] - t[0][2]) + v * (t[2][2] - t[0][2]));
+        }
+        best
+    }
+
     pub fn z_at(&self, x: f64, y: f64, floor: f64) -> f64 {
         let (i, j) = ((x - self.x0) / self.cell, (y - self.y0) / self.cell);
         // (past the planning budget: the operation is failing, see crate::budget)
@@ -1069,7 +1104,7 @@ pub fn raster3d(
     safe: f64,
     op: &Raster3d,
 ) -> Result<(), String> {
-    raster3d_on(b, dc, None, None, None, stock, safe, op)
+    raster3d_on(b, dc, None, None, None, stock, safe, op, false)
 }
 
 /// Material thicker than this (mm) left by the earlier finish is cut by a rest finish.
@@ -1336,6 +1371,7 @@ pub fn raster3d_on(
     stock: &StockBox,
     safe: f64,
     op: &Raster3d,
+    rough: bool,
 ) -> Result<(), String> {
     let [x0, x1] = op.x_range;
     let [y0, y1] = op.y_range;
@@ -1435,12 +1471,25 @@ pub fn raster3d_on(
             } else {
                 row
             };
-            if sel.is_some() || rest.is_some() || bigger.is_some() {
+            // (roughing, the walkthrough: a square base as wide as the block held the tool on
+            // its top at every level below it, the same pass again and again, 4 h 55 min)
+            // only where this level goes deeper than the one above it
+            let deeper = |p: [f64; 2]| {
+                !rough || surf(p[0], p[1]) < level + op.step_down.max(d * 0.05) - 1e-6
+            };
+            if sel.is_some()
+                || rest.is_some()
+                || bigger.is_some()
+                || (rough && row.iter().any(|&p| !deeper(p)))
+            {
                 // on the selected faces, (rest roughing) where material is left above the
                 // pass, and (rest finishing) where the earlier finish's larger tool could not
                 // go as deep
+                // (rest roughing keeps its own: what is left above the pass; skipping there too
+                // let its links at depth cut 0.3 mm into a part)
                 let inside = |p: [f64; 2]| {
-                    sel.is_none_or(|s| on_sel(dc, s, p[0], p[1]))
+                    (rest.is_some() || deeper(p))
+                        && sel.is_none_or(|s| on_sel(dc, s, p[0], p[1]))
                         && rest.is_none_or(|r| {
                             r.at(p[0], p[1]) > z_of(p[0], p[1]) + REST_MIN
                                 // (and not all of it below this level's layer)
@@ -1459,6 +1508,8 @@ pub fn raster3d_on(
                     &mut lifted,
                     rest,
                     &mut air,
+                    false,
+                    rough.then_some(level + op.step_down.max(d * 0.05)),
                 );
                 continue;
             }
@@ -1767,6 +1818,10 @@ fn masked_row(
     lifted: &mut bool,
     rest: Option<&RestMap>,
     air: &mut Option<[f64; 2]>,
+    // (roughing: across a gap at depth or over it, whichever is quicker, as rest roughing)
+    stay: bool,
+    // (roughing: what the level above left here, so a descent comes in just above it)
+    cleared: Option<f64>,
 ) {
     let feeds = [op.feed, op.plunge_feed];
     let lerp =
@@ -1775,9 +1830,10 @@ fn masked_row(
     let at = |p: [f64; 2]| [p[0], p[1], z_of(p[0], p[1])];
     // where a descent starts: above the block, or just above what is left there
     let start = |p: [f64; 2], z: f64| {
-        rest.map_or(top + 1.0, |r| {
-            (r.at(p[0], p[1]) + REST_CLEAR).min(top + 1.0)
-        })
+        rest.map_or(
+            cleared.map_or(top + 1.0, |c| (c + REST_CLEAR).min(top + 1.0)),
+            |r| (r.at(p[0], p[1]) + REST_CLEAR).min(top + 1.0),
+        )
         .max(z)
     };
     let mut prev: Option<[f64; 2]> = None;
@@ -1809,7 +1865,7 @@ fn masked_row(
                     let from = b.p3.expect("cutting");
                     line_refined(b, z_of, from, at(e), op.tolerance, 0, feeds);
                 }
-                if rest.is_some() {
+                if rest.is_some() || stay {
                     *air = b.p3.map(|p| [p[0], p[1]]);
                 } else {
                     leave(b, safe);
@@ -1831,6 +1887,30 @@ fn masked_row(
                         let n = ((dist(a, e) / r.cell).ceil() as usize).max(1);
                         let hop = (0..=n)
                             .map(|k| r.at_point(lerp(a, e, k as f64 / n as f64)))
+                            .fold(f[2].max(s), f64::max)
+                            + REST_CLEAR;
+                        let hop = hop.min(safe);
+                        let lift = ((hop - f[2]) + dist(a, e) + (hop - s)) / RAPID_GUESS
+                            + 3.0 * RAPID_OVERHEAD
+                            + (s - z) / op.plunge_feed.max(1e-6);
+                        if dist(a, e) / op.feed.max(1e-6) <= lift {
+                            line_refined(b, z_of, f, at(e), op.tolerance, 0, feeds);
+                        } else {
+                            b.rapid3(None, None, Some(hop));
+                            b.rapid3(Some(e[0]), Some(e[1]), None);
+                            b.rapid3(None, None, Some(s));
+                            b.line3(e[0], e[1], z, UP, op.plunge_feed);
+                        }
+                    }
+                    (Some(a), Some(f), None) if stay => {
+                        // (the same, over the part itself: the tool held up on it)
+                        let s = start(e, z);
+                        let n = ((dist(a, e) / op.sample.max(0.05)).ceil() as usize).max(1);
+                        let hop = (0..=n)
+                            .map(|k| {
+                                let p = lerp(a, e, k as f64 / n as f64);
+                                z_of(p[0], p[1])
+                            })
                             .fold(f[2].max(s), f64::max)
                             + REST_CLEAR;
                         let hop = hop.min(safe);
@@ -2126,6 +2206,7 @@ pub fn adaptive_rough(
     let mut surf = vec![f64::INFINITY; n];
     let mut top_at = vec![f64::NEG_INFINITY; n];
     let mut bot_at = vec![f64::NEG_INFINITY; n];
+    let mut part_at = vec![f64::NEG_INFINITY; n];
     for c in 0..n {
         if c % g.nx == 0 && crate::budget::over() {
             return Ok(());
@@ -2145,6 +2226,10 @@ pub fn adaptive_rough(
         if inside_block {
             top_at[c] = stock_top(p[0], p[1]);
             bot_at[c] = stock_bottom(p[0], p[1]);
+            // (the walkthrough: a square base as wide as the block was roughed round at every
+            // level, touching nothing, 4 h 55 min) the part's own top: no material to cut
+            // where the part stands above the level
+            part_at[c] = dc.part_top(p[0], p[1], f64::NEG_INFINITY);
         }
     }
     let top = top_at
@@ -2177,7 +2262,8 @@ pub fn adaptive_rough(
         let stock_here: Vec<bool> = top_at
             .iter()
             .zip(&bot_at)
-            .map(|(&t, &u)| t > z + 1e-6 && u < z + layer)
+            .zip(&part_at)
+            .map(|((&t, &u), &pt)| t > z + 1e-6 && u < z + layer && pt < z + 1e-6)
             .collect();
         let cl = clear_level(g, &allowed, &stock_here, &mut open, params, None);
         plunges += cl.plunges;

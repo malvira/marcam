@@ -532,7 +532,17 @@ fn a_knurl_on_the_step_next_to_the_base_keeps_off_the_base() {
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &x| {
             (a.min(x), b.max(x))
         });
-    // the back end off the base by the V-bit's radius; the front (the boss is smaller) runs out
-    assert!((lo - (-40.5 + 3.175 / 2.0)).abs() < 0.01, "{lo}");
+    // the back end off the base by the holder's radius (its usual Ø20 collet, 5 mm above the
+    // flutes, would reach the square base's corners) and said; the front (the boss is
+    // smaller) runs out
+    assert!((lo - (-40.5 + 10.0 + 0.25)).abs() < 0.01, "{lo}");
+    assert!(
+        tps[0]
+            .notes
+            .iter()
+            .any(|n| n.contains("short of the part's shoulder")),
+        "{:?}",
+        tps[0].notes
+    );
     assert!((hi - (-10.5 + 0.6)).abs() < 0.01, "{hi}");
 }
