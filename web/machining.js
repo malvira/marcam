@@ -615,7 +615,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // (as showRange: the old playback untouched while the new one is built)
     if (m.swapping) return;
     const v = state.three;
-    // (every operation hidden: nothing to play, no tool to place)
+    // (every operation hidden: nothing to play, no tool to place; on a vise, the work square)
+    if (v && !v.failed && m.session && !m.session.segments && m.xyz && v.groups.work) {
+      m.angle = 0;
+      v.groups.work.rotation.x = 0;
+    }
     if (!v || v.failed || !m.session || !m.session.segments) return;
     const s = m.session;
     const k = Math.max(0, Math.min(m.pos, s.segments) - 1);
@@ -908,6 +912,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.session = result;
       m.stock = stock;
       m.xyz = result.kind === "xyz";
+      // (a vise's work never turned: no A left from a rotary playback before it, which with
+      // nothing to play was never placed again; the knob in a vise drawn turned)
+      if (m.xyz) m.angle = 0;
       m.pos = 0;
       m.clock = null;
       m.gpu?.destroy();
