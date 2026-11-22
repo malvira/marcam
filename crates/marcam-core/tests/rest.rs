@@ -79,6 +79,7 @@ fn cuts(tp: &Toolpath, op: u32) -> f64 {
 }
 
 /// Operation `op`'s machining time (s) on the setup's machine (the Carvera).
+#[allow(dead_code)]
 fn op_time(tp: &Toolpath, op: u32) -> f64 {
     let m = marcam::profiles::builtin_machines()
         .into_iter()
@@ -199,6 +200,7 @@ fn rest_roughing_first_in_the_setup_cuts_the_whole_block() {
     };
     let mut gouge = (0.0f64, 0usize);
     let mut more = (0.0f64, 0usize);
+    #[allow(clippy::needless_range_loop)]
     for k in 0..a.z.len() {
         if wall(k) {
             continue;
