@@ -793,7 +793,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         // (back: the engine starts again from the top)
         const goal = m.target;
         const from = goal < m.pos ? 0 : m.pos;
-        const want = Math.min(goal, from + SEEK_CHUNK);
+        // (back: the engine starts again from the top, run to the place in one go, so no
+        // state on the way there is drawn; Mar's scrub glitch)
+        const want = from === 0 && goal < m.pos ? goal : Math.min(goal, from + SEEK_CHUNK);
         const before = m.pos;
         let result;
         if (m.gpu) {

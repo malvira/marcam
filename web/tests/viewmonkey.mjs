@@ -86,6 +86,17 @@ const INSTALL = `(() => {
     if (c.legacy.draft && !editing) out.push('a draft preview left drawn with no draft');
     if (c.strays) out.push('objects drawn outside the view groups');
     if (c.part && c.stock) out.push('the part and the simulated stock drawn together (they z-fight)');
+    // (Mar's scrub glitch) one 3D view; a vise's work never turned by A; its stock no taller
+    // than its block
+    if (document.querySelectorAll('#view3d canvas').length > 1) out.push('two 3D views drawn');
+    if (c.mach && m.xyz && Math.abs(v.groups.work?.rotation.x || 0) > 1e-9) out.push('the work turned (A) in a vise playback');
+    const sb = m.session?.stock_box;
+    if (c.mach && m.xyz && sb && m.stockMesh && shown(m.stockMesh)) {
+      const p = m.stockMesh.geometry.attributes.position.array;
+      let top = -Infinity;
+      for (let i = 2; i < p.length; i += 30) top = Math.max(top, p[i]);
+      if (top > sb.max[2] + 0.05) out.push('the stock drawn taller than its block');
+    }
     return out;
   }
   const frames = [];
@@ -163,6 +174,12 @@ function actions(r, app) {
     { name: "toggle", w: 6, may: ["view"], run: async () => { const k = r.pick(["p", "s", "t", "r", "c", "o"]); await key(k); return k; } },
     { name: "play", w: 3, may: ["pos", "playing", "expanded"], run: async () => { const b = await js("!!document.getElementById('vtPlay') && !document.getElementById('vtPlay').disabled && !document.getElementById('vtPlay').classList.contains('hidden')"); await click(b ? "document.getElementById('vtPlay')" : "document.getElementById('simPlay')"); return b ? "vtPlay" : "simPlay"; } },
     { name: "scrub", w: 3, may: ["pos"], run: async () => { const f = r.f(); await js(`(() => { const s = document.getElementById('simScrub'); if (s.offsetParent === null) return false; s.value = String(Math.round(+s.max * ${f})); s.dispatchEvent(new Event('input')); return true; })()`); return f.toFixed(2); } },
+    { name: "scrubfast", w: 2, may: ["pos"], run: async () => {
+      // (Mar) a fast drag back and forth on the playback slider: every frame one place's state
+      const xs = Array.from({ length: 12 }, () => r.f());
+      await js(`(async () => { const s = document.getElementById('simScrub'); if (s.offsetParent === null) return false; for (const f of ${JSON.stringify(xs)}) { s.value = String(Math.round(+s.max * f)); s.dispatchEvent(new Event('input')); await new Promise((r) => setTimeout(r, 30)); } return true; })()`);
+      return xs.length;
+    } },
     { name: "speed", w: 1, may: [], run: async () => { const f = r.f(); await js(`(() => { const s = document.getElementById('simSpeed'); s.value = String(+s.min + (+s.max - +s.min) * ${f}); s.dispatchEvent(new Event('input')); return true; })()`); return f.toFixed(2); } },
     { name: "end", w: 1, may: ["pos"], run: async () => { await click("document.getElementById('simEnd')"); } },
     { name: "fold", w: 1, may: ["expanded", "playing"], run: async () => { await click("document.getElementById('simClose')"); } },

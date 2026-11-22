@@ -83,7 +83,7 @@ export function moveSetup(doc, s, { d = [0, 0, 0], k = null, deg = 0, pivot = [0
     return `Setup "${s.name || s.id}": the stock ${what}.`;
   }
   const m = meshModelOf(doc, s);
-  if (!m) return null;
+  if (!m) return moveStock(s, d, k, deg, what);
   const t = m.translate || [0, 0, 0];
   let t2 = t.map((v, i) => v + d[i]);
   if (D) {
@@ -96,6 +96,47 @@ export function moveSetup(doc, s, { d = [0, 0, 0], k = null, deg = 0, pivot = [0
   }
   m.translate = t2.map(r3);
   return `Setup "${s.name || s.id}": the part ${what}.`;
+}
+
+/** (Mar) A setup with no part to move in its stock (a revolved profile, or none): the stock
+ *  itself moved (a block, in the vise) or turned a quarter at a time (a block: its sides
+ *  swapped; a bar in the vise: which way it lies; on the rotary axis: a bar's flats round
+ *  its axis). */
+function moveStock(s, d, k, deg, what) {
+  const st = s.stock;
+  if (!st) return null;
+  const vise = kindOf(s) === "vise";
+  const q = Math.round(deg / 90);
+  if (st.shape === "box") {
+    if (d.some((v) => v)) {
+      st.min = st.min.map((v, i) => r3(v + d[i]));
+      st.max = st.max.map((v, i) => r3(v + d[i]));
+    }
+    if (k != null && q % 2) {
+      // (a quarter turn: the two sides across the axis swapped, its low corner and top kept)
+      const [a, b] = [[1, 2], [0, 2], [0, 1]][k];
+      const size = st.max.map((v, i) => v - st.min[i]);
+      [size[a], size[b]] = [size[b], size[a]];
+      st.max = [0, 1].map((i) => r3(st.min[i] + size[i])).concat(st.max[2]);
+      st.min[2] = r3(st.max[2] - size[2]);
+    }
+    return `Setup "${s.name || s.id}": the stock ${what}.`;
+  }
+  if (k == null) return null;
+  if (!vise) {
+    // on the rotary axis: a bar's flats turned about it
+    if (k !== 0 || !("angle" in st || ["square", "hex", "rect"].includes(st.shape))) return null;
+    st.angle = r3((((st.angle || 0) + deg) % 360 + 360) % 360);
+    return `Setup "${s.name || s.id}": the bar turned ${r3(deg)}° about its axis.`;
+  }
+  if (!(q % 2)) return null;
+  // a bar in the vise: turned a quarter, it lies another way (along X, Y, or standing up)
+  const along = s.holding?.along || "x";
+  const turned = { x: ["x", "z", "y"], y: ["z", "y", "x"], z: ["y", "x", "z"] }[along][k];
+  s.holding ||= { kind: "vise" };
+  if (turned === "x") delete s.holding.along;
+  else s.holding.along = turned;
+  return `Setup "${s.name || s.id}": the bar along ${turned.toUpperCase()}.`;
 }
 
 /** The handles, in the view `state.three` (made once it is there). */
@@ -112,7 +153,10 @@ export function setupHandles({ state, edit }) {
     if (!s) return null;
     const rotary = kindOf(s) !== "vise";
     if (carriedFrom(t.doc, s)) return { kind: "carried", rotary, setup: s };
+    // (the Part selected: its part; the Stock: its part too, moved in it, unless there is
+    // no part to move: then the stock itself)
     if (meshModelOf(t.doc, s)) return { kind: "part", rotary, setup: s };
+    if (s.stock && s.stock.shape !== "from_previous") return { kind: "stock", rotary, setup: s };
     return null;
   }
 
@@ -122,8 +166,8 @@ export function setupHandles({ state, edit }) {
     const THREE = v.THREE;
     const b = new THREE.Box3();
     const add = (g) => g?.children.forEach((c) => b.expandByObject(c));
-    if (kind === "carried") add(v.groups.stock);
-    add(v.groups.part);
+    if (kind === "carried" || kind === "stock") add(v.groups.stock);
+    if (kind !== "stock") add(v.groups.part);
     return b;
   }
 
@@ -180,7 +224,7 @@ export function setupHandles({ state, edit }) {
     const THREE = v.THREE;
     h.ghost = new THREE.Group();
     const mat = new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.35, depthWrite: false });
-    const src = [...(tg.kind === "carried" ? v.groups.stock.children : []), ...v.groups.part.children];
+    const src = [...(tg.kind !== "part" ? v.groups.stock.children : []), ...(tg.kind !== "stock" ? v.groups.part.children : [])];
     for (const o of src) o.traverse((x) => x.isMesh && h.ghost.add(Object.assign(new THREE.Mesh(x.geometry, mat), { matrixAutoUpdate: false, matrix: x.matrixWorld.clone() })));
     const holder = new THREE.Group();
     holder.add(h.ghost);
@@ -260,7 +304,16 @@ export function setupHandles({ state, edit }) {
       return;
     }
     // (made once: refreshes come together while three.js's module loads)
-    if (!h.tc) await (h.making ||= make());
+    if (!h.tc) {
+      try {
+        await (h.making ||= make());
+      } catch (e) {
+        // (three.js's handles could not be loaded: said, not silent)
+        h.making = null;
+        window.__marcam.showError?.(`The 3D handles could not be loaded (${e?.message || e}): type the values under the Stock or Part's More instead.`);
+        return;
+      }
+    }
     if (h.start) return;
     const box = boxOf(tg.kind);
     if (box.isEmpty()) {

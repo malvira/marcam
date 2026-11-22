@@ -1164,8 +1164,13 @@ function drawSideXYZ(ctx, w, h, p, pts, n, sb, hide) {
 }
 
 // ---------------------------------------------------------------- 3D view (three.js)
-async function getThree() {
-  if (state.three) return state.three;
+/** The 3D view, made once: callers at the same time share it (two were made when two came
+ *  together, the drawing then split between a view on show and one under it). */
+function getThree() {
+  if (state.three) return Promise.resolve(state.three);
+  return (state.threeMaking ||= makeThree());
+}
+async function makeThree() {
   try {
     const THREE = await import("three");
     const { OrbitControls } = await import("three/addons/controls/OrbitControls.js");
@@ -2278,6 +2283,7 @@ window.__marcam.splitters = {
 new ResizeObserver(() => drawSide()).observe($("side"));
 
 // ---------------------------------------------------------------- project tree (0.2)
+window.__marcam.showError = showError;
 window.__marcam.handles = setupHandles({ state, edit: (fn) => window.__marcam.tree?.edit(fn) });
 window.__marcam.tree = setupTree({
   engine, $, state, readJob, writeJob, showError, getThree,
