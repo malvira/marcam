@@ -3347,7 +3347,8 @@ try {
     // typed in (no change event): applied a moment after, the field keeping the focus
     await js("const y = document.getElementById('stY'); y.focus(); y.value = '45'; y.dispatchEvent(new Event('input', { bubbles: true })); true");
     await sleep(1500);
-    const typed = { y: (await job()).setups[0].stock.max[1], focus: await js("document.activeElement?.id") };
+    // (a block resized about its middle: its width)
+    const typed = { y: ((st) => st.max[1] - st.min[1])((await job()).setups[0].stock), focus: await js("document.activeElement?.id") };
     // the part: moved along X by its arrow, turned about Z by its ring
     await js("document.querySelector('#tree [data-act=part]').click(); true");
     await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible"), "the handles", 30000);
@@ -3370,7 +3371,7 @@ try {
     const undone = (await job()).models.find((m) => m.id === "dome");
     const dx = t1.translate[0] - (t0.translate?.[0] ?? 0);
     check("the Stock item: its type and sizes (the plate 70 wide); the part moved by its X arrow (snapped to 0.1 mm) and turned by its Z ring (quarter turns), each drag one edit, planned again",
-      pane.types === "block,round,square,hex,rect" && pane.x === "60" && !pane.setupShown && inPlayback.views === 1 && inPlayback.inScene && sized.max[0] === 70 && typed.y === 45 && typed.focus === "stY" && dx > 0.5 && Math.abs(dx * 10 - Math.round(dx * 10)) < 1e-6 && /X \+/.test(moved) &&
+      pane.types === "block,round,square,hex,rect" && pane.x === "60" && !pane.setupShown && inPlayback.views === 1 && inPlayback.inScene && sized.max[0] - sized.min[0] === 70 && typed.y === 45 && typed.focus === "stY" && dx > 0.5 && Math.abs(dx * 10 - Math.round(dx * 10)) < 1e-6 && /X \+/.test(moved) &&
       t2.rotate?.[0] === 0 && t2.rotate?.[1] === 0 && t2.rotate[2] % 90 === 0 && t2.rotate[2] !== 0 && /Z [+-]\d+°/.test(turned) && planned && JSON.stringify(undone.translate) === JSON.stringify(t1.translate) && !undone.rotate,
       `pane ${JSON.stringify(pane)}; playback ${JSON.stringify(inPlayback)}; stock ${JSON.stringify(sized)}; typed ${JSON.stringify(typed)}; moved ${JSON.stringify(t0.translate)} -> ${JSON.stringify(t1.translate)} "${moved}"; turned ${JSON.stringify(t2.rotate)} "${turned}"; planned ${planned}; undone ${JSON.stringify(undone)}`);
     // a round bar standing up in the vise: the block round it is its length tall
