@@ -188,6 +188,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         sdFocus = { id: fa.id, s: null, e: null };
       }
     }
+    // (the Stock and Part panes: the field being typed in kept as typed, focus and caret; Mar
+    // typed a stock length and the pane drawn again after the first digit kept only it)
+    let paneFocus = null;
+    if ((fa?.closest?.("#stockPane") || fa?.closest?.("#partPane")) && fa.id && fa.tagName === "INPUT") {
+      paneFocus = { id: fa.id, v: fa.value, s: fa.selectionStart, e: fa.selectionEnd };
+    }
     const scrolls = [];
     for (let e = box; e; e = e.parentElement) if (e.scrollTop) scrolls.push([e, e.scrollTop]);
     if (!t.doc) return;
@@ -301,6 +307,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     window.__marcam.tools?.host?.($("libHost"));
     for (const [e, y] of scrolls) e.scrollTop = y;
     detectFeatures();
+    if (paneFocus) {
+      const el = document.getElementById(paneFocus.id);
+      if (el) {
+        el.value = paneFocus.v;
+        el.focus({ preventScroll: true });
+        try {
+          if (paneFocus.s != null) el.setSelectionRange(paneFocus.s, paneFocus.e);
+        } catch {}
+      }
+    }
     // (the 3D view's handles: on what the selected Stock or Part moves, or hidden)
     window.__marcam.handles?.refresh?.();
   }
@@ -1808,7 +1824,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   $("tree").addEventListener("input", (ev) => {
     if (t.draft && ev.target.closest?.("#opForm")) previewDraft();
   });
-  // (Mar) the Stock and Part panes apply as they are typed in (a moment after the last key),
+  // (Mar) the Stock and Part panes apply as they are typed in (the stock drawn again at once,
+  // planned a moment later as any edit is),
   // as the other forms do; the field typed in keeps the focus
   let paneTimer = null;
   $("tree").addEventListener("input", (ev) => {
@@ -1821,10 +1838,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const id = el.id;
       const label = el.closest("#stockPane") ? applyStockField(t.doc, s, id, el.value, null) : applyPartField(t.doc, s, id, el.value);
       if (!label) return;
-      await commit({ label });
-      const again = document.getElementById(id);
-      if (again && document.activeElement !== again) again.focus({ preventScroll: true });
-    }, 600);
+      // (a burst of typing one edit: Undo takes it back whole)
+      await commit({ label, typing: true });
+    }, 150);
   });
   // (the operation form's More: kept open or shut as the person left it)
   $("tree").addEventListener("toggle", (ev) => {

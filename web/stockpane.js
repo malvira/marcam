@@ -40,7 +40,7 @@ export function stockPane(doc, s, esc, opts = {}) {
   const cur = from ? `cut:${from.id}` : spec?.shape;
   const opts1 = TYPES.filter(([k]) => vise || k !== "block").map(([k, n]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${n}</option>`);
   for (const x of doc.setups.slice(0, at)) opts1.push(`<option value="cut:${esc(x.id)}" ${`cut:${x.id}` === cur ? "selected" : ""}>Cut result of ${esc(x.name || x.id)}</option>`);
-  const f = (id, label, v, title = "") => `<label ${title ? `title="${esc(title)}"` : ""}>${label} <input id="${id}" type="number" step="any" value="${v == null ? "" : r3(v)}"> <span class="u">mm</span></label>`;
+  const f = (id, label, v, title = "") => `<label ${title ? `title="${esc(title)}"` : ""}>${label} <input id="${id}" type="text" inputmode="decimal" value="${v == null ? "" : r3(v)}"> <span class="u">mm</span></label>`;
   let html = `<div id="stockPane" class="stock-pane" data-setup="${esc(s.id)}"><div class="tree-outname">Stock <span class="muted">${esc(s.name || s.id)}</span></div>
     <label>Stock <select id="stType" aria-label="The stock's type">${opts1.join("")}</select></label>`;
   if (from) {
@@ -55,7 +55,7 @@ export function stockPane(doc, s, esc, opts = {}) {
       if (spec?.shape === "hex") html += f("stAf", "Across flats", d.across_flats);
       if (spec?.shape === "rect") html += f("stW", "Width", d.width) + f("stH", "Height", d.height);
       html += f("stLen", "Length", spec?.length);
-      if (spec?.shape !== "round") html += `<label title="Turned about its own axis (0: a flat on top)">Turned <input id="stAngle" type="number" step="any" value="${r3(d.angle || 0)}"> <span class="u">°</span></label>`;
+      if (spec?.shape !== "round") html += `<label title="Turned about its own axis (0: a flat on top)">Turned <input id="stAngle" type="text" inputmode="decimal" value="${r3(d.angle || 0)}"> <span class="u">°</span></label>`;
       if (vise) {
         const al = s.holding?.along || "x";
         html += `<label title="Which way the bar lies in the vise (Z: standing up)">Axis <select id="stAlong">${["x", "y", "z"].map((a) => `<option value="${a}" ${a === al ? "selected" : ""}>${a.toUpperCase()}${a === "z" ? " (standing)" : ""}</option>`).join("")}</select></label>`;
@@ -65,15 +65,15 @@ export function stockPane(doc, s, esc, opts = {}) {
   }
   // the rest, folded
   const more = [];
-  if (!from) more.push(`<label title="Fit to part leaves this much round the part">Margin <input id="stMargin" type="number" step="any" min="0" value="${r3(opts.margin ?? (vise ? 2 : 0.5))}"> <span class="u">mm</span></label>`);
-  if (vise) more.push(`<label title="The depth the vise's jaws grip, up from the stock's bottom (empty: the default)">Jaw grip <input id="stJaws" type="number" step="any" min="0" value="${s.holding?.jaws ?? ""}" placeholder="default"> <span class="u">mm</span></label>`);
-  else if (!from) more.push(`<label title="The bar's length held in the chuck">In the chuck <input id="stChuck" type="number" step="any" min="0" value="${s.holding?.chuck ?? ""}" placeholder="0"> <span class="u">mm</span></label>`);
+  if (!from) more.push(`<label title="Fit to part leaves this much round the part">Margin <input id="stMargin" type="text" inputmode="decimal" value="${r3(opts.margin ?? (vise ? 2 : 0.5))}"> <span class="u">mm</span></label>`);
+  if (vise) more.push(`<label title="The depth the vise's jaws grip, up from the stock's bottom (empty: the default)">Jaw grip <input id="stJaws" type="text" inputmode="decimal" value="${s.holding?.jaws ?? ""}" placeholder="default"> <span class="u">mm</span></label>`);
+  else if (!from) more.push(`<label title="The bar's length held in the chuck">In the chuck <input id="stChuck" type="text" inputmode="decimal" value="${s.holding?.chuck ?? ""}" placeholder="0"> <span class="u">mm</span></label>`);
   if (from) {
     const rot = st.rotate || [0, 0, 0], off = st.offset || [0, 0, 0];
     more.push(`<div class="small muted">Turned (degrees about X, then Y, then Z), then moved:</div>`);
-    more.push(["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="stRot${a}" type="number" step="any" value="${r3(rot[i])}"> <span class="u">°</span></label>`).join(""));
+    more.push(["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="stRot${a}" type="text" inputmode="decimal" value="${r3(rot[i])}"> <span class="u">°</span></label>`).join(""));
     more.push(`<label>Turned over <select id="stTurn">${[["none", "no"], ["y180", "left to right (Y)"], ["x180", "front to back (X)"], ["z180", "end for end (Z)"]].map(([v, n]) => `<option value="${v}" ${(st.turn || "none") === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>`);
-    more.push(["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="stOff${a}" type="number" step="any" value="${r3(off[i])}"> <span class="u">mm</span></label>`).join(""));
+    more.push(["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="stOff${a}" type="text" inputmode="decimal" value="${r3(off[i])}"> <span class="u">mm</span></label>`).join(""));
   }
   html += `<details class="op-more" id="stMore" ${opts.moreOpen ? "open" : ""}><summary>More</summary>${more.join("")}</details>`;
   return html + `</div>`;
@@ -90,8 +90,8 @@ export function partPane(doc, s, esc, opts = {}) {
   const rotary = kindOf(s) !== "vise";
   html += `<div class="muted small">Move it in the stock with the handles in the 3D view (Shift: free angles).${rotary ? " On the rotary axis: turned about X, slid along X." : ""}</div>`;
   html += `<details class="op-more" id="ptMore" ${opts.moreOpen ? "open" : ""}><summary>More</summary>
-    <div class="small muted">Moved (mm):</div>${["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="ptT${a}" type="number" step="any" value="${r3(t[i])}"></label>`).join("")}
-    <div class="small muted">Turned (degrees about X, then Y, then Z):</div>${["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="ptR${a}" type="number" step="any" value="${r3(r[i])}"></label>`).join("")}</details>`;
+    <div class="small muted">Moved (mm):</div>${["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="ptT${a}" type="text" inputmode="decimal" value="${r3(t[i])}"></label>`).join("")}
+    <div class="small muted">Turned (degrees about X, then Y, then Z):</div>${["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="ptR${a}" type="text" inputmode="decimal" value="${r3(r[i])}"></label>`).join("")}</details>`;
   return html + `</div>`;
 }
 

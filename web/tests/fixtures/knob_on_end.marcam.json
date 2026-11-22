@@ -1,0 +1,396 @@
+{
+ "format": "marcam-project",
+ "version": 1,
+ "project": {
+  "models": [
+   {
+    "beyond_front": 7.2,
+    "id": "profile",
+    "kind": "profile",
+    "name": "revolved profile",
+    "points": [
+     [
+      -21.7,
+      3
+     ],
+     [
+      -18,
+      3
+     ],
+     [
+      -18,
+      5
+     ],
+     [
+      -15,
+      5
+     ],
+     [
+      -15,
+      10
+     ],
+     [
+      -0.8,
+      8.106666666666667
+     ],
+     [
+      0,
+      7.2
+     ]
+    ]
+   }
+  ],
+  "name": "knob",
+  "schema_version": "0.2",
+  "setups": [
+   {
+    "clearance": 3,
+    "holding": {
+     "kind": "rotary_chuck",
+     "tailstock": false
+    },
+    "id": "setup1",
+    "name": "Rotary setup",
+    "operations": [
+     {
+      "enabled": true,
+      "finish_allowance": 0.15,
+      "finish_feed": 250,
+      "finish_step": 0.4,
+      "footprint_step": 0.01,
+      "grid": 0.02,
+      "id": "op1",
+      "plunge_feed": 60,
+      "ramp_angle": 30,
+      "rough_depth": 0.4,
+      "rough_feed": 300,
+      "rough_step": 1,
+      "segment_deg": 6,
+      "smoothing": 0,
+      "tool": 1,
+      "type": "rotary_turning"
+     },
+     {
+      "approach_clearance": 0.5,
+      "body_back": [
+       -15,
+       10
+      ],
+      "body_front": [
+       0,
+       8
+      ],
+      "count": 30,
+      "enabled": true,
+      "families": [
+       1,
+       -1
+      ],
+      "feed": 200,
+      "fill": 0.95,
+      "helix_angle": 30,
+      "id": "op2",
+      "passes": [
+       0.6,
+       1
+      ],
+      "plunge_feed": 60,
+      "ramp_angle": 30,
+      "runout": 0.6,
+      "samples": 120,
+      "smoothing": 0,
+      "tool": 2,
+      "type": "helical_knurl"
+     },
+     {
+      "edge": [
+       0,
+       7.2
+      ],
+      "enabled": true,
+      "feed": 200,
+      "id": "op3",
+      "passes": [
+       0.2,
+       0
+      ],
+      "plunge_feed": 60,
+      "ramp_angle": 30,
+      "revolutions": 2,
+      "segment_deg": 6,
+      "smoothing": 0,
+      "tip_offset": 0.5,
+      "tool": 2,
+      "type": "flank_chamfer"
+     }
+    ],
+    "outputs": [
+     {
+      "name": "knob_1_profile",
+      "operations": [
+       "op1"
+      ],
+      "reset_a": false,
+      "title": "Knob radial profile - rough + finish"
+     },
+     {
+      "name": "knob_2_knurl",
+      "notes": [
+       "Pattern is rotationally symmetric: A start position does not matter"
+      ],
+      "operations": [
+       "op2",
+       "op3"
+      ],
+      "reset_a": true,
+      "title": "Knob diamond knurl"
+     }
+    ],
+    "part": [
+     "profile"
+    ],
+    "spindle_rpm": 12000,
+    "stock": {
+     "length": 100,
+     "radius": 12.5,
+     "shape": "cylinder"
+    }
+   },
+   {
+    "id": "setup2",
+    "name": "Setup 2",
+    "stock": {
+     "shape": "from_previous",
+     "rotate": [
+      0,
+      90,
+      0
+     ]
+    },
+    "clearance": 3,
+    "part": [],
+    "spindle_rpm": 12000,
+    "operations": [
+     {
+      "id": "op4",
+      "enabled": true,
+      "tool": 1,
+      "feed": 300,
+      "plunge_feed": 60,
+      "type": "face",
+      "depth": 1,
+      "step_down": 0.5,
+      "stepover": 0.6
+     },
+     {
+      "id": "op5",
+      "enabled": true,
+      "tool": 1,
+      "feed": 300,
+      "plunge_feed": 60,
+      "type": "contour",
+      "path": [
+       [
+        18.5,
+        12.5
+       ],
+       [
+        18.408846518073247,
+        13.541889066001582
+       ],
+       [
+        18.13815572471545,
+        14.552120859954012
+       ],
+       [
+        17.696152422706632,
+        15.5
+       ],
+       [
+        17.09626665871387,
+        16.356725658119235
+       ],
+       [
+        16.356725658119238,
+        17.09626665871387
+       ],
+       [
+        15.5,
+        17.696152422706632
+       ],
+       [
+        14.552120859954012,
+        18.13815572471545
+       ],
+       [
+        13.541889066001582,
+        18.408846518073247
+       ],
+       [
+        12.5,
+        18.5
+       ],
+       [
+        11.458110933998418,
+        18.408846518073247
+       ],
+       [
+        10.44787914004599,
+        18.13815572471545
+       ],
+       [
+        9.500000000000002,
+        17.696152422706632
+       ],
+       [
+        8.643274341880764,
+        17.09626665871387
+       ],
+       [
+        7.903733341286133,
+        16.356725658119238
+       ],
+       [
+        7.303847577293369,
+        15.500000000000002
+       ],
+       [
+        6.86184427528455,
+        14.552120859954012
+       ],
+       [
+        6.591153481926752,
+        13.541889066001582
+       ],
+       [
+        6.5,
+        12.5
+       ],
+       [
+        6.591153481926751,
+        11.45811093399842
+       ],
+       [
+        6.861844275284549,
+        10.447879140045988
+       ],
+       [
+        7.303847577293368,
+        9.5
+       ],
+       [
+        7.90373334128613,
+        8.643274341880765
+       ],
+       [
+        8.643274341880764,
+        7.903733341286133
+       ],
+       [
+        9.499999999999996,
+        7.30384757729337
+       ],
+       [
+        10.447879140045988,
+        6.861844275284549
+       ],
+       [
+        11.458110933998418,
+        6.591153481926752
+       ],
+       [
+        12.499999999999998,
+        6.5
+       ],
+       [
+        13.54188906600158,
+        6.591153481926751
+       ],
+       [
+        14.552120859954014,
+        6.86184427528455
+       ],
+       [
+        15.499999999999996,
+        7.303847577293366
+       ],
+       [
+        16.356725658119235,
+        7.903733341286131
+       ],
+       [
+        17.096266658713866,
+        8.643274341880762
+       ],
+       [
+        17.696152422706632,
+        9.500000000000002
+       ],
+       [
+        18.13815572471545,
+        10.447879140045988
+       ],
+       [
+        18.408846518073247,
+        11.458110933998418
+       ]
+      ],
+      "side": "outside",
+      "depth": 4,
+      "step_down": 1
+     },
+     {
+      "id": "op6",
+      "enabled": true,
+      "tool": 1,
+      "feed": 300,
+      "plunge_feed": 60,
+      "type": "pocket",
+      "rect": [
+       9.5,
+       9.5,
+       15.5,
+       15.5
+      ],
+      "depth": 2,
+      "step_down": 1,
+      "stepover": 0.5
+     }
+    ],
+    "outputs": [
+     {
+      "name": "setup2_all",
+      "title": "all",
+      "operations": [
+       "op4",
+       "op5",
+       "op6"
+      ]
+     }
+    ],
+    "kind": "vise",
+    "machine": "makera-z1-4axis",
+    "holding": {
+     "kind": "vise",
+     "tailstock": false
+    }
+   }
+  ],
+  "tools": [
+   {
+    "description": "3.175 mm single-flute flat endmill, 12 mm flute, aluminium",
+    "diameter": 3.175,
+    "flute_length": 12,
+    "kind": "flat",
+    "number": 1
+   },
+   {
+    "angle": 90,
+    "description": "90 deg V-bit, tip must be on the axis centreline (Y0)",
+    "diameter": 3.175,
+    "kind": "vbit",
+    "number": 2
+   }
+  ]
+ }
+}

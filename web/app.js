@@ -184,7 +184,7 @@ function writeJob(job, opts = {}) {
   $("job").value = JSON.stringify(job, null, 2);
   // (an opened project: the undo history starts here)
   if (opts.load) window.__marcam.project?.resetHistory?.();
-  else window.__marcam.project?.changed({ stale: !opts.display });
+  else window.__marcam.project?.changed({ stale: !opts.display, typing: !!opts.typing });
 }
 
 /** The Generate button asks for attention when the results are out of date or missing. */

@@ -3447,6 +3447,39 @@ try {
       `${dropped}; there ${JSON.stringify(there && { id: there.id, error: there.error })}`);
   }
 
+  // (Mar's scrub glitch, rebuilt: the knob's cut result standing in a vise on the Z1, facing,
+  // contour and pocket, two hidden) a fast scrub: every frame one view, the work not turned,
+  // the stock no taller than its block
+  {
+    const fx = readFileSync(join(root, "web", "tests", "fixtures", "knob_on_end.marcam.json"), "utf8");
+    await js(`await window.__marcam.project.openText(${JSON.stringify(fx)}, "knob_on_end.marcam.json").then(() => true)`);
+    await settle(1500);
+    await js("document.querySelector('#tree .tree-setup[data-setup=\"setup2\"] [data-act=setup]').click(); true");
+    await settle(1000);
+    for (const id of ["op5", "op6"]) {
+      await js(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="eye"]').click(); true`);
+      await sleep(500);
+    }
+    await clickGenerate();
+    await waitDone("the knob on end planned", 240000);
+    await js("if (!window.__marcam.machining.state.view.stock) document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true })); window.__marcam.machining.expand?.(); true");
+    await waitFor(() => js("!!window.__marcam.machining.state.stockMesh && !window.__marcam.machining.state.busy"), "the knob's playback with its stock", 120000);
+    await js(`(() => { const M = window.__marcam, m = M.machining.state, v = M.state.three; window.__scrubFrames = []; const r0 = v.renderer.render.bind(v.renderer); window.__scrubR0 = r0; v.renderer.render = (s, c) => { if (s === v.scene) { const g = m.stockMesh?.geometry; let top = -1e9; if (g) { const p = g.attributes.position.array; for (let i = 2; i < p.length; i += 9) top = Math.max(top, p[i]); } window.__scrubFrames.push([m.pos, top, v.groups.work.rotation.x, document.querySelectorAll('#view3d canvas').length]); } return r0(s, c); }; return true; })()`);
+    const segs = await js("window.__marcam.machining.state.session.segments");
+    for (const f of [0.15, 0.5, 0.8, 0.6, 0.75, 0.3, 0.9, 0.4]) {
+      for (let i = 0; i < 4; i++) {
+        await js(`(() => { const s = document.getElementById('simScrub'); s.value = String(${Math.round(f * segs)} + ${i}); s.dispatchEvent(new Event('input')); return true; })()`);
+        await sleep(30);
+      }
+    }
+    await sleep(2000);
+    const fr = await js("window.__scrubFrames.splice(0)");
+    await js("window.__marcam.state.three.renderer.render = window.__scrubR0; true");
+    const bad = fr.filter(([, top, rot, views]) => top > 0.05 || Math.abs(rot) > 1e-9 || views !== 1);
+    check("a fast scrub on the knob standing in a vise (Mar's): every frame one 3D view, the work never turned, the stock no taller than its block",
+      fr.length > 10 && !bad.length, `${fr.length} frames; bad ${JSON.stringify(bad.slice(0, 3))}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

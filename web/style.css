@@ -299,7 +299,7 @@ details.menu[open] > summary { border-color: var(--accent); }
 .tree-stock.sel > .tree-label { background: var(--sel, rgba(80, 140, 255, 0.18)); border-radius: 3px; }
 .stock-pane { display: flex; flex-direction: column; gap: 4px; }
 .stock-pane label { display: flex; align-items: center; gap: 6px; }
-.stock-pane input[type="number"] { width: 7em; }
+.stock-pane input[inputmode="decimal"] { width: 7em; }
 .stock-pane .u { opacity: 0.7; }
 /* the embedded setup details: the stock and the placement live in the Stock and Part panes */
 #setupDialog.embedded #sdStockSet, #setupDialog.embedded #sdOrient, #setupDialog.embedded #sdPreview { display: none; }
