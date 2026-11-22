@@ -91,6 +91,9 @@ pub struct Holding {
     /// third of a block's height (the smaller), 40% of a bar's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jaws: Option<f64>,
+    /// A bar in a vise: along "y", or "z" (standing up); None: along X (Mar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub along: Option<String>,
 }
 
 impl Default for Holding {
@@ -100,6 +103,7 @@ impl Default for Holding {
             tailstock: false,
             chuck: None,
             jaws: None,
+            along: None,
         }
     }
 }
@@ -1050,8 +1054,8 @@ impl Project {
         } else if setup.stock.is_bar()
             && (setup.kind.as_deref() == Some("vise") || setup.holding.kind == "vise")
         {
-            // a bar lying in the vise along X: the block round it, Z0 at its top
-            let (sb, axis) = stock.lying();
+            // a bar in the vise (along X, Y, or standing up): the block round it, Z0 at its top
+            let (sb, axis) = stock.lying_along(setup.holding.along.as_deref())?;
             stock_box = Some(sb);
             stock_axis = Some(axis);
         }
@@ -1105,6 +1109,9 @@ impl Project {
         }
         if let Some(axis) = frame.stock_axis {
             v["stock_axis"] = serde_json::json!(axis);
+            if let Some(a) = setup.holding.along.as_deref().filter(|a| *a != "x") {
+                v["stock_along"] = serde_json::json!(a);
+            }
         }
         if let Some(c) = &frame.carry {
             v["carry"] = serde_json::to_value(c).map_err(|e| e.to_string())?;
@@ -1120,14 +1127,13 @@ impl Project {
             .and_then(|b| serde_json::from_value::<job::StockBox>(b.clone()).ok())
         {
             let h = sb.max[2] - sb.min[2];
-            let grip = setup
-                .holding
-                .jaws
-                .unwrap_or(if v.get("stock_axis").is_some() {
+            let grip = setup.holding.jaws.unwrap_or(
+                if v.get("stock_axis").is_some() && v.get("stock_along").is_none_or(|a| a != "z") {
                     0.4 * h
                 } else {
                     (h / 3.0).min(3.0)
-                });
+                },
+            );
             v["jaws"] = serde_json::json!(grip.clamp(0.0, h));
         }
         self.number_tools(&mut v);

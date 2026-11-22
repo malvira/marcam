@@ -52,7 +52,31 @@ impl Heightmap3 {
             return h;
         }
         let mut hm = Heightmap3::new(stock, cell);
-        if let Some([yc, zc]) = job.stock_axis {
+        if let (Some([xc, yc]), Some("z")) = (job.stock_axis, job.stock_along.as_deref()) {
+            // standing up: full height where the section is, nothing beside it
+            let outline = job.stock.outline(1440);
+            for j in 0..hm.ny {
+                for i in 0..hm.nx {
+                    let (x, y) = hm.centre(i, j);
+                    if !inside(&outline, x - xc, y - yc) {
+                        hm.z[j * hm.nx + i] = hm.bottom;
+                    }
+                }
+            }
+        } else if let (Some([xc, zc]), Some("y")) = (job.stock_axis, job.stock_along.as_deref()) {
+            // along Y: each column (along X) at the bar's top there
+            let outline = job.stock.outline(1440);
+            for i in 0..hm.nx {
+                let (x, _) = hm.centre(i, 0);
+                let top = job
+                    .stock
+                    .top_at(x - xc, &outline)
+                    .map_or(hm.bottom, |t| (t + zc).max(hm.bottom));
+                for j in 0..hm.ny {
+                    hm.z[j * hm.nx + i] = top;
+                }
+            }
+        } else if let Some([yc, zc]) = job.stock_axis {
             let outline = job.stock.outline(1440);
             for j in 0..hm.ny {
                 let (_, y) = hm.centre(0, j);
@@ -518,4 +542,17 @@ mod tests {
         assert_eq!((d.cells, d.gouge_cells), (10, 1));
         assert!((d.max_left - 1.0).abs() < 1e-9 && (d.max_gouge - 0.5).abs() < 1e-9);
     }
+}
+
+/// Whether (`u`, `v`) is inside the closed `outline` (even-odd).
+fn inside(outline: &[[f64; 2]], u: f64, v: f64) -> bool {
+    let mut c = false;
+    for k in 0..outline.len() {
+        let [ua, va] = outline[k];
+        let [ub, vb] = outline[(k + 1) % outline.len()];
+        if (va > v) != (vb > v) && u < ua + (v - va) * (ub - ua) / (vb - va) {
+            c = !c;
+        }
+    }
+    c
 }

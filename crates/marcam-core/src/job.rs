@@ -21,6 +21,10 @@ pub struct Job {
     /// `stock_box` round it (Z0 at its top). None: the block is the stock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_axis: Option<[f64; 2]>,
+    /// That bar along "y" (its axis at (X, Z) then), or standing up "z" (at (X, Y)); None:
+    /// along X.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_along: Option<String>,
     /// A vise: the depth of the stock its jaws grip (mm up from the bottom of `stock_box`); the
     /// jaws stand beside its Y faces up to there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,6 +269,34 @@ impl Stock {
 
     /// The bar lying in a vise along X from 0 to its length: the block round it (its low Y side
     /// at 0, its top at Z0) and where its axis is (Y, Z).
+    /// The bar in a vise along `along` ("x" or None, "y", "z": standing up): the block round
+    /// it (X and Y from 0, Z0 at its top) and where its axis is across it (along X: (Y, Z);
+    /// along Y: (X, Z); standing: (X, Y)). Its section's Y runs along the vise's X when not
+    /// along X, its Z up (along Y) or along Y (standing).
+    pub fn lying_along(&self, along: Option<&str>) -> Result<(StockBox, [f64; 2]), String> {
+        let (sb, axis) = self.lying();
+        let (w, h) = (sb.max[1], -sb.min[2]);
+        Ok(match along.unwrap_or("x") {
+            "x" => (sb, axis),
+            "y" => (
+                StockBox {
+                    min: [0.0, 0.0, -h],
+                    max: [w, self.length, 0.0],
+                },
+                axis,
+            ),
+            "z" => (
+                StockBox {
+                    min: [0.0, 0.0, -self.length],
+                    max: [w, h, 0.0],
+                },
+                // (the section's Y along X, its Z along Y: its lowest at Y0)
+                [axis[0], h + axis[1]],
+            ),
+            a => return Err(format!("a bar along {a:?}: use \"x\", \"y\" or \"z\"")),
+        })
+    }
+
     pub fn lying(&self) -> (StockBox, [f64; 2]) {
         let pts = self.outline(1440);
         let (mut y0, mut y1, mut z0, mut z1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
