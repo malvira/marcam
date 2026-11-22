@@ -1345,6 +1345,12 @@ impl Operation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RotaryTurning {
     pub tool: u32,
+    /// Stock to leave on the bar, radially (mm): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_radial: f64,
+    /// Stock to leave on the faces across the bar, along X (mm): for a finish after it.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_axial: f64,
     pub rough_depth: f64,
     pub rough_step: f64,
     pub rough_feed: f64,
@@ -1376,6 +1382,9 @@ pub struct RotaryTurning {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HelicalKnurl {
     pub tool: u32,
+    /// Stock to leave on the bar, radially (mm): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_radial: f64,
     pub body_back: [f64; 2],
     pub body_front: [f64; 2],
     pub count: u32,
@@ -1408,6 +1417,9 @@ pub struct HelicalKnurl {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FlankChamfer {
     pub tool: u32,
+    /// Stock to leave on the bar, radially (mm): for a finish after it (Mar).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_radial: f64,
     /// `[x, r]` of the chamfer's outer corner on the finished part.
     pub edge: [f64; 2],
     /// Axial distance from the edge to the V-bit tip.
@@ -1439,6 +1451,9 @@ pub struct FlankChamfer {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Parting {
     pub tool: u32,
+    /// Stock to leave on the faces across the bar, along X (mm): for a finish after it.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_axial: f64,
     /// Axial position of the groove's part-side edge: the part is on the +X side (towards the
     /// front), the groove runs from here towards -X.
     pub x: f64,
@@ -1503,6 +1518,9 @@ pub enum FinishPattern {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RotaryFinish {
     pub tool: u32,
+    /// Stock to leave on the faces across the bar, along X (mm): for a finish after it.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_axial: f64,
     pub pattern: FinishPattern,
     /// Face regions of the part mesh the tool may touch (ids from
     /// [`crate::geometry::face_regions`] at 30°, filled from a face selection): passes run
@@ -1527,9 +1545,9 @@ pub struct RotaryFinish {
     /// Sample spacing around the axis (degrees) for `around` and for links.
     #[serde(default = "default_sample_deg")]
     pub sample_deg: f64,
-    /// Radial stock to leave (mm).
-    #[serde(default)]
-    pub leave: f64,
+    /// Radial stock to leave (mm; read from `leave` as before).
+    #[serde(default, alias = "leave", skip_serializing_if = "is_zero_f64")]
+    pub leave_radial: f64,
     /// Largest allowed dip of a straight move below the surface (mm); moves are split until
     /// they stay within it.
     #[serde(default = "default_tolerance")]
@@ -1571,6 +1589,9 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RotaryRough {
     pub tool: u32,
+    /// Stock to leave on the faces across the bar, along X (mm): for a finish after it.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_axial: f64,
     /// Axial extent of the tool tip.
     pub x_range: [f64; 2],
     /// Radial depth per level (mm).
@@ -1578,8 +1599,8 @@ pub struct RotaryRough {
     /// X advance per turn (mm).
     pub step_x: f64,
     /// Radial stock left on the part for finishing (mm).
-    #[serde(default)]
-    pub allowance: f64,
+    #[serde(default, alias = "allowance", skip_serializing_if = "is_zero_f64")]
+    pub leave_radial: f64,
     /// Points per turn are spaced this far apart (degrees).
     #[serde(default = "default_rough_sample_deg")]
     pub sample_deg: f64,

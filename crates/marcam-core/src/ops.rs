@@ -192,13 +192,31 @@ pub fn registry() -> Vec<OperationType> {
                 "Leave (Z)",
                 "The chamfer this much higher (less cut).",
             )],
+            "rotary_turning" => vec![
+                lv("leave_radial", "Radial", "Stock to leave on the bar, radially (for a finish after it)."),
+                lv("leave_axial", "Axial (X)", "Stock to leave on the faces across the bar, along X."),
+            ],
+            "rotary_rough" | "rotary_finish" => vec![lv("leave_axial", "Axial (X)", "Stock to leave on the faces across the bar, along X (a flat or ball tool).")],
+            "helical_knurl" | "flank_chamfer" => vec![lv("leave_radial", "Radial", "Stock to leave on the bar, radially (a shallower cut).")],
+            "parting" => vec![lv("leave_axial", "Axial (X)", "Stock to leave on the part's face (the cut that much further back, the part longer).")],
             _ => vec![],
         };
         if !add.is_empty() {
             let at = t
                 .params
                 .iter()
-                .position(|q| q.name == "depth" || q.name == "width")
+                .position(|q| {
+                    [
+                        "depth",
+                        "width",
+                        "leave_radial",
+                        "rough_depth",
+                        "step_down",
+                        "depth_per_rev",
+                        "passes",
+                    ]
+                    .contains(&q.name)
+                })
                 .map_or(t.params.len(), |i| i + 1);
             for (k, q) in add.into_iter().enumerate() {
                 t.params.insert(at + k, q);
@@ -252,7 +270,7 @@ fn types() -> Vec<OperationType> {
                 p("x_range", "vec2", "mm", "Axial extent of the tool tip [start, end].").min(-10000.0),
                 p("step_down", "number", "mm", "Radial depth per level.").min(0.01),
                 p("step_x", "number", "mm/rev", "X advance per turn.").min(0.01),
-                p("allowance", "number", "mm", "Radial stock left for finishing.").opt(json!(0.0)).min(0.0),
+                p("leave_radial", "number", "mm", "Stock to leave on the bar, radially (for a finish after it).").opt(json!(0.0)).label("Radial"),
                 p("sample_deg", "number", "deg", "Point spacing around the axis.").opt(json!(6.0)).min(0.1),
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the allowance surface.").opt(json!(0.005)).min(0.0001),
                 p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
@@ -280,7 +298,7 @@ fn types() -> Vec<OperationType> {
                 p("stepover_mm", "number", "mm", "'along': stepover at the largest radius; 'around': X advance per turn.").opt(Value::Null).min(0.001),
                 p("sample_mm", "number", "mm", "Point spacing along X ('along').").opt(json!(0.1)).min(0.001),
                 p("sample_deg", "number", "deg", "Point spacing around X ('around' and links).").opt(json!(2.0)).min(0.01),
-                p("leave", "number", "mm", "Radial stock to leave.").opt(json!(0.0)),
+                p("leave_radial", "number", "mm", "Stock to leave on the bar, radially (for a finish after it).").opt(json!(0.0)).label("Radial"),
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),
                 p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
                 p("clean_walls", "boolean", "", "'around': a full turn at the foot of each wall.").opt(json!(true)),
@@ -1017,7 +1035,7 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("x_range".into(), json!(x_range));
             v.insert("step_down".into(), json!(depth));
             v.insert("step_x".into(), json!(step));
-            v.insert("allowance".into(), json!(0.15));
+            v.insert("leave_radial".into(), json!(0.15));
             v.insert("feed".into(), json!(feed));
             v.insert("plunge_feed".into(), json!(plunge));
         }

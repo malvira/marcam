@@ -137,7 +137,7 @@ pub fn rotary_finish_on(
     op: &RotaryFinish,
 ) -> Result<f64, String> {
     let floor = op.min_radius.max(0.0);
-    let cl = |x: f64, a: f64| dc.radius_at(x, a, floor) + op.leave;
+    let cl = |x: f64, a: f64| dc.radius_at(x, a, floor) + op.leave_radial;
     let [x0, x1] = op.x_range;
     if op.sample_mm <= 0.0 || op.sample_deg <= 0.0 {
         return Err("sample_mm and sample_deg must be > 0".into());

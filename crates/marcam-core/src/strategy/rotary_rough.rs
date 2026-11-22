@@ -42,7 +42,7 @@ pub fn rotary_rough(
         return Err("step_down, step_x and sample_deg must be > 0".into());
     }
     let floor = op.min_radius.max(0.0);
-    let cl = |x: f64, a: f64| dc.radius_at(x, a, floor) + op.allowance;
+    let cl = |x: f64, a: f64| dc.radius_at(x, a, floor) + op.leave_radial;
     let [x_lo, x_hi] = [
         op.x_range[0].min(op.x_range[1]),
         op.x_range[0].max(op.x_range[1]),

@@ -332,6 +332,15 @@ fn leave_of(op: &Operation, sb: &job::StockBox) -> Result<(Option<Operation>, f6
     Ok((Some(o), walls))
 }
 
+/// `c` wider by `d` all round (an axial stock to leave on a bar), or why not.
+fn grown_for(c: Cutter, d: f64, prog: &str) -> Result<Cutter, Error> {
+    c.grown(d).ok_or_else(|| {
+        Error::Invalid(format!(
+            "program {prog}: stock to leave along X ({d} mm) takes a flat or ball tool, no thinner than it"
+        ))
+    })
+}
+
 /// Whether an in-process stock is planned from (the operation's `in_process`; 2D vise
 /// operations).
 fn in_process(op: &Operation) -> bool {
@@ -967,11 +976,20 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 strategy::rotary_turning(&mut b, geom, diameter, job.stock.radius, safe_r, o)
             }
             (Operation::HelicalKnurl(o), ToolShape::Vbit { angle, .. }) => {
-                strategy::helical_knurl(&mut b, angle, safe_r, o)
+                // (its radial stock to leave: the body it knurls that much bigger)
+                let mut o = o.clone();
+                o.body_back[1] += o.leave_radial;
+                o.body_front[1] += o.leave_radial;
+                strategy::helical_knurl(&mut b, angle, safe_r, &o)
                     .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?
             }
             (Operation::FlankChamfer(o), ToolShape::Vbit { angle, .. }) => {
-                strategy::flank_chamfer(&mut b, angle, safe_r, o)
+                // (its radial stock to leave: on every pass)
+                let mut o = o.clone();
+                for p in &mut o.passes {
+                    *p += o.leave_radial;
+                }
+                strategy::flank_chamfer(&mut b, angle, safe_r, &o)
             }
             (Operation::Parting(o), shape) => {
                 let t = match shape {
@@ -983,13 +1001,18 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     },
                     _ => unreachable!("tool shape validated above"),
                 };
-                let r_min = strategy::parting(&mut b, t, job.stock.radius, safe_r, o)
+                // (its axial stock to leave: cut that much further from the front, the part
+                // longer)
+                let mut o = o.clone();
+                o.x -= o.leave_axial;
+                let r_min = strategy::parting(&mut b, t, job.stock.radius, safe_r, &o)
                     .map_err(|e| Error::Invalid(format!("program {}: parting: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
             }
             (Operation::RotaryFinish(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;
-                let c = cutter.expect("set above");
+                // (its axial stock to leave: the tool wider by it)
+                let c = grown_for(cutter.expect("set above"), o.leave_axial, &prog.name)?;
                 let dc = DropCutter::new(mesh, c);
                 let sel = if o.faces.is_empty() {
                     None
@@ -1011,7 +1034,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             }
             (Operation::RotaryRough(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;
-                let dc = DropCutter::new(mesh, cutter.expect("set above"));
+                let c = grown_for(cutter.expect("set above"), o.leave_axial, &prog.name)?;
+                let dc = DropCutter::new(mesh, c);
                 // a bar carried from an earlier setup: where it is turned down already
                 let column = job.carried.as_deref().and_then(|c| match c {
                     carry::Carried::Bar(m) => Some(m),

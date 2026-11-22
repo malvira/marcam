@@ -167,6 +167,8 @@ impl KnurlWizard {
                 picks: Vec::new(),
                 error: None,
                 op: Operation::RotaryTurning(RotaryTurning {
+                    leave_radial: 0.0,
+                    leave_axial: 0.0,
                     tool: self.flat_tool,
                     rough_depth: self.rough_depth,
                     rough_step: self.rough_step,
@@ -196,6 +198,7 @@ impl KnurlWizard {
             picks: Vec::new(),
             error: None,
             op: Operation::HelicalKnurl(HelicalKnurl {
+                leave_radial: 0.0,
                 tool: self.vbit_tool,
                 body_back,
                 body_front,
@@ -231,6 +234,7 @@ impl KnurlWizard {
                 picks: Vec::new(),
                 error: None,
                 op: Operation::FlankChamfer(FlankChamfer {
+                    leave_radial: 0.0,
                     tool: self.vbit_tool,
                     edge: [snap(front), snap(face.r[1])],
                     tip_offset: self.chamfer_tip_offset,

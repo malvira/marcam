@@ -66,8 +66,10 @@ pub fn rotary_turning(
     };
     let lo = x_min - rt - 1.0;
     let hi = x_max + rt + 1.0;
-    let table = DropTable::new(geom, rt, op, lo, hi);
-    let zt = |x: f64| table.at(x);
+    // (Mar) its stock to leave: the faces across the bar as if the tool were wider by the
+    // axial leave, the radius up by the radial
+    let table = DropTable::new(geom, rt + op.leave_axial.max(-rt * 0.9), op, lo, hi);
+    let zt = |x: f64| table.at(x) + op.leave_radial;
 
     let xs: Vec<f64> = table
         .xg
