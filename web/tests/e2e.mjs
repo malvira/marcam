@@ -754,6 +754,16 @@ try {
     await waitFor(() => js("(() => { try { const d = JSON.parse(document.getElementById('job').value); return d.setups?.length === 1 && d.models?.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "the part imported with no operations", 120000);
     const bare = await js("(() => { const d = JSON.parse(document.getElementById('job').value); return { ops: d.setups[0].operations.length, error: document.getElementById('error').textContent, result: !!window.__marcam.state.result, status: document.getElementById('status').textContent }; })()");
     check("a new project with an imported part has no operations until the person adds them (nothing planned, no error)", bare.ops === 0 && !bare.error && !bare.result, JSON.stringify(bare));
+    // (Mar) a setup added: none either (a new part's, or the cut result of the one before)
+    for (const prev of [false, true]) {
+      await js("document.getElementById('treeAddSetup').click(); true");
+      await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the add setup dialog", 30000);
+      await js(`const r = document.querySelector('input[name="sdStock"][value="${prev ? "previous" : "auto"}"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('.sd-kind[data-kind="vise"]').click(); document.getElementById('sdOk').click(); true`);
+      await waitFor(() => js(`(JSON.parse(document.getElementById('job').value).setups || []).length === ${prev ? 3 : 2}`), "the setup added", 60000);
+      await settle();
+    }
+    const added = await js("JSON.parse(document.getElementById('job').value).setups.map((s) => s.operations.length)");
+    check("a setup added (its own stock, or the cut result of the one before) has no operations until the person adds them", added.join() === "0,0,0", JSON.stringify(added));
     // the sections below were written with starter operations: asked for, as a caller may
     await js("localStorage.setItem('marcam.starters', '1'); window.__marcam.project.settings.starters = true; true");
   }
