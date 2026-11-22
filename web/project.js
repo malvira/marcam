@@ -1222,6 +1222,9 @@ export function setupProject(ctx) {
         if (lo[0] <= hi[0]) partBox = { min: lo, max: hi };
       }
     } catch {}
+    // (the details' form, asked for before Add setup's dialog came up: not over it; the
+    // details show it again when that one is done)
+    if (opts.host && (dialog.modal || !opts.host.isConnected)) return false;
     const cfg = await dialog.open("edit", {
       stockBox, partBox,
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
@@ -1347,7 +1350,8 @@ export function setupProject(ctx) {
         return om ? parseStl(window.__marcam.meshFor(om.file)).tris : null;
       },
       carrySources: doc.setups.map((x) => ({ id: x.id, name: x.name || x.id })) });
-    if (!cfg) return false;
+    // (cancelled: the details' form back where it was)
+    if (!cfg) return void window.__marcam.tree?.refresh?.(), false;
     setStatus(`Adding a ${KINDS[cfg.kind]} setup...`, "busy");
     const before = $("job").value;
     let model = null, tris = null;
