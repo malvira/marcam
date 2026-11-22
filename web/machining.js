@@ -791,6 +791,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         // in steps of at most SEEK_CHUNK moves: a newer place asked for (a scrub during the
         // long run to the end) is taken up after the step under way, not after the whole run
         // (back: the engine starts again from the top)
+        // (back, the slider still moving: a rewind runs the whole job again from the top, so
+        // wait for it to rest a moment instead of chasing each place it passes)
+        if (m.target < m.pos && performance.now() - (m.scrubAt || 0) < 150) {
+          await new Promise((r) => setTimeout(r, 60));
+          continue;
+        }
         const goal = m.target;
         const from = goal < m.pos ? 0 : m.pos;
         // (back: the engine starts again from the top, run to the place in one go, so no
@@ -816,8 +822,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         if (m.session !== session) continue;
         if (!result) break;
         applyRows(result);
-        // (the engine stopped short, at the end of the program: done)
-        if (m.pos === before || m.pos < want) break;
+        // (the engine stopped short, at the end of the program: done; short of the place
+        // otherwise, on with the next step: a scrub was left stopped half-way, the playhead
+        // jumping there later by itself)
+        if (m.pos === before || m.pos >= session.segments) break;
       }
     } catch (e) {
       // cancelled, or a newer plan (the playback went with the engine's worker, and a seek
@@ -876,7 +884,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
     const mine = epoch;
     // the same place when open again; the first time, the end (the whole job drawn)
-    const keep = m.open ? (m.wanted ?? m.pos) : (m.keepAt ?? Number.POSITIVE_INFINITY);
+    // (the place a seek under way is going to; else where it is: played on since a scrub, the
+    // place it was scrubbed to is not where it is)
+    const keep = m.open ? (m.busy && m.wanted != null ? m.wanted : m.pos) : (m.keepAt ?? Number.POSITIVE_INFINITY);
     m.keepAt = null;
     // open again (after a plan): the old playback stays shown, untouched, until the new one
     // is built at the same place, then swapped in (never a frame from its start)
@@ -1096,7 +1106,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.expanded = true;
     document.body.dataset.playback = "open";
     if (m.open) {
-      m.keepAt = m.wanted ?? m.pos;
+      m.keepAt = m.busy && m.wanted != null ? m.wanted : m.pos;
       m.open = false;
       document.body.dataset.machining = "";
     }
@@ -1176,7 +1186,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // a newer plan (the playback being made for the last one stopped): what is shown stays
     // until the new playback replaces it, at the same place
     if (why === "replanning" && m.open) {
-      if (m.session) m.keepAt = m.wanted ?? m.pos;
+      if (m.session) m.keepAt = m.busy && m.wanted != null ? m.wanted : m.pos;
       m.session = null;
       return;
     }
