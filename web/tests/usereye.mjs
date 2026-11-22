@@ -18,7 +18,7 @@
 // Screenshots go to web/tests/screenshots/usereye/ (kept on a failure for CI).
 
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -561,20 +561,30 @@ try {
   await controls("setup 1 (the plate)");
   // cancelled from the ring while the stock is simulated along: the controls (or the play
   // button) still there
-  // (a finer grid: the playback made again, long enough to show the ring)
-  const pickRes = (v) => read(`(() => { const s = document.getElementById('simRes'); s.value = '${v}'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-  await pickRes("ultra");
-  const ring = await waitFor(() => where("#simRing"), "the simulation's ring", 30000).catch(() => null);
-  // (a fast machine may finish before the ring shows: then there is nothing to cancel)
-  if (!ring) console.log("      (the simulation finished before its ring showed: the cancel not tried)");
-  if (ring) {
-    await click("#simRing");
-    await sleep(1500);
-    const left = (await where("#simPlay")) || (await where("#vtPlay"));
-    check("a playback cancelled from the ring: its controls or the play button still on the screen", !!left);
-  }
-  await pickRes("normal");
-  await controls("setup 1 after a cancel");
+  // (Mar's impeller, a local fixture never committed: its playback open, a finer grid, an
+  // edit: the playback lost on the way left both the controls and the play button gone.
+  // Skipped where the file is not, as in CI.)
+  const imp = join(process.env.MARCAM_FIXTURES_LOCAL || join(root, "..", "fixtures-local"), "53_1.marcam");
+  if (existsSync(imp)) {
+    const doc = await S("DOM.getDocument");
+    const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#projectOpenFile" });
+    await S("DOM.setFileInputFiles", { files: [imp], nodeId });
+    await waitFor(() => read("document.title.includes('53_1') && document.body.dataset.state !== 'busy'"), "the impeller project", 180000).catch(() => {});
+    await settled();
+    if (await where("#vtPlay")) await click("#vtPlay");
+    await sleep(3000);
+    await read("(() => { const s = document.getElementById('simRes'); s.value = 'ultra'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#tree .tree-op [data-act=enable]");
+    await sleep(8000);
+    await settled();
+    const left = !!((await where("#simPlay")) || (await where("#vtPlay")));
+    check("the impeller (local): a playback lost after a finer grid and an edit leaves its controls or the play button", left);
+    await read("(() => { const s = document.getElementById('simRes'); s.value = 'normal'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await read("window.confirm = () => true; (() => { const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+  } else console.log("      (the impeller check skipped: no local fixture)");
+  await controls("setup 1 after a lost playback");
   // setup 2, continuing: a facing on it, planned; its playback
   await click("#treeAddSetup");
   await settled();
@@ -582,6 +592,35 @@ try {
   await click("#treeAdd");
   await waitFor(() => read("(() => { try { const d = JSON.parse(document.getElementById('job').value); return d.setups[1]?.operations.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "setup 2's facing", 120000).catch(() => {});
   await controls("setup 2 (continuing)");
+  // ---------------------------------------------------------------- Replace model
+  // (Mar: "the replace model button doesn't seem to work": the knurled knob example, its
+  // Part's Replace model..., another file) the part on the screen changes, the Part line
+  // names the new file, no error; Ctrl+Z brings the knob back
+  await read("(() => { const s = document.getElementById('example'); s.value = 'knob'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await click("#loadExample");
+  await settled();
+  await click("#tree [data-act=part]");
+  await settled();
+  const vr = await viewRect();
+  const r0 = partBox(await shot("replace_before"), vr);
+  const line0 = await read("document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || ''");
+  check("the knob's Part pane has Replace model...", !!(await where("#ptReplace")));
+  {
+    const doc = await S("DOM.getDocument");
+    const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#replaceModelFile" });
+    await S("DOM.setFileInputFiles", { files: [join(root, "examples", "plate", "dome.stl")], nodeId });
+  }
+  await settled();
+  const r1 = partBox(await shot("replace_after"), vr);
+  const line1 = await read("document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || ''");
+  const err1 = await read("document.getElementById('error').classList.contains('hidden') ? '' : document.getElementById('error').textContent");
+  check("Replace model on the knob (a revolved profile): the Part line names the new file, no error", /dome/.test(line1) && !err1, `${line0.trim()} -> ${line1.trim()}; ${err1}`);
+  check("the part on the screen is the new one", !!(r0 && r1 && (Math.abs(r1.w - r0.w) > 6 || Math.abs(r1.h - r0.h) > 6 || Math.abs(r1.cx - r0.cx) > 6)), `${JSON.stringify(r0 && [r0.cx.toFixed(0), r0.w, r0.h])} -> ${JSON.stringify(r1 && [r1.cx.toFixed(0), r1.w, r1.h])}`);
+  await read("document.activeElement?.blur?.(); true");
+  await key("z", 2);
+  await settled();
+  const line2 = await read("document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || ''");
+  check("Ctrl+Z: the knob's own part back", !/dome/.test(line2), line2.trim());
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

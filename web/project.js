@@ -974,18 +974,23 @@ export function setupProject(ctx) {
       keep.push(op);
     }
     s.operations = keep;
+    // (the output files name only what is left: the defaults below read the project, and an
+    // output naming a removed operation made every later one fail, Mar's knob replaced)
+    const left = new Set(keep.map((o) => o.id));
+    for (const o of s.outputs) o.operations = o.operations.filter((id) => left.has(id));
+    const next = [...s.operations];
     for (const [i, op] of [...s.operations.entries()]) {
       try {
         const { result } = await engine("opDefaults", doc, { type: op.type, setup: s.id, tool: op.tool, machine: engineMachine() }, state.mesh);
         const a = kind === "vise" ? 0 : op.index_a;
-        s.operations[i] = { ...result, id: op.id, enabled: op.enabled, ...(op.name ? { name: op.name } : {}), ...(op.color ? { color: op.color } : {}), ...(a !== undefined && result.index_a !== undefined ? { index_a: a } : {}) };
+        next[i] = { ...result, id: op.id, enabled: op.enabled, ...(op.name ? { name: op.name } : {}), ...(op.color ? { color: op.color } : {}), ...(a !== undefined && result.index_a !== undefined ? { index_a: a } : {}) };
         recomputed.push(op.id);
       } catch (e) {
         removed.push(`${op.id} (${op.type}: ${e.message})`);
-        s.operations[i] = null;
+        next[i] = null;
       }
     }
-    s.operations = s.operations.filter(Boolean);
+    s.operations = next.filter(Boolean);
     const ids = new Set(s.operations.map((o) => o.id));
     for (const o of s.outputs) o.operations = o.operations.filter((id) => ids.has(id));
     s.outputs = s.outputs.filter((o) => o.operations.length);
@@ -1159,8 +1164,9 @@ export function setupProject(ctx) {
     }
     if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
     const wanted = meshFileOf(doc);
-    const model = doc.models?.find((m) => m.kind === "mesh" && m.file === wanted) ?? doc.models?.find((m) => m.kind === "mesh");
-    if (!model) return showError("Replace model: the project has no mesh model (import a part instead)");
+    // (the setup worked on's own part first)
+    const here = doc.setups.find((x) => x.id === state.tree?.setup) ?? doc.setups[0];
+    const model = doc.models?.find((m) => m.kind === "mesh" && here?.part?.includes(m.id)) ?? doc.models?.find((m) => m.kind === "mesh" && m.file === wanted) ?? doc.models?.find((m) => m.kind === "mesh");
     setStatus(`Reading ${file.name}...`, "busy");
     let part;
     try {
@@ -1171,6 +1177,30 @@ export function setupProject(ctx) {
     }
     const name = `${slug(file.name)}.${part.step ? "step" : "stl"}`;
     const bytes = part.step ? part.step.stl : encodeStl(part.tris, `marcam: ${file.name}`);
+    if (!model && here) {
+      // (Mar: "the replace model button doesn't work" on the knurled knob: its part is a
+      // revolved profile, not a mesh) the file becomes the setup's part: a mesh model in the
+      // profile's place, placed on the setup as an import is (its stock fitted round it); the
+      // operations that need the profile say so. Undo brings the profile back.
+      const before = JSON.stringify(doc, null, 2);
+      const taken = new Set(doc.models.map((x) => x.id));
+      let id = "part";
+      for (let k = 2; taken.has(id); k++) id = `part${k}`;
+      const kind = kindOf(here);
+      doc.models.push({ id, name: file.name, kind: "mesh", file: name, axis: "x", translate: [0, 0, 0] });
+      const was = here.part || [];
+      here.part = [id];
+      // (a profile no setup uses any more: gone with the edit)
+      const used = new Set(doc.setups.flatMap((x) => x.part || []));
+      doc.models = doc.models.filter((x) => used.has(x.id) || !was.includes(x.id));
+      setMesh(bytes, `${file.name} (${partSummary(part)})`, part.step ? { name, bytes: part.step.bytes } : null);
+      // (its machine as it is: the one chosen, when the setup names none)
+      const report = await applySetup(doc, here, { kind, axis: kind === "vise" ? "z" : "x", tailstock: here.holding?.tailstock, rotate: [0, 0, 0], machine: here.machine || engineMachine() || undefined }, part.tris);
+      await commitSetupChange(doc, report, { label: `Setup "${here.name || here.id}": its part is ${file.name} (was its revolved profile).`, job: before });
+      setStatus(`Replaced the model with ${file.name}.`, "done");
+      return { project: doc, operations: [] };
+    }
+    if (!model) return showError("Replace model: the project has no setup (import a part instead)");
     let result;
     try {
       ({ result } = await engine("replaceModel", doc, { model: model.id, file: name }, bytes));
