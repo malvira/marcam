@@ -7,6 +7,7 @@ const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 import { describeStock, stockRadius } from "./project.js";
+import { applyPartField, applyStockField, carriedFrom, fitStock, meshModelOf, partPane, stockPane } from "./stockpane.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
 
 export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree, machineArg }) {
@@ -220,6 +221,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       }
       html += setupHead(x, false) + otherOps(x) + `</div>`;
     }
+    html += setupStockRows(s);
     html += setupTools(s);
     html += `<div class="row small eyes"><span class="muted">Toolpaths shown:</span>
         <button type="button" id="eyeAll" title="Show every toolpath of this setup">Show all</button>
@@ -273,6 +275,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       html += `<div class="tree-outname">Tool library</div><div id="libHost"></div>`;
     } else if (tool) {
       html += toolDetails(tool, s);
+    } else if (t.focus === "stock" && !t.selected) {
+      const m = meshModelOf(t.doc, s);
+      html += stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore });
+    } else if (t.focus === "part" && !t.selected) {
+      html += partPane(t.doc, s, esc, { moreOpen: t.ptMore });
     } else if (!t.selected) {
       html += `<div class="tree-outname">${esc(s.name || s.id)} <span class="muted">setup</span></div>
         <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
@@ -293,6 +300,20 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     window.__marcam.tools?.host?.($("libHost"));
     for (const [e, y] of scrolls) e.scrollTop = y;
     detectFeatures();
+    // (the 3D view's handles: on what the selected Stock or Part moves, or hidden)
+    window.__marcam.handles?.refresh?.();
+  }
+
+  /** (Mar) The setup's Stock and Part in the tree: selecting one shows its pane, and the
+   *  handles in the 3D view. */
+  function setupStockRows(x) {
+    const from = carriedFrom(t.doc, x);
+    const st = from ? `what ${from.name || from.id} left` : describeStock(x.stock, x.holding?.chuck);
+    const m = meshModelOf(t.doc, x);
+    const part = from ? "with the stock" : m ? m.file : x.part?.length ? "revolved profile" : "no model";
+    const row = (act, name, what, title) =>
+      `<div class="tree-stock ${t.focus === act && !t.selected ? "sel" : ""}" data-node="${act}"><span class="tree-label" data-act="${act}" title="${esc(title)}">${name} <span class="muted">${esc(what)}</span></span></div>`;
+    return row("stock", "Stock", st, "The stock: its type and sizes (and handles to move it, carried)") + row("part", "Part", part, "Where the part sits in the stock (handles in the 3D view)");
   }
 
   /** The tool numbers a setup lists: those it was given, and those its operations use. */
@@ -1230,6 +1251,26 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.retype = null;
       return render();
     }
+    if (el.dataset?.act === "stock" || el.dataset?.act === "part") {
+      if (t.picking) endPicking(false);
+      t.focus = el.dataset.act;
+      t.selected = null;
+      t.draft = null;
+      t.retype = null;
+      render();
+      window.__marcam.handles?.refresh?.();
+      return;
+    }
+    if (el.id === "stFit") {
+      const s = setup();
+      const m = meshModelOf(t.doc, s);
+      const bytes = m && window.__marcam.meshFor?.(m.file);
+      if (!bytes) return;
+      const { parseStl } = await import("./project.js");
+      const label = fitStock(t.doc, s, parseStl(bytes).tris, t.stMargin ?? (s.kind === "vise" || s.holding?.kind === "vise" ? 2 : 0.5));
+      if (label) await commit({ label });
+      return;
+    }
     if (el.dataset?.act === "tool") {
       if (t.picking) endPicking(false);
       t.focus = "tool";
@@ -1614,6 +1655,24 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   $("tree").addEventListener("change", async (ev) => {
     const el = ev.target;
+    // (Mar) the Stock and Part panes: each field an edit (undoable), planned again
+    if (el.closest?.("#stockPane") || el.closest?.("#partPane")) {
+      const s = setup();
+      if (!s) return;
+      if (el.id === "stMargin") {
+        t.stMargin = +el.value || 0;
+        return;
+      }
+      let box = null;
+      if (el.id === "stType" && s.stock?.shape === "from_previous") {
+        try {
+          box = (await engine("setupFrame", t.doc, { setup: s.id })).result.stock_box;
+        } catch {}
+      }
+      const label = el.closest("#stockPane") ? applyStockField(t.doc, s, el.id, el.value, box) : applyPartField(t.doc, s, el.id, el.value);
+      if (label) await commit({ label });
+      return;
+    }
     // an SVG file for a paths field: it replaces the current outline, placed at its corner
     // (else the stock's corner), scaled to the height asked for
     if (el.dataset?.svg && el.files?.[0] && t.selected) {
@@ -1686,6 +1745,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // (the operation form's More: kept open or shut as the person left it)
   $("tree").addEventListener("toggle", (ev) => {
     if (ev.target.id === "opMore") t.moreOpen = ev.target.open;
+    if (ev.target.id === "stMore") t.stMore = ev.target.open;
+    if (ev.target.id === "ptMore") t.ptMore = ev.target.open;
   }, true);
   $("tree").addEventListener("submit", async (ev) => {
     // (the operation's form; the setup's form in the details is the setup dialog's own)
@@ -1843,5 +1904,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
   }
 
-  return { refresh, pickAt, tabAt, pickSimilar, reset, renderEyes, renderStates, changeType, moveOp, nudge, state: t };
+  /** An edit from outside the tree (the 3D view's handles): `fn` changes the project and
+   *  says what it did (the Undo label), or returns null for nothing. */
+  async function edit(fn) {
+    if (!t.doc) return;
+    const label = fn(t.doc);
+    if (label) await commit({ label });
+  }
+  return { refresh, pickAt, tabAt, pickSimilar, reset, renderEyes, renderStates, changeType, moveOp, nudge, edit, state: t };
 }

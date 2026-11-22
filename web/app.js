@@ -8,6 +8,7 @@ import { setupToolDialogs } from "./tooldialog.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
 import { jawGrip, lyingBar, meshFileOf, setupProject } from "./project.js";
+import { setupHandles } from "./handles.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
 import { color, colorNum, colorRgb, COLOR_DEFAULTS, COLOR_LABELS, onColorsChange, resetColors, setColor } from "./colors.js";
 
@@ -1460,14 +1461,26 @@ async function drawModel() {
   // (a light tint with its edges drawn: see meshes.js stockObject)
   const st0 = frame ? (frame.stock_box ? { shape: "box", ...frame.stock_box } : { shape: "cylinder", ...frame.stock }) : v2 ? setup?.stock : doc.stock ? { shape: "cylinder", ...doc.stock } : null;
   // a bar lying in a vise: drawn along X at its axis, the block round it for the view
-  const viseBar = v2 && st0 && st0.shape !== "box" && (setup?.kind === "vise" || setup?.holding?.kind === "vise") ? lyingBar(st0) : null;
+  const viseBar = v2 && st0 && st0.shape !== "box" && (setup?.kind === "vise" || setup?.holding?.kind === "vise") ? lyingBar(st0, setup?.holding?.along) : null;
   const st = viseBar ? { shape: "box", ...viseBar.box } : st0;
   const sb = st?.shape === "box" ? st : null;
   let fitKey = null;
   if (viseBar) {
     const corners = barCorners(st0);
     const geo = corners ? prismGeometry(THREE, corners, 0, st0.length) : toGeometry(THREE, cylinder(st0.radius, 0, st0.length, 96));
-    geo.translate(0, viseBar.axis[0], viseBar.axis[1]);
+    // (Mar) along Y: its section's Y along X, its length along Y; standing: its section's Y
+    // along X, its Z along Y, its length down from Z0 (as the engine's)
+    const L = st0.length;
+    if (viseBar.along === "y") {
+      geo.applyMatrix4(new THREE.Matrix4().set(0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1));
+      flipWinding(geo);
+      geo.translate(viseBar.axis[0], 0, viseBar.axis[1]);
+    } else if (viseBar.along === "z") {
+      geo.applyMatrix4(new THREE.Matrix4().set(0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, -L, 0, 0, 0, 1));
+      geo.translate(viseBar.axis[0], viseBar.axis[1], 0);
+    } else {
+      geo.translate(0, viseBar.axis[0], viseBar.axis[1]);
+    }
     stockNew.push(stockObject(THREE, geo));
     fitKey = JSON.stringify(sb);
     v.bounds = { xmin: sb.min[0], xmax: sb.max[0], R: Math.max(sb.max[1] - sb.min[1], sb.max[2] - sb.min[2]) / 2 };
@@ -1521,6 +1534,7 @@ async function drawModel() {
   }
   clear(groups.stock);
   clear(groups.part);
+  setTimeout(() => window.__marcam.handles?.refresh?.(), 0);
   for (const o of partNew) groups.part.add(o);
   for (const o of stockNew) groups.stock.add(o);
   // a vise's jaws: beside the stock's Y faces, up to what they grip
@@ -1689,6 +1703,20 @@ function ramp(t) {
 
 /** A square, rectangular or hex bar's corners (y, z) about the axis, counter-clockwise; null
  *  for a round one. Angles as the engine's Section (degrees from +Y towards +Z). */
+/** Its triangles turned the other way round (after a mirroring transform). */
+function flipWinding(geo) {
+  if (geo.index) {
+    const ix = geo.index.array;
+    for (let i = 0; i < ix.length; i += 3) [ix[i + 1], ix[i + 2]] = [ix[i + 2], ix[i + 1]];
+    geo.index.needsUpdate = true;
+  } else {
+    const p = geo.attributes.position.array;
+    for (let i = 0; i < p.length; i += 9) for (let k = 0; k < 3; k++) [p[i + 3 + k], p[i + 6 + k]] = [p[i + 6 + k], p[i + 3 + k]];
+    geo.attributes.position.needsUpdate = true;
+  }
+  geo.computeVertexNormals();
+}
+
 function barCorners(st) {
   const a = ((st.angle || 0) * Math.PI) / 180;
   if (st.shape === "rect") {
@@ -2248,6 +2276,7 @@ window.__marcam.splitters = {
 new ResizeObserver(() => drawSide()).observe($("side"));
 
 // ---------------------------------------------------------------- project tree (0.2)
+window.__marcam.handles = setupHandles({ state, edit: (fn) => window.__marcam.tree?.edit(fn) });
 window.__marcam.tree = setupTree({
   engine, $, state, readJob, writeJob, showError, getThree,
   machineArg: () => (typeof machineArg() === "string" && machineArg() !== "custom" ? machineArg() : null),

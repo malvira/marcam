@@ -189,7 +189,7 @@ export function sectionRadius(shape, d, phi) {
 
 /** The smallest bar of `shape` (turned by `angle`) round the part's section points (y, z about
  *  the axis), `margin` beyond it; sizes rounded up to 0.5 mm. */
-function fitBar(shape, pts, margin, angle) {
+export function fitBar(shape, pts, margin, angle) {
   const a = ((angle || 0) * Math.PI) / 180;
   if (shape === "round") {
     let r = 0;
@@ -216,9 +216,20 @@ function fitBar(shape, pts, margin, angle) {
   return shape === "square" ? { side: af, angle: angle || 0 } : { across_flats: af, angle: angle || 0 };
 }
 
+/** A bar in a vise along `along` (x, y, or z: standing up; as the engine's
+ *  Stock::lying_along): the block round it (X and Y from 0, its top at Z0) and where its axis
+ *  is across it (along X: [Y, Z]; along Y: [X, Z]; standing: [X, Y]). */
+export function lyingBar(st, along) {
+  const b = lyingBarX(st);
+  const w = b.box.max[1], h = -b.box.min[2];
+  if (along === "y") return { axis: b.axis, box: { min: [0, 0, -h], max: [w, st.length, 0] }, along };
+  if (along === "z") return { axis: [b.axis[0], h + b.axis[1]], box: { min: [0, 0, -st.length], max: [w, h, 0] }, along };
+  return b;
+}
+
 /** A bar lying in a vise along X (as the engine's Stock::lying): its outline's extents and
  *  where its axis is (Y, Z) with its low Y side at 0 and its top at Z0. */
-export function lyingBar(st) {
+function lyingBarX(st) {
   const sp = stockSpecOf(st);
   let y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
   for (let k = 0; k < 1440; k++) {
@@ -240,8 +251,10 @@ export function jawGrip(s) {
   if (!st) return 0;
   if (s.holding?.jaws != null) return s.holding.jaws;
   if (st.shape === "box") return Math.min(3, (st.max[2] - st.min[2]) / 3);
-  const b = lyingBar(st).box;
-  return 0.4 * (b.max[2] - b.min[2]);
+  const b = lyingBar(st, s.holding?.along).box;
+  const h = b.max[2] - b.min[2];
+  // (standing up: as a block's)
+  return s.holding?.along === "z" ? Math.min(3, h / 3) : 0.4 * h;
 }
 
 /** The project's stock for a given stock spec (no part to place: a block's sizes, a bar's). */
@@ -345,6 +358,36 @@ export function placePart(tris, opts = {}) {
   if (!spec && opts.explicit) {
     const ex = opts.explicit;
     spec = vise ? { shape: "block", mode: "given", dims: { x: ex.bx, y: ex.by, z: ex.bz } } : { shape: "round", mode: "given", dims: { radius: ex.dia / 2 }, length: ex.len };
+  }
+  if (vise && spec?.shape && spec.shape !== "block" && (opts.along === "y" || opts.along === "z")) {
+    // (Mar) a bar along Y, or standing up: the part centred in its section; along Y between
+    // its ends (the margin each side), standing its top `origin` below the bar's top
+    const y = opts.along === "y";
+    // the section's two directions (its Y, its Z) and the length's, in the setup's axes
+    const [su, sv, sl] = y ? [0, 2, 1] : [0, 1, 2];
+    const cu = (lo[su] + hi[su]) / 2, cv = (lo[sv] + hi[sv]) / 2;
+    const mx = spec.margins?.xl ?? 2;
+    const top = opts.origin ?? 0.5;
+    let dims, length;
+    if (spec.mode === "given") {
+      dims = spec.dims;
+      length = spec.length;
+    } else {
+      const pts = [];
+      const step = Math.max(1, Math.floor(tris.length / 3 / 200000));
+      for (let i = 0; i < tris.length; i += 3 * step) {
+        const q = map([tris[i], tris[i + 1], tris[i + 2]]);
+        pts.push([q[su] - cu, q[sv] - cv]);
+      }
+      dims = fitBar(spec.shape, pts, spec.margin ?? opts.margin ?? 0.5, spec.dims?.angle ?? 0);
+      length = Math.ceil(size[sl] + (y ? 2 * mx : top + (spec.margins?.bottom ?? 2)));
+    }
+    const stock = barStock(spec.shape, dims, length);
+    const { axis } = lyingBar(stock, opts.along);
+    const translate = y
+      ? [axis[0] - cu, Math.max(0, (length - size[1]) / 2) - lo[1], axis[1] - cv]
+      : [axis[0] - cu, axis[1] - cv, -top - hi[2]];
+    return { axis: ax, translate, stock, size };
   }
   if (vise && spec?.shape && spec.shape !== "block") {
     // a bar lying along X: the part centred in its section, its front at the bar's end plus

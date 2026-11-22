@@ -224,6 +224,19 @@ function actions(r, app) {
       if (await js(modal)) await js("document.getElementById('sdCancel').click(); true");
       return `${kind} ${rot}`;
     } },
+    { name: "stocknode", w: 1, may: ["selected", "form"], run: async () => { const k = r.pick(["stock", "part"]); return (await click(`document.querySelector('#tree [data-act=${k}]')`)) ? k : null; } },
+    { name: "handle", w: 2, may: ["project", "form", "pos", "cam"], run: async () => {
+      // (Mar) a drag on a handle (the Stock or Part selected): an arrow or a ring
+      const mode = r.pick(["translate", "rotate"]), axis = r.pick(["X", "Y", "Z"]);
+      const p = await js(`JSON.stringify(window.__marcam.handles?.screenOf('${mode}', '${axis}') ?? null)`).then(JSON.parse);
+      if (!p) return null;
+      const dx = (r.f() - 0.5) * 300, dy = (r.f() - 0.5) * 300;
+      await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1] });
+      await S("Input.dispatchMouseEvent", { type: "mousePressed", x: p[0], y: p[1], button: "left", clickCount: 1 });
+      for (let i = 1; i <= 6; i++) await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0] + (dx * i) / 6, y: p[1] + (dy * i) / 6, button: "left", buttons: 1 });
+      await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: p[0] + dx, y: p[1] + dy, button: "left", clickCount: 1 });
+      return `${mode} ${axis} ${dx.toFixed(0)},${dy.toFixed(0)}`;
+    } },
     { name: "othersetup", w: 1, may: ["selected", "form", "pos", "hidden", "cam"], run: async () => { const k = r.f(); const id = await js(`(() => { const e = [...document.querySelectorAll('#tree .tree-setup:not(.active) [data-act=setup]')]; return e.length ? e[Math.floor(${k} * e.length)].closest('.tree-setup').dataset.setup : null; })()`); if (id) await click(`document.querySelector('#tree .tree-setup[data-setup="${id}"] [data-act=setup]')`); return id; } },
     { name: "generate", w: 1, may: ["pos"], run: async () => { await click("document.getElementById('generate')"); } },
   ];

@@ -1,0 +1,310 @@
+// (Mar) Handles in the 3D view to move the part in its stock, or a carried piece (the cut
+// result of an earlier setup, its part with it) in the vise or the chuck: arrows along X, Y
+// and Z and rings about them, shown while the setup's Stock or Part is selected in the tree.
+// Moves snap to 0.1 mm and turns to 90° (Shift: 1°), with the value shown beside the handle;
+// each drag is one edit (Undo takes it back), planned again as any edit is. On the rotary
+// axis only the turn about X and the slide along X apply.
+
+import { kindOf, rotation } from "./project.js";
+import { carriedFrom, meshModelOf } from "./stockpane.js";
+
+const r3 = (x) => Math.round(x * 1000) / 1000;
+const DEG = Math.PI / 180;
+
+/** The engine's rotation (degrees about X, then Y, then Z) as a 3x3 matrix (rows). */
+export function matOf(rot) {
+  const f = rotation(rot) || ((p) => p);
+  const c = [f([1, 0, 0]), f([0, 1, 0]), f([0, 0, 1])];
+  return [0, 1, 2].map((i) => [c[0][i], c[1][i], c[2][i]]);
+}
+export const mul = (a, b) => [0, 1, 2].map((i) => [0, 1, 2].map((j) => a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j]));
+export const apply = (m, p) => [0, 1, 2].map((i) => m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2]);
+
+/** The angles (degrees about X, then Y, then Z) of `m` (as the engine's carry_mesh::euler):
+ *  quarter turns snapped exact. */
+export function eulerOf(m) {
+  const sy = Math.max(-1, Math.min(1, -m[2][0]));
+  let x, y, z;
+  if (Math.abs(sy) < 1 - 1e-12) {
+    y = Math.asin(sy);
+    x = Math.atan2(m[2][1], m[2][2]);
+    z = Math.atan2(m[1][0], m[0][0]);
+  } else {
+    y = sy > 0 ? Math.PI / 2 : -Math.PI / 2;
+    x = sy > 0 ? Math.atan2(m[0][1], m[1][1]) : Math.atan2(-m[0][1], m[1][1]);
+    z = 0;
+  }
+  return [x, y, z].map((r) => {
+    const d = r / DEG;
+    const q = Math.round(d / 90) * 90;
+    let v = Math.abs(d - q) < 1e-4 ? q : Math.round(d * 1e4) / 1e4;
+    if (v === -180) v = 180;
+    return v === 0 ? 0 : v;
+  });
+}
+
+/** A turn of `deg` about axis k (0 X, 1 Y, 2 Z) as a matrix. */
+function axisTurn(k, deg) {
+  const r = [0, 0, 0];
+  r[k] = deg;
+  return matOf(r);
+}
+
+const TURNS = { none: [1, 1, 1], x180: [1, -1, -1], y180: [-1, 1, -1], z180: [-1, -1, 1] };
+
+/**
+ * Setup `s` of `doc` moved by `d` (mm) and/or turned by `deg` about axis `k` round `pivot`
+ * (in place). Its part (a mesh model, in its stock), or a carried piece (the stock and its
+ * part together, in the machine). Returns a label, or null.
+ */
+export function moveSetup(doc, s, { d = [0, 0, 0], k = null, deg = 0, pivot = [0, 0, 0] }) {
+  const D = k != null && deg ? axisTurn(k, deg) : null;
+  if (!D && d.every((v) => !v)) return null;
+  const what = D ? `turned ${r3(deg)}° about ${"XYZ"[k]}` : `moved ${d.map(r3).join(", ")} mm`;
+  if (carriedFrom(doc, s)) {
+    const st = s.stock;
+    if (d.some((v) => v)) {
+      const off = (st.offset || [0, 0, 0]).map((v, i) => r3(v + d[i]));
+      if (off.some((v) => v)) st.offset = off;
+      else delete st.offset;
+    }
+    if (D) {
+      const sg = TURNS[st.turn || "none"] || TURNS.none;
+      const T = [[sg[0], 0, 0], [0, sg[1], 0], [0, 0, sg[2]]];
+      const M = mul(D, mul(T, matOf(st.rotate)));
+      // (a turn over or end for end: kept as one, exactly as before; any other way, angles)
+      const diag = M.every((row, i) => row.every((v, j) => (i === j ? Math.abs(Math.abs(v) - 1) < 1e-9 : Math.abs(v) < 1e-9)));
+      const name = diag && Object.entries(TURNS).find(([, g]) => g.every((v, i) => Math.abs(M[i][i] - v) < 1e-9))?.[0];
+      delete st.rotate;
+      delete st.turn;
+      if (name && name !== "none") st.turn = name;
+      else if (!name) st.rotate = eulerOf(M);
+    }
+    return `Setup "${s.name || s.id}": the stock ${what}.`;
+  }
+  const m = meshModelOf(doc, s);
+  if (!m) return null;
+  const t = m.translate || [0, 0, 0];
+  let t2 = t.map((v, i) => v + d[i]);
+  if (D) {
+    // P = R A(p) + t, turned about the pivot: D (P - c) + c
+    const rel = apply(D, t.map((v, i) => v - pivot[i]));
+    t2 = rel.map((v, i) => v + pivot[i] + d[i]);
+    const rot = eulerOf(mul(D, matOf(m.rotate)));
+    if (rot.some((v) => v)) m.rotate = rot;
+    else delete m.rotate;
+  }
+  m.translate = t2.map(r3);
+  return `Setup "${s.name || s.id}": the part ${what}.`;
+}
+
+/** The handles, in the view `state.three` (made once it is there). */
+export function setupHandles({ state, edit }) {
+  const h = { tc: null, rc: null, proxy: null, ghost: null, readout: null, start: null, key: null, shift: false };
+
+  /** What the handles act on now: null (none shown), else { kind: "part" | "carried",
+   *  rotary, setup }. */
+  function target() {
+    const t = state.tree;
+    const v = state.three;
+    if (!t?.doc || !v || v.failed || t.selected || t.picking || !(t.focus === "stock" || t.focus === "part")) return null;
+    const s = t.doc.setups?.find((x) => x.id === t.setup);
+    if (!s) return null;
+    const rotary = kindOf(s) !== "vise";
+    if (carriedFrom(t.doc, s)) return { kind: "carried", rotary, setup: s };
+    if (meshModelOf(t.doc, s)) return { kind: "part", rotary, setup: s };
+    return null;
+  }
+
+  /** The box of what the handles move, in the view: the part drawn, or (carried) the stock. */
+  function boxOf(kind) {
+    const v = state.three;
+    const THREE = v.THREE;
+    const b = new THREE.Box3();
+    const add = (g) => g?.children.forEach((c) => b.expandByObject(c));
+    if (kind === "carried") add(v.groups.stock);
+    add(v.groups.part);
+    return b;
+  }
+
+  async function make() {
+    const v = state.three;
+    const { TransformControls } = await import("three/addons/controls/TransformControls.js");
+    const THREE = v.THREE;
+    if (!v.groups.handles) {
+      v.groups.handles = new THREE.Group();
+      v.scene.add(v.groups.handles);
+    }
+    h.proxy = new THREE.Object3D();
+    v.groups.handles.add(h.proxy);
+    const mk = (mode) => {
+      const c = new TransformControls(v.camera, v.renderer.domElement);
+      c.setMode(mode);
+      c.setSpace("world");
+      c.attach(h.proxy);
+      c.addEventListener("dragging-changed", (e) => {
+        v.controls.enabled = !e.value;
+        if (e.value) begin(c);
+        else end(c);
+      });
+      c.addEventListener("objectChange", () => during(c));
+      v.groups.handles.add(c);
+      return c;
+    };
+    h.tc = mk("translate");
+    h.rc = mk("rotate");
+    // (one at a time: an arrow under the pointer takes the press, not a ring there too)
+    h.tc.addEventListener("axis-changed", (e) => {
+      if (!h.rc.dragging) h.rc.enabled = e.value == null && h.tc.visible;
+    });
+    h.rc.setSize(1.25);
+    h.readout = document.createElement("div");
+    h.readout.className = "handle-readout hidden";
+    h.readout.id = "handleReadout";
+    document.getElementById("view3d").appendChild(h.readout);
+    const snaps = () => {
+      h.tc.setTranslationSnap(h.shift ? 0.01 : 0.1);
+      h.rc.setRotationSnap(h.shift ? DEG : Math.PI / 2);
+    };
+    snaps();
+    window.addEventListener("keydown", (e) => e.key === "Shift" && !h.shift && ((h.shift = true), snaps()));
+    window.addEventListener("keyup", (e) => e.key === "Shift" && ((h.shift = false), snaps()));
+  }
+
+  function begin(c) {
+    const v = state.three;
+    const tg = target();
+    if (!tg || h.start) return;
+    h.start = { tg, pos: h.proxy.position.clone(), quat: h.proxy.quaternion.clone(), mode: c.mode };
+    // a ghost of what moves, following the handle (the view itself is drawn again after)
+    const THREE = v.THREE;
+    h.ghost = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.35, depthWrite: false });
+    const src = [...(tg.kind === "carried" ? v.groups.stock.children : []), ...v.groups.part.children];
+    for (const o of src) o.traverse((x) => x.isMesh && h.ghost.add(Object.assign(new THREE.Mesh(x.geometry, mat), { matrixAutoUpdate: false, matrix: x.matrixWorld.clone() })));
+    const holder = new THREE.Group();
+    holder.add(h.ghost);
+    h.ghost.position.copy(h.proxy.position).negate();
+    h.holder = holder;
+    v.groups.handles.add(holder);
+    holder.position.copy(h.proxy.position);
+  }
+
+  /** The drag so far: { d, k, deg } snapped (a turn about one axis, or a move). */
+  function delta() {
+    const v = state.three;
+    const THREE = v.THREE;
+    const st = h.start;
+    if (!st) return null;
+    if (st.mode === "translate") {
+      const d = h.proxy.position.clone().sub(st.pos).toArray().map((x) => Math.round(x * 100) / 100);
+      if (st.tg.rotary) (d[1] = 0), (d[2] = 0);
+      return { d, k: null, deg: 0 };
+    }
+    const q = st.quat.clone().invert().premultiply(h.proxy.quaternion);
+    const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
+    const a = [e.x, e.y, e.z].map((r) => r / DEG);
+    let k = a.map((x) => Math.abs(x)).indexOf(Math.max(...a.map((x) => Math.abs(x))));
+    if (st.tg.rotary) k = 0;
+    const deg = Math.round(a[k] * (h.shift ? 1 : 1e4)) / (h.shift ? 1 : 1e4);
+    return { d: [0, 0, 0], k, deg };
+  }
+
+  function during() {
+    if (!h.start) return;
+    const dl = delta();
+    h.holder.position.copy(h.proxy.position);
+    h.holder.quaternion.copy(h.proxy.quaternion).multiply(h.start.quat.clone().invert());
+    const v = state.three;
+    const p = h.proxy.position.clone().project(v.camera);
+    const r = v.renderer.domElement.getBoundingClientRect();
+    h.readout.style.left = `${((p.x + 1) / 2) * r.width + 14}px`;
+    h.readout.style.top = `${((1 - p.y) / 2) * r.height - 28}px`;
+    h.readout.textContent = dl.k == null ? `X ${fmt(dl.d[0])}  Y ${fmt(dl.d[1])}  Z ${fmt(dl.d[2])} mm` : `${"XYZ"[dl.k]} ${fmt(dl.deg)}°`;
+    h.readout.classList.remove("hidden");
+    window.__marcam.kickView?.();
+  }
+  const fmt = (x) => `${x >= 0 ? "+" : ""}${+x.toFixed(2)}`;
+
+  async function end() {
+    const st = h.start;
+    if (!st) return;
+    const dl = delta();
+    h.start = null;
+    h.readout.classList.add("hidden");
+    state.three.groups.handles.remove(h.holder);
+    h.holder = null;
+    h.ghost = null;
+    const pivot = st.pos.toArray();
+    // (on the rotary axis: turned about the axis itself)
+    if (st.tg.rotary) pivot[1] = pivot[2] = 0;
+    // back where it was until the edit lands (then placed on what moved)
+    h.proxy.position.copy(st.pos);
+    h.proxy.quaternion.copy(st.quat);
+    if (dl && (dl.k != null ? Math.abs(dl.deg) > 1e-6 : dl.d.some((x) => x))) {
+      h.key = null;
+      await edit((doc) => {
+        const s = doc.setups.find((x) => x.id === st.tg.setup.id);
+        return s ? moveSetup(doc, s, { ...dl, pivot }) : null;
+      });
+    }
+  }
+
+  /** Shown on what they act on (or hidden): called after each draw of the view. */
+  async function refresh() {
+    const v = state.three;
+    if (!v || v.failed) return;
+    const tg = target();
+    if (!tg) {
+      if (h.tc) h.tc.visible = h.rc.visible = h.tc.enabled = h.rc.enabled = false;
+      return;
+    }
+    // (made once: refreshes come together while three.js's module loads)
+    if (!h.tc) await (h.making ||= make());
+    if (h.start) return;
+    const box = boxOf(tg.kind);
+    if (box.isEmpty()) {
+      h.tc.visible = h.rc.visible = h.tc.enabled = h.rc.enabled = false;
+      return;
+    }
+    const c = box.getCenter(new v.THREE.Vector3());
+    h.proxy.position.copy(c);
+    h.proxy.quaternion.identity();
+    h.tc.visible = h.rc.visible = h.tc.enabled = h.rc.enabled = true;
+    // on the rotary axis: the slide along X and the turn about X only
+    h.tc.showY = h.tc.showZ = !tg.rotary;
+    h.rc.showY = h.rc.showZ = !tg.rotary;
+    h.rc.showE = false;
+    window.__marcam.kickView?.();
+  }
+
+  /** (tests) Where a handle is on the screen: `mode` translate | rotate, `axis` X | Y | Z
+   *  (a ring: the point `ang` degrees round it). */
+  function screenOf(mode, axis, ang = 45) {
+    const v = state.three;
+    const c = mode === "translate" ? h.tc : h.rc;
+    if (!c?.visible) return null;
+    c.updateMatrixWorld(true);
+    const THREE = v.THREE;
+    let best = null;
+    // its picker (the invisible shapes the pointer hits)
+    const picker = c.children[0]?.picker?.[mode] || c._gizmo?.picker?.[mode];
+    picker?.traverse((o) => {
+      if (o.name !== axis || !o.geometry) return;
+      const rr = o.geometry.parameters?.radius;
+      if (mode === "rotate" && rr) {
+        // a point on its ring, 45° round (on no other ring)
+        best = new THREE.Vector3(rr * Math.cos(ang * DEG), rr * Math.sin(ang * DEG), 0).applyMatrix4(o.matrixWorld);
+        return;
+      }
+      o.geometry.computeBoundingBox();
+      best = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld).getCenter(new THREE.Vector3());
+    });
+    if (!best) return null;
+    const p = best.project(v.camera);
+    const r = v.renderer.domElement.getBoundingClientRect();
+    return [r.left + ((p.x + 1) / 2) * r.width, r.top + ((1 - p.y) / 2) * r.height];
+  }
+
+  return { refresh, target, screenOf, state: h };
+}

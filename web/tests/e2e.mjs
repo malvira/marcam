@@ -3255,6 +3255,94 @@ try {
       `${JSON.stringify(e.s.stock)}; ${JSON.stringify(eb)}`);
   }
 
+  // (Mar) the stock in the tree: a Stock item with its type and sizes; the part moved in it,
+  // and a carried piece in the vise, with handles in the 3D view (snapped; one edit a drag)
+  {
+    const job = () => js("document.getElementById('job').value").then(JSON.parse);
+    const drag = async (mode, axis, dx, dy) => {
+      const p = JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('${mode}', '${axis}'))`));
+      if (!p) return false;
+      await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1] });
+      await sleep(60);
+      await S("Input.dispatchMouseEvent", { type: "mousePressed", x: p[0], y: p[1], button: "left", clickCount: 1 });
+      for (let i = 1; i <= 12; i++) {
+        // (a ring: round it, a quarter turn and a bit; an arrow: straight)
+        const q = mode === "rotate" ? JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('rotate', '${axis}', ${45 + (dx > 0 ? 1 : -1) * 10 * i}))`)) : [p[0] + (dx * i) / 12, p[1] + (dy * i) / 12];
+        await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: q[0], y: q[1], button: "left", buttons: 1 });
+      }
+      const readout = await js("document.getElementById('handleReadout')?.textContent || ''");
+      await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: p[0] + dx, y: p[1] + dy, button: "left", clickCount: 1 });
+      await settle(600);
+      return readout;
+    };
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle(1500);
+    // the Stock pane: a size typed
+    await js("document.querySelector('#tree [data-act=stock]').click(); true");
+    await settle();
+    const pane = await js("({ types: [...document.getElementById('stType').options].map((o) => o.value).join(','), x: document.getElementById('stX')?.value, setupShown: !!document.getElementById('setupHost') })");
+    await js("const x = document.getElementById('stX'); x.value = '70'; x.dispatchEvent(new Event('change', { bubbles: true })); true");
+    await settle();
+    const sized = (await job()).setups[0].stock;
+    // the part: moved along X by its arrow, turned about Z by its ring
+    await js("document.querySelector('#tree [data-act=part]').click(); true");
+    await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible"), "the handles", 30000);
+    const t0 = (await job()).models.find((m) => m.id === "dome");
+    const moved = await drag("translate", "X", 60, 0);
+    const t1 = (await job()).models.find((m) => m.id === "dome");
+    const turned = await drag("rotate", "Z", -220, 160);
+    const t2 = (await job()).models.find((m) => m.id === "dome");
+    // (planned again: by itself when live, else by Generate)
+    if (await js("!!window.__marcam.state.stale || !window.__marcam.state.result")) {
+      await clickGenerate();
+      await waitDone("the moved part planned", 240000);
+    }
+    const planned = await js("!window.__marcam.state.stale && [...document.querySelectorAll('#tabs button')].every((b) => b.textContent.endsWith('OK'))");
+    await shot("42a_part_handles");
+    await js("document.getElementById('menuUndo').click(); true");
+    await settle();
+    const undone = (await job()).models.find((m) => m.id === "dome");
+    const dx = t1.translate[0] - (t0.translate?.[0] ?? 0);
+    check("the Stock item: its type and sizes (the plate 70 wide); the part moved by its X arrow (snapped to 0.1 mm) and turned by its Z ring (quarter turns), each drag one edit, planned again",
+      pane.types === "block,round,square,hex,rect" && pane.x === "60" && !pane.setupShown && sized.max[0] === 70 && dx > 0.5 && Math.abs(dx * 10 - Math.round(dx * 10)) < 1e-6 && /X \+/.test(moved) &&
+      t2.rotate?.[0] === 0 && t2.rotate?.[1] === 0 && t2.rotate[2] % 90 === 0 && t2.rotate[2] !== 0 && /Z [+-]\d+°/.test(turned) && planned && JSON.stringify(undone.translate) === JSON.stringify(t1.translate) && !undone.rotate,
+      `pane ${JSON.stringify(pane)}; stock ${JSON.stringify(sized)}; moved ${JSON.stringify(t0.translate)} -> ${JSON.stringify(t1.translate)} "${moved}"; turned ${JSON.stringify(t2.rotate)} "${turned}"; planned ${planned}; undone ${JSON.stringify(undone)}`);
+    // a round bar standing up in the vise: the block round it is its length tall
+    await js("document.querySelector('#tree [data-act=stock]').click(); true");
+    await settle();
+    await js("const t = document.getElementById('stType'); t.value = 'round'; t.dispatchEvent(new Event('change', { bubbles: true })); true");
+    await settle();
+    await js("const a = document.getElementById('stAlong'); a.value = 'z'; a.dispatchEvent(new Event('change', { bubbles: true })); true");
+    await settle();
+    const bar = (await job()).setups[0];
+    const bframe = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${bar.id}' }).then((r) => r.result.stock_box)`);
+    await shot("42b_bar_standing");
+    check("a round bar standing up in the vise (Stock: Round bar, Axis Z): the block round it as tall as the bar",
+      bar.stock.shape === "cylinder" && bar.holding.along === "z" && Math.abs(bframe.max[2] - bframe.min[2] - bar.stock.length) < 1e-6 && Math.abs(bframe.max[0] - 2 * bar.stock.radius) < 1e-6,
+      `${JSON.stringify(bar.stock)} along ${bar.holding.along}; box ${JSON.stringify(bframe)}`);
+    // the knob's cut result in a vise: stood on end by the Stock's Y ring (stock and all)
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await settle(1500);
+    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
+    await js("document.getElementById('treeAddSetup').click(); true");
+    await waitFor(() => js(modal), "the add setup dialog", 30000);
+    await js(`const r = document.querySelector('input[name="sdStock"][value="previous"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('.sd-kind[data-kind="vise"]').click(); true`);
+    await sleep(200);
+    await js("document.getElementById('sdOk').click(); true");
+    await waitFor(() => js(`!${modal}`), "the carried setup", 60000);
+    await settle();
+    await js("document.querySelector('#tree [data-act=stock]').click(); true");
+    await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible && window.__marcam.handles.target()?.kind === 'carried'"), "the carried piece's handles", 60000);
+    const stood = await drag("rotate", "Y", -220, 160);
+    const ks = (await job()).setups[1];
+    const kframe = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${ks.id}' }).then((r) => r.result.stock_box)`);
+    await shot("42c_knob_stood");
+    check("the knob's cut result in a vise stood on end by the Stock's Y ring: turned 90° (stock and part together), the block round it 100 tall",
+      /Y [+-]90°/.test(stood) && Math.abs(Math.abs(ks.stock.rotate?.[1] ?? 0) - 90) < 1e-9 && Math.abs(kframe.max[2] - kframe.min[2] - 100) < 1e-6,
+      `"${stood}" ${JSON.stringify(ks.stock)}; box ${JSON.stringify(kframe)}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);
