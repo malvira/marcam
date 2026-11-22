@@ -162,7 +162,16 @@ export function applyStockField(doc, s, id, val, frameBox) {
     const k = { stX: 0, stY: 1, stZ: 2 }[id];
     if (k == null || v == null || v <= 0) return null;
     if (k === 2) st.min[2] = r3(st.max[2] - v);
-    else st.max[k] = r3(st.min[k] + v);
+    else {
+      // (the walkthrough: 34 typed down to 30 left the part 2 mm off the block's middle, and
+      // off the 4th axis when carried there; the part moves half the change, with the block)
+      const grow = v - (st.max[k] - st.min[k]);
+      st.max[k] = r3(st.min[k] + v);
+      for (const m of doc.models || []) {
+        if (!s.part?.includes(m.id) || !m.translate) continue;
+        m.translate[k] = r3(m.translate[k] + grow / 2);
+      }
+    }
     return what;
   }
   const ok = {

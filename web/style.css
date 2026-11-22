@@ -312,3 +312,7 @@ details.menu[open] > summary { border-color: var(--accent); }
 /* (Mar: no Apply) a value the engine refuses: the field marked, the reason under it */
 #opForm .invalid { outline: 2px solid var(--error, #dc2626); outline-offset: 1px; }
 #opForm .field-error { margin: 2px 0 4px; }
+
+/* (the walkthrough: "Cannot add ... needs a vbit tool" was below the fold) the error kept in
+   view at the foot of the left pane */
+#left > #error:not(.hidden) { position: sticky; bottom: 0; z-index: 5; box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.35); }

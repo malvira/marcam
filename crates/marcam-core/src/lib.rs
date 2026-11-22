@@ -138,6 +138,40 @@ fn op_name(op: &Operation) -> &'static str {
 pub const PROFILE_SEGMENTS: usize = 720;
 
 /// Planning context shared by the programs of a job.
+/// The part's largest radius (about X) over `a <= x <= b`: each triangle cut to that slab,
+/// the farthest corner of what is left (0 where the part has nothing there).
+fn part_radius_over(m: &Mesh, a: f64, b: f64) -> f64 {
+    if b < a {
+        return 0.0;
+    }
+    let rad = |p: [f64; 3]| p[1].hypot(p[2]);
+    let mut best = 0.0f64;
+    for t in &m.triangles {
+        let (lo, hi) = t
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), p| {
+                (l.min(p[0]), h.max(p[0]))
+            });
+        if hi < a || lo > b {
+            continue;
+        }
+        for i in 0..3 {
+            let (p, q) = (t[i], t[(i + 1) % 3]);
+            if (a..=b).contains(&p[0]) {
+                best = best.max(rad(p));
+            }
+            // where the edge crosses the slab's two faces
+            for x in [a, b] {
+                if (p[0] - x) * (q[0] - x) < 0.0 {
+                    let u = (x - p[0]) / (q[0] - p[0]);
+                    best = best.max(rad([x, p[1] + u * (q[1] - p[1]), p[2] + u * (q[2] - p[2])]));
+                }
+            }
+        }
+    }
+    best
+}
+
 struct Ctx<'a> {
     job: &'a Job,
     profile: Option<RevolvedProfile>,
@@ -975,12 +1009,29 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let geom = ctx.profile.as_ref().expect("checked above");
                 strategy::rotary_turning(&mut b, geom, diameter, job.stock.radius, safe_r, o)
             }
-            (Operation::HelicalKnurl(o), ToolShape::Vbit { angle, .. }) => {
+            (Operation::HelicalKnurl(o), ToolShape::Vbit { angle, diameter }) => {
                 // (its radial stock to leave: the body it knurls that much bigger)
                 let mut o = o.clone();
                 o.body_back[1] += o.leave_radial;
                 o.body_front[1] += o.leave_radial;
-                strategy::helical_knurl(&mut b, angle, safe_r, &o)
+                // (Mar's walkthrough: a knurl on a Ø25 step next to the square base ran out into
+                // the base, the holder 2.7 mm into it) an end at a shoulder of the part: no run
+                // out there, and the tool's widest kept off the shoulder's face
+                let top = 0.5 * diameter.unwrap_or(0.0);
+                let body = o.body_back[1].max(o.body_front[1]) + 0.05;
+                let mut runout = [o.runout, o.runout];
+                if let Some(m) = ctx.mesh {
+                    let reach = o.runout + top;
+                    if part_radius_over(m, o.body_back[0] - reach, o.body_back[0] - 1e-3) > body {
+                        runout[0] = 0.0;
+                        o.body_back[0] += top;
+                    }
+                    if part_radius_over(m, o.body_front[0] + 1e-3, o.body_front[0] + reach) > body {
+                        runout[1] = 0.0;
+                        o.body_front[0] -= top;
+                    }
+                }
+                strategy::helical_knurl(&mut b, angle, safe_r, &o, runout)
                     .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?
             }
             (Operation::FlankChamfer(o), ToolShape::Vbit { angle, .. }) => {

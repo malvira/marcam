@@ -781,6 +781,33 @@ impl Project {
     }
 
     /// Face regions of a model: profiles are revolved (360 facets); meshes come from `meshes`.
+    /// Mesh model `model` as setup `setup` holds it: a part carried on from the setup before
+    /// (its stock `from_previous`) turned and moved with the stock, as the setup's frame
+    /// places it; else the model as written. (Mar: in a carried setup the defaults, the picks
+    /// and the picked faces were the part where the first setup had it.)
+    pub fn model_source_in(&self, setup: &Setup, model: &str) -> Option<MeshSource> {
+        let m = self.models.iter().find(|m| m.id == model)?;
+        let ModelKind::Mesh(src) = &m.kind else {
+            return None;
+        };
+        if matches!(setup.stock, StockDef::FromPrevious { .. })
+            && setup.part.iter().any(|p| p == model)
+        {
+            if let Ok(f) = self.setup_frame(setup) {
+                if f.carry.is_some() {
+                    if let Some(s) = f
+                        .part
+                        .get("mesh")
+                        .and_then(|v| serde_json::from_value::<MeshSource>(v.clone()).ok())
+                    {
+                        return Some(s);
+                    }
+                }
+            }
+        }
+        Some(src.clone())
+    }
+
     pub fn model_regions(
         &self,
         model: &str,
@@ -1467,13 +1494,13 @@ pub fn jobs_from_any_with(
         )]);
     }
     let (p, _) = Project::from_json_any(text)?;
-    let by_model = |id: &str| match &p.models.iter().find(|m| m.id == id)?.kind {
-        ModelKind::Mesh(src) => meshes(src),
-        ModelKind::Profile(_) => None,
-    };
     p.setups
         .iter()
-        .map(|s| Ok((s.id.clone(), p.setup_job_with(s, libraries, &by_model)?)))
+        .map(|s| {
+            // (a carried part's faces where the setup holds it)
+            let by_model = |id: &str| meshes(&p.model_source_in(s, id)?);
+            Ok((s.id.clone(), p.setup_job_with(s, libraries, &by_model)?))
+        })
         .collect()
 }
 

@@ -925,7 +925,11 @@ pub fn setup_part(
         .ok_or(format!("no model {model_id:?}"))?;
     let part = match &m.kind {
         ModelKind::Profile(prof) => Mesh::revolve(prof, 360),
-        ModelKind::Mesh(src) => mesh_of(src)?,
+        // (a carried part where this setup holds it)
+        ModelKind::Mesh(src) => mesh_of(
+            &p.model_source_in(s, &model_id)
+                .unwrap_or_else(|| src.clone()),
+        )?,
     };
     let block = matches!(s.stock, StockDef::Box { .. });
     let kind = s.kind.clone().unwrap_or_else(|| {

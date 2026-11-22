@@ -644,7 +644,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     let regions, found;
     try {
       [{ result: regions }, { result: found }] = await Promise.all([
-        engine("faceRegions", t.doc, model, state.mesh),
+        engine("faceRegions", t.doc, JSON.stringify({ model, setup: s.id }), state.mesh),
         engine("resolvePicks", t.doc, { setup: s.id, model, index_a: op.index_a ?? 0, signatures: sigs }, state.mesh),
       ]);
     } catch {
@@ -995,7 +995,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     let regions, picks;
     try {
       [{ result: regions }, { result: picks }] = await Promise.all([
-        engine("faceRegions", t.doc, model, state.mesh),
+        engine("faceRegions", t.doc, JSON.stringify({ model, setup: s.id }), state.mesh),
         engine("pickables", t.doc, { setup: s.id, model, index_a: op.index_a ?? 0 }, state.mesh),
       ]);
     } catch (e) {
@@ -1331,6 +1331,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         t.draft = null;
         t.selected = null;
         render();
+        // (the walkthrough: a knurl in a setup with no V-bit said so, below the fold) the
+        // library opened on the tools that suit it; one picked, the operation is added
+        if (/needs an? \w+ tool; the job has none/.test(e.message) && window.__marcam.tools?.pick && !ev.__retried) {
+          const n = await window.__marcam.tools.pick(ty.tool_shapes);
+          await refresh();
+          if (n) {
+            $("treeAddType").value = kind;
+            ev.__retried = true;
+            return $("treeAdd").dispatchEvent(Object.assign(new MouseEvent("click", { bubbles: true }), { __retried: true }));
+          }
+        }
         showError(`Cannot add ${ty.title}: ${e.message}`);
       }
       return;

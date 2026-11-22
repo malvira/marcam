@@ -411,3 +411,128 @@ fn a_vise_cut_plate_goes_on_as_a_bar() {
     // the pocket (old X 5..25: -55..-35), 3 deep: its floor 1.5 up
     assert!((at(-45.0, 90.0) - 1.5).abs() < 0.3, "{}", at(-45.0, 90.0));
 }
+
+/// (Mar's walkthrough) A square bar stood in the vise, its top turned to a Ø25 cylinder with
+/// a Ø15 boss; then on the 4th axis, continuing, turned 90° about Y: the part goes with the
+/// stock (its axis on the rotary axis, its boss at the front), and what a new operation
+/// starts from (its defaults) and what is picked on it are the part where this setup holds
+/// it, not where the vise had it.
+fn stepped_bar_vise_then_4th() -> (Value, PathBuf) {
+    let v = json!({
+        "schema_version": "0.2",
+        "name": "stepped bar",
+        "models": [{"id": "part", "name": "stepped_bar.stl", "kind": "mesh", "file": "stepped_bar.stl", "axis": "x", "translate": [15.0, 15.0, -60.5]}],
+        "tools": [
+            {"number": 1, "library": "makera-starter", "tool": "spiral-o-metal-3.175x12"},
+            {"number": 4, "library": "makera-starter", "tool": "vbit-90-3.175"}
+        ],
+        "setups": [
+            {"id": "vise1", "name": "Vise", "kind": "vise", "machine": "makera-z1-4axis", "clearance": 3.0, "part": ["part"], "spindle_rpm": 12000,
+             "stock": {"shape": "box", "min": [0.0, 0.0, -62.0], "max": [30.0, 30.0, 0.0]},
+             "holding": {"kind": "vise", "tailstock": false}, "operations": [], "outputs": []},
+            {"id": "rot", "name": "4th axis", "kind": "rotary", "machine": "makera-z1-4axis", "clearance": 3.0, "part": ["part"], "spindle_rpm": 12000,
+             "stock": {"shape": "from_previous", "rotate": [0.0, 90.0, 0.0]},
+             "holding": {"kind": "rotary_chuck", "tailstock": false}, "operations": [], "outputs": []}
+        ]
+    });
+    (v, root().join("tests/fixtures"))
+}
+
+#[test]
+fn a_bar_turned_in_the_vise_goes_on_the_4th_axis_with_its_part_where_it_is_held() {
+    let (v, dir) = stepped_bar_vise_then_4th();
+    let (p, _) = Project::from_json_any(&v.to_string()).unwrap();
+    let rot = p.setups.iter().find(|s| s.id == "rot").unwrap();
+    // the part where the 4th axis holds it: along X, its front (the boss) at X -0.5, its axis
+    // on the rotary axis
+    let src = p.model_source_in(rot, "part").unwrap();
+    let m = src.load(&dir).unwrap();
+    let (lo, hi) = m.bounds().unwrap();
+    assert!(
+        (lo[0] + 60.5).abs() < 1e-6 && (hi[0] + 0.5).abs() < 1e-6,
+        "{lo:?} {hi:?}"
+    );
+    for a in 1..3 {
+        assert!(
+            (lo[a] + hi[a]).abs() < 1e-6 && (hi[a] - 15.0).abs() < 1e-6,
+            "{lo:?} {hi:?}"
+        );
+    }
+    // the vise's own: as written (standing, Z -60.5..-0.5)
+    let vise = p.setups.iter().find(|s| s.id == "vise1").unwrap();
+    let (lo1, hi1) = p
+        .model_source_in(vise, "part")
+        .unwrap()
+        .load(&dir)
+        .unwrap()
+        .bounds()
+        .unwrap();
+    assert!(
+        (lo1[2] + 60.5).abs() < 1e-6 && (hi1[2] + 0.5).abs() < 1e-6,
+        "{lo1:?} {hi1:?}"
+    );
+    // a knurl's defaults on it: within the part (were X 2..32 and radii 60..68, the part where
+    // the vise had it seen from the rotary axis)
+    let libs = marcam::profiles::builtin_libraries();
+    let meshes = |id: &str| p.model_source_in(rot, id)?.load(&dir).ok();
+    let d = p
+        .op_defaults("helical_knurl", "rot", Some(4), &[], &libs, None, &meshes)
+        .unwrap();
+    for k in ["body_back", "body_front"] {
+        let xr = d[k].as_array().unwrap();
+        let (x, r) = (xr[0].as_f64().unwrap(), xr[1].as_f64().unwrap());
+        assert!(
+            (-60.5 - 1e-6..=1e-6).contains(&x) && r > 0.0 && r <= 21.3,
+            "{k} {xr:?}"
+        );
+    }
+    // the faces a pick resolves on: the setup's part, a cylinder along X of radius 12.5 and one
+    // of 7.5
+    let regions = p.model_regions("part", &meshes).unwrap();
+    let cyl = |r: f64| {
+        regions
+            .iter()
+            .any(|g| g.shape == "cylinder" && (g.r[1] - r).abs() < 0.05 && g.a.is_none())
+    };
+    assert!(
+        cyl(12.5) && cyl(7.5),
+        "{:?}",
+        regions.iter().map(|g| (&g.shape, g.r)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_knurl_on_the_step_next_to_the_base_keeps_off_the_base() {
+    // (Mar's walkthrough) the knurl on the Ø25 step (X -40.5..-10.5) ran its grooves 0.6 mm
+    // past the square base's face, the holder 2.7 mm into it: at a shoulder no run out, and the
+    // V-bit's widest (Ø3.175) kept off the face
+    let (mut v, dir) = stepped_bar_vise_then_4th();
+    v["setups"][1]["operations"] = json!([{"id": "k", "type": "helical_knurl", "tool": 4,
+        "body_back": [-40.5, 12.5], "body_front": [-10.5, 12.5], "count": 39, "helix_angle": 30.0,
+        "fill": 0.95, "passes": [0.6, 1.0], "families": [1, -1], "runout": 0.6, "samples": 120,
+        "approach_clearance": 0.5, "feed": 200.0, "plunge_feed": 60.0}]);
+    v["setups"][1]["outputs"] = json!([{"name": "knurl", "title": "knurl", "operations": ["k"]}]);
+    let js = jobs(&v, &dir);
+    let rot = &js.iter().find(|(id, _)| id == "rot").unwrap().1;
+    let mesh = marcam::load_mesh(rot, &dir).unwrap();
+    let tps = marcam::plan_with_mesh(rot, mesh.as_ref()).unwrap();
+    let g = marcam::post(&tps[0], &marcam::Machine::makera_z1());
+    let xs: Vec<f64> = g
+        .lines()
+        // (each groove starts at a rapid to its X, then cuts along)
+        .filter(|l| l.starts_with("G1") || l.starts_with("G0 X"))
+        .filter_map(|l| {
+            l.split_whitespace()
+                .find(|w| w.starts_with('X'))
+                .and_then(|w| w[1..].parse().ok())
+        })
+        .collect();
+    let (lo, hi) = xs
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &x| {
+            (a.min(x), b.max(x))
+        });
+    // the back end off the base by the V-bit's radius; the front (the boss is smaller) runs out
+    assert!((lo - (-40.5 + 3.175 / 2.0)).abs() < 0.01, "{lo}");
+    assert!((hi - (-10.5 + 0.6)).abs() < 0.01, "{hi}");
+}

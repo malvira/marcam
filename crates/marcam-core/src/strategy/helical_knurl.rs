@@ -10,6 +10,8 @@ pub fn helical_knurl(
     vbit_angle: f64,
     safe_r: f64,
     op: &HelicalKnurl,
+    // (how far the grooves run past the back and the front: none at a shoulder)
+    runout: [f64; 2],
 ) -> Result<(), String> {
     let [xb, rb] = op.body_back;
     let [xf, rf] = op.body_front;
@@ -28,7 +30,7 @@ pub fn helical_knurl(
     };
 
     // run out past both ends of the body
-    let xs = linspace(xb - op.runout, xf + op.runout, op.samples);
+    let xs = linspace(xb - runout[0], xf + runout[1], op.samples);
     let xc: Vec<f64> = xs.iter().map(|&x| x.clamp(xb, xf)).collect();
     // angle swept along the groove: dθ/dx = tan(α)/R(x)
     let tan_a = rad(op.helix_angle).dtan();

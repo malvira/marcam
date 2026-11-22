@@ -1366,6 +1366,10 @@ export function setupProject(ctx) {
       found = result.operations;
     }
     const report = await applySetup(doc, doc.setups.find((x) => x.id === s.id), cfg, tris);
+    // (the walkthrough: "Rotary 4th axis" stayed the name of a setup made a vise) a name that
+    // was only its type's follows the type
+    const named = doc.setups.find((x) => x.id === s.id);
+    if (named && Object.values(KINDS).includes(named.name) && cfg.kind && KINDS[cfg.kind]) named.name = KINDS[cfg.kind];
     await commitSetupChange(doc, report, { label: `Setup "${s.name || s.id}" changed to ${KINDS[cfg.kind]}.`, job: before });
     if (cfg.machine) ctx.selectMachine(cfg.machine);
     const bad = (found || []).filter((o) => !o.ok);

@@ -1455,20 +1455,37 @@ pub mod api {
 
     /// Face regions of a model (`model` id; the mesh bytes for mesh models), plus each
     /// triangle's region index and the triangles themselves (f32 base64) for picking.
+    /// (`model` may be `{"model": id, "setup": id}`: the part where that setup holds it, a
+    /// carried one turned and moved with its stock.)
     pub fn face_regions(doc: &str, model: &str, mesh: &[u8]) -> Value {
         let (p, _) = match marcam::project::Project::from_json_any(doc) {
             Ok(x) => x,
             Err(e) => return err(e),
         };
-        let Some(m) = p.models.iter().find(|m| m.id == model.trim()) else {
+        let (model, setup) = match serde_json::from_str::<Value>(model.trim()) {
+            Ok(Value::Object(o)) => (
+                o.get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                o.get("setup").and_then(Value::as_str).map(str::to_string),
+            ),
+            _ => (model.trim().to_string(), None),
+        };
+        let Some(m) = p.models.iter().find(|m| m.id == model) else {
             return err(format!("no model {model:?}"));
         };
+        let held = setup
+            .and_then(|id| p.setups.iter().find(|x| x.id == id))
+            .and_then(|x| p.model_source_in(x, &model));
         let mesh = match &m.kind {
             marcam::project::ModelKind::Profile(prof) => Mesh::revolve(prof, 360),
-            marcam::project::ModelKind::Mesh(src) => match src.mesh(mesh) {
-                Ok(x) => x,
-                Err(e) => return err(e),
-            },
+            marcam::project::ModelKind::Mesh(src) => {
+                match held.as_ref().unwrap_or(src).mesh(mesh) {
+                    Ok(x) => x,
+                    Err(e) => return err(e),
+                }
+            }
         };
         let (regions, of) = marcam::geometry::face_regions(&mesh, 30.0);
         let tri: Vec<f32> = mesh
@@ -1706,12 +1723,17 @@ pub mod api {
             Value::Object(_) => serde_json::from_value(o["machine"].clone()).ok(),
             _ => None,
         };
-        let models = p.models.clone();
-        let meshes = |id: &str| match &models.iter().find(|m| m.id == id)?.kind {
-            marcam::project::ModelKind::Mesh(src) => {
-                (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
-            }
-            _ => None,
+        // (a carried part where the setup holds it)
+        let held = p.setups.iter().find(|x| x.id == setup).cloned();
+        let meshes = |id: &str| {
+            let src = match &held {
+                Some(x) => p.model_source_in(x, id)?,
+                None => match &p.models.iter().find(|m| m.id == id)?.kind {
+                    marcam::project::ModelKind::Mesh(src) => src.clone(),
+                    _ => return None,
+                },
+            };
+            (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
         };
         let tool = o["tool"].as_u64().map(|t| t as u32);
         match p.op_defaults(
