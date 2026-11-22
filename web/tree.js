@@ -254,6 +254,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
           <button type="button" data-act="eye" class="eye ${isHidden(id) ? "off" : ""}" aria-pressed="${!isHidden(id)}" aria-label="Show the toolpath of ${esc(id)}" title="Show or hide this toolpath (view only; Alt-click: show only this)">${isHidden(id) ? "◌" : "◉"}</button>
           <span class="op-state" data-state-for="${esc(id)}" aria-live="polite"></span>
           <span class="tree-label" data-act="select">${opProblem(op) ? `<span class="op-error" title="${esc(opProblem(op))}">⚠</span> ` : ""}${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(id)} · T${op.tool}${geo}${ot != null ? ` · <span class="tree-time">${fmt(ot)}</span>` : ""}</span></span>
+          <button type="button" data-act="dup" class="op-dup" aria-label="Duplicate ${esc(id)}" title="Duplicate (Ctrl+D; Ctrl+drag onto another setup's operation: a copy there)">⧉</button>
           <button type="button" data-act="delete" aria-label="Delete ${esc(id)}">✕</button></div>`;
         n++;
       });
@@ -1432,6 +1433,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.typeNote = null;
       t.selected = t.selected === id ? null : id;
       render();
+    } else if (act === "dup") {
+      await duplicateOp(id);
     } else if (act === "delete") {
       if (t.selected === id && t.picking) endPicking(false);
       if (t.retype?.op.id === id) t.retype = null;
@@ -1441,6 +1444,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (t.selected === id) t.selected = null;
       await commit({ label: `Deleted ${id}.` });
     }
+  });
+  // (Mar) Ctrl+D: the selected operation duplicated (not while typing, not with a dialog up)
+  document.addEventListener("keydown", (ev) => {
+    if (!(ev.key === "d" || ev.key === "D") || !(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.shiftKey) return;
+    const tg = ev.target;
+    if (tg && (tg.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName))) return;
+    if (document.querySelector("dialog[open]:not(.embedded)")) return;
+    if (!t.doc || !t.selected || !setup()?.operations.some((o) => o.id === t.selected)) return;
+    ev.preventDefault();
+    duplicateOp(t.selected);
   });
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Delete" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
@@ -1458,6 +1471,50 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
    * the same setup); its old file goes if it is left empty. A real edit (the order is the
    * G-code's), undoable.
    */
+  /** (Mar) Operation `id` of the setup worked on duplicated: right after it in its file (or,
+   *  `into` another setup, last there; its picks looked for on that setup's part, flagged
+   *  when not found), a new id, "<name> copy", everything else the same; selected, its form
+   *  open; one edit. */
+  async function duplicateOp(id, into) {
+    const s = setup();
+    const op = s?.operations.find((o) => o.id === id);
+    if (!op) return;
+    if (t.picking) endPicking(false);
+    const dest = into ? t.doc.setups.find((x) => x.id === into) : s;
+    if (!dest) return;
+    const copy = structuredClone(op);
+    copy.id = newOpId(dest);
+    copy.name = `${op.name || typeOf(op.type)?.title || op.type} copy`;
+    delete copy.error;
+    if (dest === s) {
+      s.operations.splice(s.operations.indexOf(op) + 1, 0, copy);
+      const file = s.outputs.find((o) => o.operations.includes(id));
+      if (file) file.operations.splice(file.operations.indexOf(id) + 1, 0, copy.id);
+      else s.outputs.push({ name: `${s.id}_${copy.id}`, title: copy.name, operations: [copy.id] });
+    } else {
+      dest.operations.push(copy);
+      const file = dest.outputs[dest.outputs.length - 1];
+      if (file) file.operations.push(copy.id);
+      else dest.outputs.push({ name: `${dest.id}_${copy.id}`, title: copy.name, operations: [copy.id] });
+      // its picks on that setup's part (as a new model's are found again)
+      if (copy.picks?.length) {
+        try {
+          const { result } = await engine("resolvePicks", t.doc, { setup: dest.id, model: partModel(dest), index_a: copy.index_a ?? 0, signatures: copy.picks }, state.mesh);
+          const lost = result.picks.filter((p) => p.error).map((p) => p.label || "a pick");
+          if (lost.length) copy.error = `not on this setup's part: ${lost.join(", ")}`;
+        } catch (e) {
+          copy.error = `its picks could not be looked for here: ${e.message}`;
+        }
+      }
+      switchSetup(dest.id);
+    }
+    t.draft = null;
+    t.retype = null;
+    t.focus = null;
+    t.selected = copy.id;
+    await commit({ label: `Duplicated ${id} as ${copy.id}${dest === s ? "" : ` in ${dest.name || dest.id}`}.` });
+  }
+
   async function moveOp(id, target, after) {
     if (id === target) return;
     const s = setup();
@@ -1487,12 +1544,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const row = ev.target.closest?.(".tree-op");
     if (!row) return;
     dragging = row.dataset.op;
-    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.effectAllowed = "copyMove";
     ev.dataTransfer.setData("text/plain", dragging);
     row.classList.add("dragging");
   });
   tree.addEventListener("dragover", (ev) => {
     const row = ev.target.closest?.(".tree-op");
+    // (Ctrl over another setup's line: a copy goes there)
+    if (dragging && !row && ev.ctrlKey && ev.target.closest?.(".tree-setuphead")) return ev.preventDefault();
     if (!dragging || !row) return;
     ev.preventDefault();
     const r = row.getBoundingClientRect();
@@ -1509,8 +1568,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     clearMarks();
     tree.querySelectorAll(".dragging").forEach((r) => r.classList.remove("dragging"));
     dragging = null;
+    // (Ctrl: a copy, into the setup dropped on: on one of its operations, or its line)
+    const into = (row || ev.target.closest?.(".tree-setup"))?.closest(".tree-setup")?.dataset.setup;
+    if (!row && id && ev.ctrlKey && into && into !== t.setup) {
+      ev.preventDefault();
+      return duplicateOp(id, into);
+    }
     if (!row || !id) return;
     ev.preventDefault();
+    if (ev.ctrlKey && into && into !== t.setup) return duplicateOp(id, into);
     const r = row.getBoundingClientRect();
     await moveOp(id, row.dataset.op, ev.clientY >= r.top + r.height / 2);
   });

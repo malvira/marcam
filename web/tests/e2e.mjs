@@ -3378,6 +3378,73 @@ try {
       `"${stood}" ${JSON.stringify(ks.stock)}; box ${JSON.stringify(kframe)}`);
   }
 
+  // (Mar) duplicating an operation: the icon (right after it, "<name> copy", selected, one
+  // Undo), Ctrl+D, and Ctrl+drag onto another setup's operation (a copy there)
+  {
+    const job = () => js("document.getElementById('job').value").then(JSON.parse);
+    await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
+    await settle(1000);
+    const d0 = await job();
+    const s0 = d0.setups[0];
+    const src = s0.operations[1];
+    const file0 = s0.outputs.find((o) => o.operations.includes(src.id));
+    await js(`document.querySelector('#tree .tree-op[data-op="${src.id}"] [data-act="dup"]').click(); true`);
+    await waitFor(() => js(`JSON.parse(document.getElementById('job').value).setups[0].operations.length === ${s0.operations.length + 1}`), "the duplicate", 30000);
+    await settle();
+    const d1 = await job();
+    const s1 = d1.setups[0];
+    const copy = s1.operations[2];
+    const file1 = s1.outputs.find((o) => o.name === file0.name);
+    const same = JSON.stringify({ ...src, id: 0, name: 0 }) === JSON.stringify({ ...copy, id: 0, name: 0 });
+    const sel = await js("({ selected: window.__marcam.state.tree.selected, form: !!document.getElementById('opForm') })");
+    await shot("43_duplicated");
+    await js("document.getElementById('menuUndo').click(); true");
+    await settle();
+    const undone = (await job()).setups[0].operations.length;
+    // Ctrl+D on the selected one
+    await js(`document.querySelector('#tree .tree-op[data-op="${src.id}"] [data-act="select"]').click(); true`);
+    await settle();
+    await js("document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, bubbles: true })); true");
+    await waitFor(() => js(`JSON.parse(document.getElementById('job').value).setups[0].operations.length === ${s0.operations.length + 1}`), "the Ctrl+D duplicate", 30000);
+    await settle();
+    const keyed = (await job()).setups[0].operations[2];
+    check("duplicate an operation: right after it in its file, \"<name> copy\", a new id, everything else the same, selected with its form; Undo takes it back; Ctrl+D too",
+      copy.id !== src.id && !d0.setups.some((x) => x.operations.some((o) => o.id === copy.id)) && copy.name === `${src.name || "Pocket"} copy` && same &&
+      file1.operations.indexOf(copy.id) === file1.operations.indexOf(src.id) + 1 && sel.selected === copy.id && sel.form && undone === s0.operations.length && keyed?.name === copy.name,
+      `${src.id} -> ${copy.id} "${copy.name}" same ${same}; file ${JSON.stringify(file1.operations)}; ${JSON.stringify(sel)}; undone ${undone}; Ctrl+D ${keyed?.id} "${keyed?.name}"`);
+    // Ctrl+drag onto another setup's operation: a copy there (its picks looked for there)
+    await js("document.getElementById('treeAddSetup').click(); true");
+    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
+    await waitFor(() => js(modal), "the add setup dialog", 30000);
+    await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
+    await waitFor(() => js(`!${modal}`), "the setup added", 60000);
+    await settle();
+    const d2 = await job();
+    const other = d2.setups[1];
+    // (from the first setup: worked on again, its operation dragged onto the second's head)
+    await js(`document.querySelector('#tree .tree-setup[data-setup="${d2.setups[0].id}"] [data-act=setup]').click(); true`);
+    await settle();
+    await js(`document.querySelector('#tree .tree-setup[data-setup="${other.id}"] [data-act=fold]')?.getAttribute('aria-expanded') === 'false' && document.querySelector('#tree .tree-setup[data-setup="${other.id}"] [data-act=fold]').click(); true`);
+    await settle();
+    const dropped = await js(`(() => {
+      const from = document.querySelector('#tree .tree-op[data-op="${src.id}"]');
+      const dt = new DataTransfer();
+      from.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+      // onto the other setup's head row, or an operation of it (it has none: its head)
+      const to = document.querySelector('#tree .tree-setup[data-setup="${other.id}"] .tree-op') || document.querySelector('#tree .tree-setup[data-setup="${other.id}"] .tree-setuphead .tree-label');
+      if (!to) return 'no target';
+      to.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, ctrlKey: true }));
+      return 'ok';
+    })()`);
+    await settle(800);
+    const d3 = await job();
+    const there = d3.setups[1].operations.find((o) => o.name === `${src.name || "Pocket"} copy`);
+    check("Ctrl+drag an operation onto another setup (its line or one of its operations): a copy there, its picks looked for on that setup's part",
+      dropped === "no target" ? d3.setups[1].operations.length === other.operations.length : !!there && d3.setups[0].operations.length === d2.setups[0].operations.length,
+      `${dropped}; there ${JSON.stringify(there && { id: there.id, error: there.error })}`);
+  }
+
   // 9. phone width: layout stacks, no horizontal scroll
   await S("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(800);

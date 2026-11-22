@@ -224,6 +224,7 @@ function actions(r, app) {
       if (await js(modal)) await js("document.getElementById('sdCancel').click(); true");
       return `${kind} ${rot}`;
     } },
+    { name: "duplicate", w: 1, may: ["project", "selected", "form", "pos"], run: async () => { const k = r.f(); const id = await js(`(() => { const e = [...document.querySelectorAll('#tree .tree-op [data-act="dup"]')]; return e.length ? e[Math.floor(${k} * e.length)].closest('.tree-op').dataset.op : null; })()`); if (id) await click(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="dup"]')`); return id; } },
     { name: "stocknode", w: 1, may: ["selected", "form"], run: async () => { const k = r.pick(["stock", "part"]); return (await click(`document.querySelector('#tree [data-act=${k}]')`)) ? k : null; } },
     { name: "handle", w: 2, may: ["project", "form", "pos", "cam"], run: async () => {
       // (Mar) a drag on a handle (the Stock or Part selected): an arrow or a ring
