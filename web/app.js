@@ -2284,6 +2284,7 @@ new ResizeObserver(() => drawSide()).observe($("side"));
 
 // ---------------------------------------------------------------- project tree (0.2)
 window.__marcam.showError = showError;
+window.__marcam.setupSwitched = () => markStale();
 window.__marcam.handles = setupHandles({ state, edit: (fn) => window.__marcam.tree?.edit(fn) });
 window.__marcam.tree = setupTree({
   engine, $, state, readJob, writeJob, showError, getThree,

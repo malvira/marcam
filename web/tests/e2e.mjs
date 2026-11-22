@@ -1534,7 +1534,10 @@ try {
       `${JSON.stringify({ type: bored.type, tool: bored.tool, d: bored.diameter, depth: bored.depth })} | ${boreNote} | ${converted.type}`);
     // the pocket: its outline and island, its depth
     await js("[...document.querySelectorAll('#detected .detected-btn')].find((b) => b.dataset.start === 'pocket').click(); true");
-    await waitFor(async () => (await doc()).setups[0].operations.length === 4, "the pocket operation", 60000);
+    await waitFor(async () => (await doc()).setups[0].operations.length === 4, "the pocket operation", 60000).catch(async (e) => {
+      // (CI-only: why not)
+      throw new Error(`${e.message}: ${await js("JSON.stringify({ ops: JSON.parse(document.getElementById('job').value).setups[0].operations.map((o) => o.type), error: document.getElementById('error').textContent, draft: window.__marcam.state.tree.draft?.op.type, buttons: [...document.querySelectorAll('#detected .detected-btn')].map((b) => b.dataset.start + ':' + b.textContent).slice(0, 8) })")}`);
+    });
     const pocket = (await doc()).setups[0].operations.find((o) => o.type === "pocket");
     check("the pocket takes its outline, island and depth",
       pocket.paths.length === 2 && pocket.depth === 5 && pocket.top === 0, JSON.stringify({ paths: pocket.paths?.length, depth: pocket.depth }));
@@ -3258,7 +3261,7 @@ try {
     check("the turned knob lies in a vise (no model): a block X 0..100 round it, drawn as cut, its STL, faced and verified clean",
       k.gate.vise && k.gate.model === "none" && k.s.kind === "vise" && k.s.stock.shape === "from_previous" && k.s.part.length === 0 && kb && Math.abs(kb.max[0] - kb.min[0] - 100) < 1e-6 && Math.abs(kb.max[1] - kb.min[1] - 25) < 1e-6 &&
       k.m.total > 100 && k.m.stl === 84 + 50 * k.m.total && k.button && ktabs.length >= 1 && ktabs.every((t) => t.endsWith("OK")) && ksim.kind === "xyz" && ksim.z,
-      `${JSON.stringify(k.gate)}; ${JSON.stringify(k.s.stock)} part ${JSON.stringify(k.s.part)}; box ${JSON.stringify(kb)}; mesh ${JSON.stringify(k.m)}; tabs ${ktabs}; simulated ${JSON.stringify(ksim)}`);
+      `tabs ${ktabs}; simulated ${JSON.stringify(ksim)}; button ${k.button}; ${JSON.stringify(k.gate)}; ${JSON.stringify(k.s.stock)} part ${JSON.stringify(k.s.part)}; box ${JSON.stringify(kb)}; mesh ${JSON.stringify({ total: k.m.total, stl: k.m.stl })}`);
     // the plate, chucked in the rotary; then stood on its end in a vise
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
@@ -3463,7 +3466,7 @@ try {
     await clickGenerate();
     await waitDone("the knob on end planned", 240000);
     await js("if (!window.__marcam.machining.state.view.stock) document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true })); window.__marcam.machining.expand?.(); true");
-    await waitFor(() => js("!!window.__marcam.machining.state.stockMesh && !window.__marcam.machining.state.busy"), "the knob's playback with its stock", 120000);
+    await waitFor(() => js("!!window.__marcam.machining.state.session?.segments && !window.__marcam.machining.state.busy && !window.__marcam.machining.state.swapping"), "the knob's playback", 120000);
     await js(`(() => { const M = window.__marcam, m = M.machining.state, v = M.state.three; window.__scrubFrames = []; const r0 = v.renderer.render.bind(v.renderer); window.__scrubR0 = r0; v.renderer.render = (s, c) => { if (s === v.scene) { const g = m.stockMesh?.geometry; let top = -1e9; if (g) { const p = g.attributes.position.array; for (let i = 2; i < p.length; i += 9) top = Math.max(top, p[i]); } window.__scrubFrames.push([m.pos, top, v.groups.work.rotation.x, document.querySelectorAll('#view3d canvas').length]); } return r0(s, c); }; return true; })()`);
     const segs = await js("window.__marcam.machining.state.session.segments");
     for (const f of [0.15, 0.5, 0.8, 0.6, 0.75, 0.3, 0.9, 0.4]) {

@@ -224,7 +224,7 @@ function actions(r, app) {
     { name: "setup", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=setup]')")) || null },
     { name: "library", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree [data-act=library]')")) || null },
     { name: "tool", w: 1, may: ["selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-tool [data-act=tool]')")) || null },
-    { name: "delsetup", w: 1, may: ["project", "selected", "form"], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=delsetup]')")) || null },
+    { name: "delsetup", w: 1, may: ["project", "selected", "form", "cam", "pos", "hidden"], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=delsetup]')")) || null },
     { name: "foldtree", w: 1, may: [], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=fold]')")) || null },
     { name: "carry", w: 1, may: ["project", "selected", "form", "pos", "hidden", "cam"], run: async () => {
       // (Mar) a setup taking what the last one left: a vise or the rotary, maybe stood on end
@@ -304,7 +304,8 @@ try {
         what = `(threw: ${e.message.slice(0, 80)})`;
       }
       if (VERBOSE) console.log(`  #${i} ${a.name} ${what ?? ""}`);
-      if (a.may.includes("cam")) { camQuietAt = Date.now() + 900; lastCam = `#${i} ${a.name}`; }
+      // (a setup switched to, added or gone: the view frames its stock once it is drawn, later)
+      if (a.may.includes("cam")) { camQuietAt = Date.now() + (["othersetup", "carry", "delsetup"].includes(a.name) ? 5000 : 900); lastCam = `#${i} ${a.name}`; }
       // at once (mid-update: often the next action comes before this one settles)
       await sleep(80);
       const now = await js("window.__monkey.audit()");

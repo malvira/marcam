@@ -461,6 +461,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (id === t.setup) return;
     if (t.picking) endPicking(false);
     t.setup = id;
+    // (its toolpaths are not the ones shown: planned (live, from the cache) or marked out of
+    // date; the eyes and the playback were another setup's, Mar's hide/show trouble)
+    queueMicrotask(() => window.__marcam.setupSwitched?.());
     t.focus = null;
     t.selected = null;
     t.draft = null;
