@@ -214,7 +214,7 @@ function actions(r, app) {
       if (kind) await click("document.getElementById('treeAdd')");
       return kind;
     } },
-    { name: "apply", w: 1, may: ["project", "form", "selected", "pos", "hidden"], run: async () => (await click("document.querySelector('#opForm button[type=submit]')")) || null },
+    { name: "apply", w: 1, may: ["project", "form", "selected", "pos", "hidden"], run: async () => ((await js("!!document.getElementById('opForm')")) ? (await js("document.getElementById('opForm').requestSubmit(); true")) : null) },
     { name: "cancel", w: 1, may: ["form", "selected"], run: async () => (await click("document.getElementById('cancelDraft')")) || null },
     { name: "resolution", w: 1, may: ["controls"], run: async () => {
       // another simulation resolution: the stock simulated again at it (Mar), nothing planned

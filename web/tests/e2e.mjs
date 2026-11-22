@@ -479,6 +479,8 @@ try {
   // (Mar: no setup dialogs) the sections moved off them run without (the rest still with,
   // until each is moved): the setup's type changed in its details, a setup's own stock
   const dialogs = (on) => js(`window.__marcam.project.settings.dialogs = ${on}; true`);
+  // (Mar: no Apply) the operation selected: a new one not complete yet, else the project's
+  const SEL = "(() => { const t = window.__marcam.state.tree; return t.draft?.op.id === t.selected ? t.draft.op : t.doc?.setups.find((x) => x.id === t.setup)?.operations.find((o) => o.id === t.selected); })()";
   /** The setup worked on made `kind` in its details (applied as it is clicked). */
   const setKind = async (kind) => {
     await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
@@ -541,11 +543,11 @@ try {
   const took = [];
   for (const kind of String(typesAll).split(",")) {
     const t0 = Date.now();
+    const before = await js("document.querySelectorAll('#tree .tree-op').length");
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAdd').click(); true`);
-    await waitFor(() => js(`!!document.getElementById('opForm') && !!window.__marcam.state.tree.draft && window.__marcam.state.tree.draft.op.type === '${kind}'`), `the ${kind} form`, 60000);
+    await waitFor(() => js(`!!document.getElementById('opForm') && ${SEL}?.type === '${kind}'`), `the ${kind} form`, 60000);
     // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
     const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
-    const before = await js("document.querySelectorAll('#tree .tree-op').length");
     await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 120000).catch(async (e) => {
       // (what held it: the form still open and why, the status line)
@@ -561,13 +563,15 @@ try {
   check("every operation type's new form is fully filled and applies cleanly", filled.length === 18 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
-  await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'rotary_finish'"), "the finish form", 60000);
+  await waitFor(() => js(`${SEL}?.type === 'rotary_finish'`), "the finish form", 60000);
   const pat1 = await js("document.getElementById('opForm').elements.pattern.value");
   await js("const f = document.getElementById('opForm'); f.elements.feed.value = '123'; f.elements.feed.dispatchEvent(new Event('input', { bubbles: true })); f.elements.tool.value = '2'; f.elements.tool.dispatchEvent(new Event('change', { bubbles: true })); true");
-  await waitFor(() => js("window.__marcam.state.tree.draft?.op.tool === 2 && document.getElementById('opForm').elements.pattern.value === 'along'"), "defaults for the V-bit", 60000);
+  await waitFor(() => js(`${SEL}?.tool === 2 && document.getElementById('opForm').elements.pattern.value === 'along'`), "defaults for the V-bit", 60000);
   const keptFeed = await js("document.getElementById('opForm').elements.feed.value");
   check("changing the tool refreshes untouched defaults and keeps edited ones", pat1 === "around" && keptFeed === "123", `pattern around -> along with the V-bit; edited feed kept at ${keptFeed}`);
-  await js("document.getElementById('cancelDraft').click(); true");
+  // (no Cancel: it is in the project; deleted)
+  await settle();
+  await treeAct(await js("window.__marcam.state.tree.selected"), "delete");
   await settle();
 
   // add an operation from the registry's form
@@ -677,21 +681,21 @@ try {
   const plateMachine = await js("document.getElementById('machine').value");
   const plateTypes = (await addTypes()).join(",");
   check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,chamfer,thread_mill,bore,contour,raster3d,waterline,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
-  await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAdd').click(); true");
-  await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'drill' && !!document.getElementById('opForm')"), "the drill form", 60000);
-  const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
   const plateOps = await js("document.querySelectorAll('#tree .tree-op').length");
+  await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAdd').click(); true");
+  await waitFor(() => js(`${SEL}?.type === 'drill' && !!document.getElementById('opForm')`), "the drill form", 60000);
+  const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
   await js("const f = document.getElementById('opForm'); f.elements.points.value = '30 20; 33 20'; f.elements.points.dispatchEvent(new Event('input', { bubbles: true })); f.requestSubmit(); true");
   await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${plateOps + 1}`), "the drill to be added", 60000);
   const drillPts = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.type === 'drill' && o.points.length === 2)?.points)");
   check("3-axis form: fully filled, and points are typed as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}`);
   // a V-carve whose outline comes from an SVG file, through the form's file input
+  const vOps = await js("document.querySelectorAll('#tree .tree-op').length");
   await js("document.getElementById('treeAddType').value = 'vcarve'; document.getElementById('treeAdd').click(); true");
-  await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'vcarve' && !!document.getElementById('opForm')"), "the V-carve form", 60000);
+  await waitFor(() => js(`${SEL}?.type === 'vcarve' && !!document.getElementById('opForm')`), "the V-carve form", 60000);
   await js("const inp = document.querySelector('#opForm input[data-svg]'); const dt = new DataTransfer(); dt.items.add(new File(['<svg xmlns=\"http://www.w3.org/2000/svg\"><polygon points=\"0,0 20,0 10,8\"/></svg>'], 'tri.svg', { type: 'image/svg+xml' })); inp.files = dt.files; document.getElementById('opForm').elements.__svg_height.value = '8'; inp.dispatchEvent(new Event('change', { bubbles: true })); true");
   await waitFor(() => js("document.getElementById('opForm').elements.paths.value.includes('30 16')"), "the SVG outline in the form", 60000);
   const svgField = await js("document.getElementById('opForm').elements.paths.value");
-  const vOps = await js("document.querySelectorAll('#tree .tree-op').length");
   await js("document.getElementById('opForm').requestSubmit(); true");
   await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${vOps + 1}`), "the V-carve to be added", 60000);
   check("SVG import replaces the V-carve outline (at the old outline's corner, 8 mm tall)", /^20 24; 40 24; 30 16; 20 24$/.test(svgField), svgField);
@@ -1537,7 +1541,7 @@ try {
     const bored = (await doc()).setups[0].operations[1];
     // a drilling picked on it says use Bore instead, and becomes a bore
     await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAdd').click(); true");
-    await waitFor(() => js("!!window.__marcam.state.tree.draft && !!document.getElementById('pickFaces')"), "the drilling draft", 60000);
+    await waitFor(() => js(`${SEL}?.type === 'drill' && !!document.getElementById('pickFaces')`), "the drilling", 60000);
     await js("document.getElementById('pickFaces').click(); true");
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking for the draft", 30000);
     await sleep(300);
@@ -1546,8 +1550,8 @@ try {
     await waitFor(() => js("!!document.getElementById('boreInstead')"), "the Bore instead button", 10000);
     const boreNote = await js("document.getElementById('pickNotes').textContent");
     await js("document.getElementById('boreInstead').click(); true");
-    await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'bore'"), "the draft bored", 10000);
-    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await waitFor(() => js(`${SEL}?.type === 'bore'`), "the drilling bored", 10000);
+    await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(async () => (await doc()).setups[0].operations.length === 3, "the bore applied", 60000);
     const converted = (await doc()).setups[0].operations[2];
     check("holes without a tool of their size are bored; a drilling on one says use Bore instead, and Bore instead makes it a bore",
@@ -1644,7 +1648,7 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(file)}, "bracket_indexed.marcam.json").then(() => true)`);
     await settle();
     await js("document.getElementById('treeAddType').value = 'face'; document.getElementById('treeAdd').click(); true");
-    await waitFor(() => js("!!window.__marcam.state.tree.draft && !!document.getElementById('pickFaces')"), "the facing draft", 60000);
+    await waitFor(() => js(`${SEL}?.type === 'face' && !!document.getElementById('pickFaces')`), "the facing", 60000);
     await js("document.getElementById('pickFaces').click(); true");
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking a side face", 30000);
     // orbit underneath to see the underside
@@ -1654,7 +1658,7 @@ try {
     const side = sideAt ? await js(`const pr = await window.__marcam.tree.pickAt(${sideAt[2]}, ${sideAt[3]}); pr && pr.pickable ? pr.pickable.kind : "none"`) : "not visible";
     await js("document.getElementById('pickFaces').click(); true");
     await sleep(400);
-    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(async () => (await doc()).setups[0].operations.some((o) => o.type === "face"), "the facing applied", 60000);
     const face = (await doc()).setups[0].operations.find((o) => o.type === "face");
     check("indexed: picking the underside sets the facing's A index (180) and its depth from the bar (40 - 12 = 28)",
@@ -1701,8 +1705,8 @@ try {
     check("a project saved with no operations reopens with its part and stock", reopened.part > 0 && reopened.stock > 0, JSON.stringify(reopened));
     // add an operation back: Generate works
     await js("document.getElementById('treeAddType').value = 'raster3d'; document.getElementById('treeAdd').click(); true");
-    await waitFor(() => js("!!window.__marcam.state.tree.draft"), "the new raster", 60000);
-    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await waitFor(() => js(`${SEL}?.type === 'raster3d' && !!document.getElementById('opForm')`), "the new raster", 60000);
+    await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(async () => (await doc()).setups[0].operations.length === 1, "the raster applied", 60000);
     await sleep(500);
     const enabled = await js("!document.getElementById('generate').disabled");
@@ -2091,7 +2095,7 @@ try {
     }
     await js(`(() => { const e = document.getElementById('opForm').elements.tool; e.value = '${other.v}'; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     await sleep(800);
-    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(async () => (await doc()).setups[0].operations.find((o) => o.id === face.id).tool === Number(other.v), "the new tool applied", 60000);
     await clickGenerate();
     await waitDone("the plate with the new tool", 240000);
@@ -2122,9 +2126,9 @@ try {
     await js("[...document.querySelectorAll('#tpList .tp-row')].find((r) => !/Spiral O Metal 3\.175 x 12/.test(r.textContent)).click(); true");
     await waitFor(() => js("!document.getElementById('toolPick').open"), "the library closed", 10000);
     await settle();
-    await waitFor(() => js("!!document.querySelector('#opForm button[type=submit]')"), "the editor after the pick", 10000);
+    await waitFor(() => js("!!document.getElementById('opForm')"), "the editor after the pick", 10000);
     const picked = await js("(() => { const d = JSON.parse(document.getElementById('job').value); const sel = document.getElementById('opForm').elements.tool; return { n: Number(sel.value), label: sel.options[sel.selectedIndex].textContent, unindexed: d.unindexed || [], tools: d.tools.length }; })()");
-    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await js("document.getElementById('opForm').requestSubmit(); true");
     await settle();
     await clickGenerate();
     await waitDone("the plate with a library tool", 240000);
@@ -2311,9 +2315,6 @@ try {
     await sleep(300);
     const hitX = parseFloat(String(hit).split(" at ")[1]);
     const picked = await js("({ x: +document.getElementById('opForm').elements.x.value, notes: [...document.querySelectorAll('#opNotes, .pick-notes')].map((e) => e.textContent).join(' ') })");
-    // the draft is planned live: its toolpath drawn over the others before it is applied
-    await waitFor(() => js("(window.__marcam.state.draftPreview?.points || 0) > 0 && window.__marcam.state.three.groups.draft.children.length > 0"), "the draft's live preview", 60000);
-    const preview = await js("({ ...window.__marcam.state.draftPreview, previews: window.__marcam.calls.planPreview || 0 })");
     await shot("21c_parting_pick");
     await js("document.getElementById('pickFaces').click(); true");
     await sleep(300);
@@ -2322,12 +2323,11 @@ try {
     await waitFor(() => js("[...document.querySelectorAll('#tree .tree-op')].some((r) => /Parting/.test(r.textContent))"), "the parting operation", 60000);
     await settle();
     await sleep(500);
-    const previewGone = await js("window.__marcam.state.three.groups.draft.children.length === 0");
     await clickGenerate();
     await waitDone("planning with the parting", 120000);
     const res = await js("(() => { const r = window.__marcam.state.result; const p = r.programs.find((q) => /--- parting at X/.test(q.gcode)); return p ? { name: p.name, head: p.gcode.split('\\n').find((l) => /--- parting at X/.test(l)), ops: p.time?.ops || p.ops || null, issues: p.issues.length, total: r.time_total_s } : null; })()");
-    check("parting: a new operation at the part's back by default, placed by a click on the part (its toolpath previewed live before Apply), cut as a groove to a radius, planned with a time",
-      Math.abs(+x0 - -21.7) < 1e-6 && /band at -/.test(hit) && Math.abs(picked.x - hitX) < 0.01 && hitX > -14 && hitX < -1.8 && res && new RegExp(`X${picked.x.toFixed(3)}: down to a radius of 7\.000`).test(res.head) && res.issues === 0 && res.total > 0 && preview.points > 0 && preview.previews > 0 && previewGone,
+    check("parting: a new operation at the part's back by default, placed by a click on the part (in the project at once, no Apply), cut as a groove to a radius, planned with a time",
+      Math.abs(+x0 - -21.7) < 1e-6 && /band at -/.test(hit) && Math.abs(picked.x - hitX) < 0.01 && hitX > -14 && hitX < -1.8 && res && new RegExp(`X${picked.x.toFixed(3)}: down to a radius of 7\.000`).test(res.head) && res.issues === 0 && res.total > 0,
       `default ${x0}; ${hit}; preview ${JSON.stringify(preview)}, gone after Apply ${previewGone}; picked ${JSON.stringify(picked)}; ${JSON.stringify(res)}`);
   }
 
@@ -2895,7 +2895,8 @@ try {
         document.getElementById('treeAddType').value = kind;
         document.getElementById('treeAdd').click();
         // (the form complete: its defaults in, the feed last)
-        for (let i = 0; i < 200 && !(t.draft?.op.type === kind && document.getElementById('opForm')?.elements.feed); i++) await new Promise((r) => setTimeout(r, 50));
+        const sel = () => (t.draft?.op.id === t.selected ? t.draft.op : t.doc?.setups.find((x) => x.id === t.setup)?.operations.find((o) => o.id === t.selected));
+        for (let i = 0; i < 200 && !(sel()?.type === kind && document.getElementById('opForm')?.elements.feed); i++) await new Promise((r) => setTimeout(r, 50));
         const f = document.getElementById('opForm');
         const ty = t.types.find((x) => x.kind === kind);
         for (const p of ty.params) {
@@ -2904,8 +2905,10 @@ try {
           if (p.kind === "regions" || /^stepover_(deg|mm)$/.test(p.name) || p.name === "index_a") continue;
           if (!f?.elements[p.name]) out.push(kind + "." + p.name);
         }
-        document.getElementById('cancelDraft')?.click();
-        for (let i = 0; i < 100 && t.draft; i++) await new Promise((r) => setTimeout(r, 50));
+        // (in the project at once: deleted again)
+        const id = t.selected;
+        document.querySelector('#tree .tree-op[data-op="' + id + '"] [data-act="delete"]')?.click();
+        for (let i = 0; i < 100 && t.doc?.setups.some((x) => x.operations.some((o) => o.id === id)); i++) await new Promise((r) => setTimeout(r, 50));
       }
       return out;
     })()`);
@@ -3268,7 +3271,7 @@ try {
     await settle();
     const k = await addCarried("vise");
     await js("document.getElementById('treeAddType').value = 'face'; document.getElementById('treeAdd').click(); true");
-    await waitFor(() => js("window.__marcam.state.tree.draft?.op.type === 'face' && !!document.getElementById('opForm')"), "the facing form", 60000);
+    await waitFor(() => js(`${SEL}?.type === 'face' && !!document.getElementById('opForm')`), "the facing form", 60000);
     await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups[1].operations.some((o) => o.type === 'face')"), "the facing added", 60000);
     await clickGenerate();

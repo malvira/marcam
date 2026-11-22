@@ -282,15 +282,17 @@ const A = {
     type = type || r.pick(types);
     if (!types.includes(type)) return null;
     await js(`document.getElementById('treeAddType').value = '${type}'; document.getElementById('treeAdd').click(); true`);
-    await waitFor(() => js(`!!window.__marcam.state.tree.draft && window.__marcam.state.tree.draft.op.type === '${type}' && !!document.getElementById('opForm')`), `a new ${type}`, 15000).catch(() => {});
+    // (Mar: no Apply) a whole one is in the project at once; one not complete yet waits
+    await waitFor(() => js(`(() => { const t = window.__marcam.state.tree; const op = t.draft?.op.id === t.selected ? t.draft.op : t.doc?.setups.find((x) => x.id === t.setup)?.operations.find((o) => o.id === t.selected); return op?.type === '${type}' && !!document.getElementById('opForm'); })()`), `a new ${type}`, 15000).catch(() => {});
     await sleep(200);
     return `add ${type}`;
   },
   async apply() {
-    if (!(await js("!!document.querySelector('#opForm button[type=submit]')"))) return null;
+    // (Enter in the form: it applies as it is changed, this applies it at once)
+    if (!(await js("!!document.getElementById('opForm')"))) return null;
     const before = await js("document.getElementById('job').value");
     const what = await js("(() => { const t = window.__marcam.state.tree; return (t.draft?.op.id === t.selected ? 'new ' : t.retype ? 'retyped ' : '') + t.selected; })()");
-    await js("document.querySelector('#opForm button[type=submit]').click(); true");
+    await js("document.getElementById('opForm').requestSubmit(); true");
     await sleep(300);
     // a new operation: until it is in the project or refused (its check can wait in the
     // engine behind a live update)

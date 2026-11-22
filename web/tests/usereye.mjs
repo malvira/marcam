@@ -166,7 +166,8 @@ const key = async (k, mods = 0) => {
   await S("Input.dispatchKeyEvent", { type: "keyUp", key: k, modifiers: mods });
 };
 const type = async (ch) => {
-  await S("Input.dispatchKeyEvent", { type: "keyDown", key: ch, text: ch, windowsVirtualKeyCode: ch.charCodeAt(0) });
+  // (a full stop's key code is 190: its character code, 46, is the Delete key's)
+  await S("Input.dispatchKeyEvent", { type: "keyDown", key: ch, text: ch, windowsVirtualKeyCode: ch === "." ? 190 : ch === "-" ? 189 : ch.charCodeAt(0) });
   await S("Input.dispatchKeyEvent", { type: "keyUp", key: ch });
 };
 const viewRect = () => read("(() => { const r = document.getElementById('view3d').getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); })()");
@@ -468,6 +469,53 @@ try {
   }
   await clean("setup 2 independent placed");
 
+  // ---------------------------------------------------------------- an operation edited live
+  // (Mar: "don't want the apply button ... as you change the toolpaths should be updating")
+  // the plate example's pocket: its step down typed digit by digit, nothing clicked after;
+  // the toolpath on the screen changes, the field keeps what was typed, Ctrl+Z brings it back
+  await read("window.confirm = () => true; true");
+  await read("(() => { const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await click("#loadExample");
+  await waitFor(() => read("(() => { try { return JSON.parse(document.getElementById('job').value).setups[0].operations.some((o) => o.id === 'op2') && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "the plate example", 180000);
+  await settled();
+  await click("#tree .tree-op[data-op=op2] .tree-label");
+  await settled();
+  const sdCss = "#opForm [name=step_down]";
+  check("the pocket's form: no Apply or Cancel button anywhere", !!(await where(sdCss)) && !(await where("button", "^(Apply|Cancel)$")));
+  const diff = (a, b, [x0, y0, w, h]) => {
+    let n = 0;
+    for (let y = y0; y < y0 + h; y += 2)
+      for (let x = x0; x < x0 + w; x += 2) {
+        const p = a.at(x, y), q = b.at(x, y);
+        if (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]) > 60) n++;
+      }
+    return n;
+  };
+  const lr = await viewRect();
+  const v0 = await shot("pocket_before");
+  const sd0 = await read(`document.querySelector('${sdCss}')?.value`);
+  await click(sdCss);
+  await key("a", 2);
+  for (const ch of "2.5") {
+    await type(ch);
+    await sleep(120);
+  }
+  await settled();
+  const shownSd = await read(`document.querySelector('${sdCss}')?.value`);
+  const focused = await read(`document.activeElement === document.querySelector('${sdCss}')`);
+  const v1 = await shot("pocket_step_down_typed");
+  const d1 = diff(v0, v1, lr);
+  const saved = await read("JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.id === 'op2').step_down");
+  check("a step down typed (2.5), nothing clicked: the toolpath on the screen changes", d1 > 150 && saved === 2.5, `pixels changed ${d1}; saved ${saved}`);
+  check("the field keeps 2.5 and the focus after the plan settles", shownSd === "2.5" && focused, `shown ${shownSd}; focused ${focused}`);
+  await clean("an operation edited live");
+  await read("document.activeElement?.blur?.(); true");
+  await key("z", 2);
+  await settled();
+  const v2 = await shot("pocket_undone");
+  const d2 = diff(v0, v2, lr);
+  const back = await read(`document.querySelector('${sdCss}')?.value`);
+  check("Ctrl+Z: the old toolpath back on the screen (one step for the typing)", back === sd0 && d2 < d1 / 3, `field ${back} (was ${sd0}); pixels off the old ${d2} (edit ${d1})`);
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

@@ -272,7 +272,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     html += `<div class="row small"><select id="treeAddType" aria-label="Operation type">${opts}</select>
       <button type="button" id="treeAdd">Add operation</button></div>`;
     if (t.problems.length) html += `<div class="error small">${t.problems.map(esc).join("<br>")}</div>`;
-    if (t.draft) html += `<div class="muted small">New operation ${esc(t.draft.op.id)} (not saved until Apply)</div>`;
+    if (t.draft) html += `<div class="muted small">New operation ${esc(t.draft.op.id)}: added once its fields are complete</div>`;
     html += `</div></div>`;
     // the setups after the one being worked on
     for (const x of t.doc.setups.slice(t.doc.setups.indexOf(s) + 1)) html += setupHead(x, false) + otherOps(x) + `</div>`;
@@ -553,7 +553,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         const was = [...a.options].find((o) => o.defaultSelected)?.value;
         const now = [...b.options].find((o) => o.defaultSelected)?.value;
         if (a.value !== was && now === was && [...b.options].some((o) => o.value === a.value)) b.value = a.value;
-      } else if (a.value !== a.defaultValue && b.defaultValue === a.defaultValue) {
+      } else if (a.value !== a.defaultValue && (b.defaultValue === a.defaultValue || a === document.activeElement)) {
         b.value = a.value;
       }
     }
@@ -730,7 +730,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       ${opProblem(op) ? `<div class="error small" id="opError">Not planned: ${esc(opProblem(op))}. ${op.error ? "Pick it again or change its type." : "Choose another tool."}</div>` : ""}
       <label>Type <select name="__type" aria-label="Operation type of ${esc(op.id)}">${typeOpts}</select></label>
       ${t.typeNote && t.typeNote.id === op.id ? `<div class="muted small" id="typeNote">${esc(t.typeNote.text)}</div>` : ""}
-      ${t.retype && t.retype.op.id === op.id ? `<div class="muted small">${t.retype.from !== op.type ? `Type changed from ${esc(typeOf(t.retype.from)?.title || t.retype.from)}: ` : "Changed: "}not saved until Apply</div>` : ""}
+      ${t.retype && t.retype.op.id === op.id ? `<div class="muted small">${t.retype.from !== op.type ? `Type changed from ${esc(typeOf(t.retype.from)?.title || t.retype.from)}: ` : "Changed: "}not applied yet (see below)</div>` : ""}
       <label>Name <input name="__name" value="${esc(op.name || "")}"></label>`;
     // (the rarely changed settings folded away under More)
     let more = "";
@@ -822,9 +822,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     // face and axial selections bound rotary operations (X/A) and the 3D raster
     if (mode?.legacy) html += `<label>axial range (mm)<input name="__axial" value="${ax ? ax.x.join(", ") : ""}" placeholder="all"></label>`;
-    const pending = (t.draft && t.draft.op.id === op.id) || (t.retype && t.retype.op.id === op.id);
     const feedy = ty.params.some((p) => ["feed", "rough_feed", "finish_feed", "plunge_feed"].includes(p.name));
-    html += `<div id="opErrors" class="error small hidden"></div>${feedy ? '<div id="opFeedsNotes" class="small muted" aria-live="polite"></div>' : ""}<div class="row"><button type="submit" class="primary">Apply</button>${pending ? ' <button type="button" id="cancelDraft">Cancel</button>' : ""}${feedy ? ' <button type="button" id="opCalcFeeds" title="Calculate the feeds for this tool, its stepover and depth in the setup\'s material at the setup\'s spindle speed (chip load, chip thinning), within the machine\'s cap">Calculate feeds</button>' : ""}</div></form>`;
+    html += `<div id="opErrors" class="error small hidden"></div>${feedy ? '<div id="opFeedsNotes" class="small muted" aria-live="polite"></div>' : ""}<div class="row">${feedy ? '<button type="button" id="opCalcFeeds" title="Calculate the feeds for this tool, its stepover and depth in the setup\'s material at the setup\'s spindle speed (chip load, chip thinning), within the machine\'s cap">Calculate feeds</button>' : ""}</div></form>`;
     const cur = kept?.el || ed;
     const focus = kept?.focus || focusIn(ed);
     if (cur.__html === html) {
@@ -1097,6 +1096,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     paintPicked();
     if (t.draft && mode.faces) await refreshDefaults();
     else renderEditor();
+    if (t.draft) await applyForm({ quiet: true });
   }
 
   /** Toggle the feature under a canvas point; returns the face region hit (with the feature
@@ -1289,6 +1289,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         if (gen !== t.gen || t.selected !== id || t.setup !== s.id || setup()?.operations.some((o) => o.id === id)) return;
         t.draft = { op: { id, ...result }, out, title: ty.title };
         render();
+        await applyForm({ quiet: true });
       } catch (e) {
         t.draft = null;
         t.selected = null;
@@ -1733,6 +1734,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.edited = t.retype ? new Set(kept) : null;
     }
     renderEditor();
+    await applyForm();
   }
 
   /**
@@ -1751,8 +1753,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
       for (const [k, v] of Object.entries(now)) if (k !== "tool" && k in cur && same(cur[k], was[k])) next[k] = v;
       t.retype = { op: next, from: t.retype?.from || cur.type };
-      t.typeNote = { id: cur.id, text: `Now T${tool}: the values that came from the old tool follow it; the ones you set stay. Apply to keep it.` };
+      t.typeNote = { id: cur.id, text: `Now T${tool}: the values that came from the old tool follow it; the ones you set stay.` };
       renderEditor();
+      await applyForm();
     } catch (e) {
       showError(`Tool T${tool}: ${e.message}`);
     }
@@ -1852,7 +1855,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return refreshDefaults();
     }
     if (el.closest("#opForm") && el.name === "tool") return retool(parseInt(el.value, 10));
-    if (el.closest("#opForm") && el.name === "__axial" && t.draft) return refreshDefaults();
+    if (el.closest("#opForm") && el.name === "__axial" && t.draft) {
+      await refreshDefaults();
+      return applyForm();
+    }
+    if (el.closest("#opForm") && el.name && !el.dataset?.svg && el.type !== "file") {
+      clearTimeout(opTimer);
+      return applyForm({ typing: el.tagName === "INPUT" && el.type !== "checkbox" && el.type !== "radio" });
+    }
     if (el.id === "treeSetup") {
       // another setup: what was being edited here is dropped
       switchSetup(el.value);
@@ -1898,6 +1908,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       await commit({ label, typing: true });
     }, 150);
   });
+  // (Mar: no Apply) the operation's form applies as it is typed in, half a second after the
+  // typing stops (a burst one Undo step); the toolpath planned again in the background
+  let opTimer = null;
+  $("tree").addEventListener("input", (ev) => {
+    const el = ev.target;
+    if (!el.closest?.("#opForm") || !el.name || el.tagName === "SELECT" || el.type === "checkbox" || el.type === "radio" || el.type === "file") return;
+    clearTimeout(opTimer);
+    opTimer = setTimeout(() => {
+      if (el.isConnected) applyForm({ typing: true });
+    }, 500);
+  });
   // (the operation form's More: kept open or shut as the person left it)
   $("tree").addEventListener("toggle", (ev) => {
     if (ev.target.id === "opMore") t.moreOpen = ev.target.open;
@@ -1908,11 +1929,51 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     // (the operation's form; the setup's form in the details is the setup dialog's own)
     if (ev.target.id !== "opForm") return;
     ev.preventDefault();
-    const op = readForm();
+    clearTimeout(opTimer);
+    await applyForm();
+  });
+  /** The operation's form written to the project (one edit; a typing burst one Undo step),
+   *  when the engine takes it; else the reason shown at the form (at the field it names) and
+   *  the last good plan kept. One at a time: a change made meanwhile applied after. */
+  let applying = null, applyAgain = null;
+  async function applyForm(opts = {}) {
+    if (applying) {
+      applyAgain = { ...(applyAgain || {}), ...opts };
+      return applying;
+    }
+    applying = applyOnce(opts);
+    try {
+      return await applying;
+    } finally {
+      applying = null;
+      if (applyAgain) {
+        const o = applyAgain;
+        applyAgain = null;
+        await applyForm(o);
+      }
+    }
+  }
+  async function applyOnce(opts) {
+    if (!$("opForm") || !t.selected || !opById(t.selected)) return false;
+    let op;
+    try {
+      op = readForm();
+    } catch (e) {
+      return showFormError(e.message, opts);
+    }
     const doc = structuredClone(t.doc);
     const s = doc.setups.find((x) => x.id === t.setup);
+    if (!s) return false;
     const isNew = !!(t.draft && t.draft.op.id === op.id);
-    if (t.draft && t.draft.op.id === op.id) {
+    if (!isNew) {
+      const was = s.operations.find((o) => o.id === op.id);
+      // nothing changed: nothing to write (nor a pending type change to drop)
+      if (was && JSON.stringify(was) === JSON.stringify(op) && !t.retype) {
+        showFormError(null);
+        return true;
+      }
+    }
+    if (isNew) {
       s.operations.push(op);
       let outName = t.draft.out;
       if (outName === "__new") {
@@ -1939,13 +2000,40 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (t.picking) endPicking(false);
       const display = !!t.displayOnly;
       t.displayOnly = false;
-      await commit({ display, label: `${isNew ? "Added" : "Edited"} ${op.id}.` });
+      showFormError(null);
+      await commit({ display, typing: !isNew && !!opts.typing, label: `${isNew ? "Added" : "Edited"} ${op.id}.` });
+      return true;
     } catch (e) {
-      const box = $("opErrors");
-      box.textContent = e.message.replace(/^project 0\.2: /, "");
-      box.classList.remove("hidden");
+      t.displayOnly = false;
+      return showFormError(e.message.replace(/^project 0\.2: /, ""), opts);
     }
-  });
+  }
+  /** The reason a form's values are refused, shown under the form and at the field it names
+   *  (`msg` null: none). */
+  function showFormError(msg, opts = {}) {
+    const f = $("opForm");
+    for (const x of f?.querySelectorAll(".invalid") || []) x.classList.remove("invalid");
+    for (const x of f?.querySelectorAll(".field-error") || []) x.remove();
+    const box = $("opErrors");
+    if (!box) return false;
+    if (!msg || opts.quiet) {
+      box.textContent = "";
+      box.classList.add("hidden");
+      return false;
+    }
+    box.textContent = msg;
+    box.classList.remove("hidden");
+    const named = [...(f?.elements || [])].find((x) => x.name && !x.name.startsWith("__") && new RegExp(`\\b${x.name}\\b`).test(msg));
+    if (named) {
+      named.classList.add("invalid");
+      const note = document.createElement("div");
+      note.className = "field-error error small";
+      note.textContent = msg;
+      (named.closest("label") || named).after(note);
+    }
+    return false;
+  }
+  state.tree.applyForm = applyForm;
   // clicks on the 3D view pick faces while picking; a drag (orbit, pan) is not a pick
   const host = $("view3d");
   let down = null;
