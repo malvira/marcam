@@ -93,12 +93,28 @@ export function partPane(doc, s, esc, opts = {}) {
       ${m ? '<button type="button" id="ptInch" title="The file was drawn in inches: the part made 25.4 times bigger, its stock fitted again (Undo takes it back)">File in inches (x25.4)</button>' : ""}</div>`;
   }
   // (Mar: "a way in 4th to center up a part"): on the rotary axis, placed in one click
-  const presets = kindOf(s) !== "vise" ? `<div class="row small part-presets" role="group" aria-label="Place the part on the rotary axis">
+  // (Mar: preset buttons) in the vise: centred or flush in the block, and quarter turns
+  const presets = kindOf(s) === "vise" ? `<div class="row small part-presets" role="group" aria-label="Place the part in the block">
+      <span class="muted">Position</span>
+      <button type="button" data-preset="cx" title="The part's middle at the block's middle in X">Center X</button>
+      <button type="button" data-preset="cy" title="The part's middle at the block's middle in Y">Center Y</button>
+      <button type="button" data-preset="cxy" title="The part's middle at the block's middle in X and Y">Center XY</button>
+      <button type="button" data-preset="top" title="The part's top at the block's top (Z0)">Top flush</button>
+      <button type="button" data-preset="bottom" title="The part's bottom at the block's bottom">Bottom flush</button>
+      <button type="button" data-preset="cz" title="The part's middle at the block's middle in Z">Center Z</button></div>` + `<div class="row small part-presets" role="group" aria-label="Turn the part a quarter">
+      <span class="muted">Rotation</span>
+      ${["X", "Y", "Z"].map((a) => `<button type="button" data-preset="turn" data-axis="${a}" data-deg="-90" title="A quarter turn back about ${a}">${a} −90°</button><button type="button" data-preset="turn" data-axis="${a}" data-deg="90" title="A quarter turn about ${a}">${a} +90°</button>`).join("")}
+      <button type="button" data-preset="unturn" title="Not turned at all">0°</button></div>` : kindOf(s) !== "vise" ? `<div class="row small part-presets" role="group" aria-label="Place the part on the rotary axis">
       <button type="button" data-preset="axis" title="The part's middle (across X) onto the rotary axis">Center on axis</button>
       <button type="button" data-preset="along" title="The part halfway along the bar">Center along stock</button>
       <button type="button" data-preset="front" title="The part's front at the bar's front face (X0)">Flush to front</button>
       <button type="button" data-preset="back" title="The part's back at the bar's back end">Flush to back</button></div>` : "";
-  if (from) return html + `<div class="muted small">It goes with the stock ${esc(from.name || from.id)} left: move and turn them together with the Stock's handles.</div>${presets}</div>`;
+  // (carried in the vise: the block is the piece itself; turned a quarter, its stock with it)
+  const carriedPresets = kindOf(s) === "vise" ? `<div class="row small part-presets" role="group" aria-label="Turn the part a quarter">
+      <span class="muted">Rotation</span>
+      ${["X", "Y", "Z"].map((a) => `<button type="button" data-preset="turn" data-axis="${a}" data-deg="-90" title="A quarter turn back about ${a}">${a} −90°</button><button type="button" data-preset="turn" data-axis="${a}" data-deg="90" title="A quarter turn about ${a}">${a} +90°</button>`).join("")}
+      <button type="button" data-preset="unturn" title="Not turned at all">0°</button></div>` : presets;
+  if (from) return html + `<div class="muted small">It goes with the stock ${esc(from.name || from.id)} left: move and turn them together with the Stock's handles.</div>${carriedPresets}</div>`;
   if (!m) return html + `<div class="muted small">${s.part?.length ? "A revolved profile stays on the rotary axis." : "This setup has no model: its operations work on the stock."}</div></div>`;
   const t = m.translate || [0, 0, 0], r = m.rotate || [0, 0, 0];
   const rotary = kindOf(s) !== "vise";

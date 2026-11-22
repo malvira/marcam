@@ -9,6 +9,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 import { describeStock, stockRadius } from "./project.js";
 import { applyPartField, applyStockField, carriedFrom, fitStock, meshModelOf, partPane, rangesFollow, stockPane } from "./stockpane.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
+import { moveSetup } from "./handles.js";
 
 export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree, machineArg }) {
   // gen: bumped when the project is replaced, so editor work still awaiting the engine then
@@ -344,17 +345,47 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
    *  its middle onto the axis (`axis`), halfway along the bar (`along`), its front at the
    *  bar's face (`front`) or its back at the bar's end (`back`). A part of its own is moved;
    *  a carried one moves with its stock (the stock's offset). */
-  async function placePreset(which, label) {
+  async function placePreset(which, label, data = {}) {
     const s = setup();
     if (!s) return;
-    let lo, hi, len;
+    let lo, hi, len, box;
     try {
       [lo, hi] = (await engine("meshTriangles", t.doc, { setup: s.id }, state.mesh)).result.bounds;
-      len = (await engine("setupFrame", t.doc, { setup: s.id })).result.stock.length;
+      const fr = (await engine("setupFrame", t.doc, { setup: s.id })).result;
+      len = fr.stock?.length;
+      box = fr.stock_box;
     } catch (e) {
       return showError(`${label}: ${e.message}`);
     }
+    // a quarter turn (about the part's middle), or none at all
+    if (which === "turn" || which === "unturn") {
+      const mid = [0, 1, 2].map((i) => (lo[i] + hi[i]) / 2);
+      let what;
+      if (which === "turn") {
+        what = moveSetup(t.doc, s, { k: "XYZ".indexOf(data.axis), deg: +data.deg, pivot: mid });
+      } else if (carriedFrom(t.doc, s)) {
+        if (!s.stock.rotate && !s.stock.turn) return;
+        delete s.stock.rotate;
+        delete s.stock.turn;
+        what = "unturned";
+      } else {
+        const m = t.doc.models.find((x) => s.part?.includes(x.id) && x.kind === "mesh");
+        if (!m?.rotate) return;
+        delete m.rotate;
+        what = "unturned";
+      }
+      if (!what) return;
+      return commit({ label: `Setup "${s.name || s.id}": the part ${label}.` });
+    }
     const d = [0, 0, 0];
+    if (box) {
+      const c = [0, 1, 2].map((i) => (box.min[i] + box.max[i]) / 2 - (lo[i] + hi[i]) / 2);
+      if (which === "cx" || which === "cxy") d[0] = c[0];
+      if (which === "cy" || which === "cxy") d[1] = c[1];
+      if (which === "cz") d[2] = c[2];
+      if (which === "top") d[2] = box.max[2] - hi[2];
+      if (which === "bottom") d[2] = box.min[2] - lo[2];
+    }
     if (which === "axis") (d[1] = -(lo[1] + hi[1]) / 2), (d[2] = -(lo[2] + hi[2]) / 2);
     if (which === "along") d[0] = -len / 2 - (lo[0] + hi[0]) / 2;
     if (which === "front") d[0] = -hi[0];
@@ -1351,7 +1382,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     if (el.dataset?.preset && el.closest?.(".part-presets")) {
-      await placePreset(el.dataset.preset, el.textContent.trim());
+      await placePreset(el.dataset.preset, el.textContent.trim(), el.dataset);
       return;
     }
     if (el.id === "ptInch") {
