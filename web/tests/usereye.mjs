@@ -673,6 +673,52 @@ try {
   await settled();
   const line2 = await read("document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || ''");
   check("Ctrl+Z: the knob's own part back", !/dome/.test(line2), line2.trim());
+  // ---------------------------------------------------------------- the 4th axis: across it
+  // (Mar: "handles to translate ... in the radial directions too"; "a way in 4th to center up
+  // a part") the knob's mesh on the rotary axis: its blue (Z) arrow dragged, the part off the
+  // axis on the screen and in its fields; Center on axis brings it back; Flush to front puts
+  // its front at X0
+  await read("(() => { const s = document.getElementById('example'); s.value = 'knob_finish'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await click("#loadExample");
+  await settled();
+  await click("#tree .tree-setup.active [data-act=part]");
+  await settled();
+  await openMore("partPane");
+  const tOf = () => read("['ptTX', 'ptTY', 'ptTZ'].map((id) => +document.getElementById(id)?.value)");
+  const t0 = await tOf();
+  const rv = await viewRect();
+  const imgR = await shot("radial_before");
+  const hcR = handleColours(imgR, rv);
+  check("on the 4th axis: the part's arrows across the axis (green, blue) too", hcR.n.green > 40 && hcR.n.blue > 40, JSON.stringify(hcR.n));
+  if (hcR.pts.blue.length) {
+    const mid = (ps) => ps.reduce((a, p) => [a[0] + p[0] / ps.length, a[1] + p[1] / ps.length], [0, 0]);
+    const c = mid([...hcR.pts.red, ...hcR.pts.green]);
+    const far = hcR.pts.blue.filter((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) > 14).sort((a, b) => Math.hypot(a[0] - c[0], a[1] - c[1]) - Math.hypot(b[0] - c[0], b[1] - c[1]));
+    const from = far[Math.min(far.length - 1, 6)];
+    const b0 = partBox(imgR, rv);
+    await drag(from, [from[0], from[1] - 50]);
+    await settled();
+    await openMore("partPane");
+    const t1 = await tOf();
+    const b1 = partBox(await shot("radial_dragged"), rv);
+    check("the blue arrow dragged: the part off the axis on the screen and in its Z field", Math.abs(t1[2] - t0[2]) > 0.5 && !!(b0 && b1 && Math.abs(b1.cx - b0.cx) + Math.abs(b1.h - b0.h) > 2), `Z ${t0[2]} -> ${t1[2]}; part ${JSON.stringify(b0 && [b0.cx.toFixed(0), b0.h])} -> ${JSON.stringify(b1 && [b1.cx.toFixed(0), b1.h])}`);
+  }
+  check("on the 4th axis: Center on axis, Center along stock, Flush to front and back in the Part", !!(await where(".part-presets button", "^Center on axis$")) && !!(await where(".part-presets button", "^Flush to front$")));
+  await click(".part-presets button", "^Center on axis$");
+  await settled();
+  await openMore("partPane");
+  const t2 = await tOf();
+  check("Center on axis: back on the axis (its Y and Z as they were)", Math.abs(t2[1] - t0[1]) < 0.01 && Math.abs(t2[2] - t0[2]) < 0.01, `${JSON.stringify(t0)} -> ${JSON.stringify(t2)}`);
+  await click(".part-presets button", "^Center along stock$");
+  await settled();
+  await openMore("partPane");
+  const t3 = await tOf();
+  await click(".part-presets button", "^Flush to front$");
+  await settled();
+  await openMore("partPane");
+  const t4 = await tOf();
+  check("Center along stock moves it along X; Flush to front puts its front at X0 (as it came)", Math.abs(t3[0] - t0[0]) > 1 && Math.abs(t4[0] - t0[0]) < 0.01, `X ${t0[0]} -> ${t3[0]} -> ${t4[0]}`);
+  await clean("4th axis placed");
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

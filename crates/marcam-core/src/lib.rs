@@ -1066,10 +1066,14 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let on_bar = |x: f64| x - tr <= front + 1e-9 && x + tr >= back - 1e-9;
                 // (and said: the part where there is no bar)
                 if let Some((lo, hi)) = mesh.bounds() {
-                    let bar = if column.is_some() { (-job.stock.length, 0.0) } else { (back, front) };
+                    let bar = if column.is_some() {
+                        (-job.stock.length, 0.0)
+                    } else {
+                        (back, front)
+                    };
                     if hi[0] > bar.1 + 1.0 || lo[0] < bar.0 - 1.0 {
                         let w = format!(
-                            "the part lies outside the stock: X {:.1}..{:.1} against the bar's X {:.1}..{:.1}; nothing is cut where there is no bar (Center on axis and Flush to front, in its Part)",
+                            "the part lies outside the stock: X {:.1}..{:.1} against the bar's X {:.1}..{:.1}; nothing is cut where there is no bar; its Part has Center on axis and Flush to front",
                             lo[0], hi[0], bar.0, bar.1
                         );
                         if !b.warnings.contains(&w) {

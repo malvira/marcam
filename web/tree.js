@@ -340,6 +340,42 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     return row("stock", "Stock", st, "The stock: its type and sizes (and handles to move it, carried)") + row("part", "Part", part, "Where the part sits in the stock (handles in the 3D view)");
   }
 
+  /** (Mar: "a way in 4th to center up a part") The part on the rotary axis placed in one edit:
+   *  its middle onto the axis (`axis`), halfway along the bar (`along`), its front at the
+   *  bar's face (`front`) or its back at the bar's end (`back`). A part of its own is moved;
+   *  a carried one moves with its stock (the stock's offset). */
+  async function placePreset(which, label) {
+    const s = setup();
+    if (!s) return;
+    let lo, hi, len;
+    try {
+      [lo, hi] = (await engine("meshTriangles", t.doc, { setup: s.id }, state.mesh)).result.bounds;
+      len = (await engine("setupFrame", t.doc, { setup: s.id })).result.stock.length;
+    } catch (e) {
+      return showError(`${label}: ${e.message}`);
+    }
+    const d = [0, 0, 0];
+    if (which === "axis") (d[1] = -(lo[1] + hi[1]) / 2), (d[2] = -(lo[2] + hi[2]) / 2);
+    if (which === "along") d[0] = -len / 2 - (lo[0] + hi[0]) / 2;
+    if (which === "front") d[0] = -hi[0];
+    if (which === "back") d[0] = -len - lo[0];
+    if (d.every((v) => Math.abs(v) < 1e-4)) return;
+    const r = (v) => Math.round(v * 1000) / 1000;
+    if (carriedFrom(t.doc, s)) {
+      const off = (s.stock.offset || [0, 0, 0]).map((v, i) => r(v + d[i]));
+      if (off.some((v) => v)) s.stock.offset = off;
+      else delete s.stock.offset;
+    } else {
+      const m = t.doc.models.find((x) => s.part?.includes(x.id) && x.kind === "mesh");
+      if (!m) return;
+      m.translate = (m.translate || [0, 0, 0]).map((v, i) => r(v + d[i]));
+    }
+    // (the impeller: moved into the bar, its roughing's X range stayed where the part had
+    // been) the setup's X ranges go along with the part
+    if (d[0]) for (const o of s.operations) if (Array.isArray(o.x_range) && o.x_range.length === 2) o.x_range = o.x_range.map((v) => r(v + d[0]));
+    await commit({ label: `Setup "${s.name || s.id}": the part ${label.toLowerCase()}.` });
+  }
+
   /** (Mar) Where setup `x` starts (setup 2 and after): continuing from the setup before (its
    *  cut result, its part locked to it), or independent (its own stock and part, as setup 1). */
   function sourcePick(x) {
@@ -1301,6 +1337,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "treeEditSetup") {
       await window.__marcam.project.editSetup(t.setup);
+      return;
+    }
+    if (el.dataset?.preset && el.closest?.(".part-presets")) {
+      await placePreset(el.dataset.preset, el.textContent.trim());
       return;
     }
     if (el.id === "ptInch") {

@@ -1344,7 +1344,8 @@ fn mesh_carry_frame(
         (
             None,
             job::Stock {
-                radius: dy.hypot(dz),
+                // (moved across the axis: its corners that much farther out)
+                radius: (dy + offset[1].abs()).hypot(dz + offset[2].abs()),
                 length: hi(0) - lo(0),
                 section: None,
             },

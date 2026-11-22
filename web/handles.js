@@ -244,7 +244,9 @@ export function setupHandles({ state, edit }) {
     if (!st) return null;
     if (st.mode === "translate") {
       const d = h.proxy.position.clone().sub(st.pos).toArray().map((x) => Math.round(x * 100) / 100);
-      if (st.tg.rotary) (d[1] = 0), (d[2] = 0);
+      // (on the rotary axis: a bar of its own slides along it only; a part, or a carried
+      // piece, also across it, off the axis: Mar's radial handles)
+      if (st.tg.rotary && st.tg.kind === "stock") (d[1] = 0), (d[2] = 0);
       return { d, k: null, deg: 0 };
     }
     const q = st.quat.clone().invert().premultiply(h.proxy.quaternion);
@@ -327,7 +329,7 @@ export function setupHandles({ state, edit }) {
     h.proxy.quaternion.identity();
     h.tc.visible = h.rc.visible = h.tc.enabled = h.rc.enabled = true;
     // on the rotary axis: the slide along X and the turn about X only
-    h.tc.showY = h.tc.showZ = !tg.rotary;
+    h.tc.showY = h.tc.showZ = !tg.rotary || tg.kind !== "stock";
     h.rc.showY = h.rc.showZ = !tg.rotary;
     h.rc.showE = false;
     window.__marcam.kickView?.();

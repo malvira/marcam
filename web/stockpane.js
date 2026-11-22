@@ -92,11 +92,17 @@ export function partPane(doc, s, esc, opts = {}) {
       <div class="row small"><button type="button" id="ptReplace" title="A new STL or STEP for the part: its placement, the setups and the operations stay; picked features are found again on it">Replace model...</button>
       ${m ? '<button type="button" id="ptInch" title="The file was drawn in inches: the part made 25.4 times bigger, its stock fitted again (Undo takes it back)">File in inches (x25.4)</button>' : ""}</div>`;
   }
-  if (from) return html + `<div class="muted small">It goes with the stock ${esc(from.name || from.id)} left: move and turn them together with the Stock's handles.</div></div>`;
+  // (Mar: "a way in 4th to center up a part"): on the rotary axis, placed in one click
+  const presets = kindOf(s) !== "vise" ? `<div class="row small part-presets" role="group" aria-label="Place the part on the rotary axis">
+      <button type="button" data-preset="axis" title="The part's middle (across X) onto the rotary axis">Center on axis</button>
+      <button type="button" data-preset="along" title="The part halfway along the bar">Center along stock</button>
+      <button type="button" data-preset="front" title="The part's front at the bar's front face (X0)">Flush to front</button>
+      <button type="button" data-preset="back" title="The part's back at the bar's back end">Flush to back</button></div>` : "";
+  if (from) return html + `<div class="muted small">It goes with the stock ${esc(from.name || from.id)} left: move and turn them together with the Stock's handles.</div>${presets}</div>`;
   if (!m) return html + `<div class="muted small">${s.part?.length ? "A revolved profile stays on the rotary axis." : "This setup has no model: its operations work on the stock."}</div></div>`;
   const t = m.translate || [0, 0, 0], r = m.rotate || [0, 0, 0];
   const rotary = kindOf(s) !== "vise";
-  html += `<div class="muted small">Move it in the stock with the handles in the 3D view (Shift: free angles).${rotary ? " On the rotary axis: turned about X, slid along X." : ""}</div>`;
+  html += `<div class="muted small">Move it in the stock with the handles in the 3D view (Shift: free angles).${rotary ? " On the rotary axis: turned about X; moved along X, or across it off the axis." : ""}</div>${presets}`;
   html += `<details class="op-more" id="ptMore" ${opts.moreOpen ? "open" : ""}><summary>More</summary>
     <div class="small muted">Moved (mm):</div>${["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="ptT${a}" type="text" inputmode="decimal" value="${r3(t[i])}"></label>`).join("")}
     <div class="small muted">Turned (degrees about X, then Y, then Z):</div>${["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="ptR${a}" type="text" inputmode="decimal" value="${r3(r[i])}"></label>`).join("")}</details>`;
