@@ -172,7 +172,7 @@ const type = async (ch) => {
 const viewRect = () => read("(() => { const r = document.getElementById('view3d').getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); })()");
 /** The negative checks, at every step: no dialog up, no Generate card, no red error. */
 const clean = async (what) => {
-  const s = await read(`(() => { const vis = ${VISIBLE}; return { dialog: [...document.querySelectorAll('dialog')].some((d) => d.open && !d.classList.contains('embedded') && vis(d)), generate: [...document.querySelectorAll('button')].some((b) => /^Generate$/.test(b.textContent.trim()) && vis(b)), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent.trim() : '' }; })()`);
+  const s = await read(`(() => { const vis = ${VISIBLE}; return { dialog: [...document.querySelectorAll('dialog')].some((d) => d.open && !d.classList.contains('embedded') && vis(d)), generate: [...document.querySelectorAll('button')].some((b) => /^Generate$/.test(b.textContent.trim()) && vis(b)) || (vis(document.getElementById('emptyState')) && /\\bGenerate\\b/.test(document.getElementById('emptyState').textContent)), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent.trim() : '' }; })()`);
   check(`${what}: no dialog, no Generate card, no red error`, !s.dialog && !s.generate && !s.error, JSON.stringify(s));
 };
 /** The visible 3D views (canvases of the view's size), and whether the one at its centre is

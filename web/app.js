@@ -392,7 +392,7 @@ function hiddenMask(p) {
   });
   return mask;
 }
-const NO_OPS = "No operations: add one in the project tree (or use a detected feature in the setup), then Generate.";
+const NO_OPS = "No operations yet: add one in the project tree (or use a detected feature in the setup); it is planned as soon as it is added.";
 
 /**
  * The one reset that New, Open and the examples go through: nothing of the previous project
