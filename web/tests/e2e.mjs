@@ -3196,6 +3196,8 @@ try {
   {
     const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
     const addCarried = async (kind, rot) => {
+      // (the tree's: a 0.1 job shown as a project has its setups there only)
+      const n0 = await js("window.__marcam.state.tree.doc.setups.length");
       await js("document.getElementById('treeAddSetup').click(); true");
       await waitFor(() => js(modal), "the add setup dialog", 30000);
       await js(`const r = document.querySelector('input[name="sdStock"][value="previous"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true }));
@@ -3205,6 +3207,10 @@ try {
       const gate = await js(`({ vise: !document.querySelector('.sd-kind[data-kind="vise"] input').disabled, model: document.getElementById('sdModel').value, kind: document.querySelector('input[name="sdKind"]:checked')?.value })`);
       await js("document.getElementById('sdOk').click(); true");
       await waitFor(() => js(`!${modal}`), "the carried setup added", 60000);
+      // (added: else why not)
+      await waitFor(() => js(`(JSON.parse(document.getElementById('job').value).setups || []).length === ${n0 + 1}`), "the carried setup in the project", 60000).catch(async (e) => {
+        throw new Error(`${e.message}: ${await js("JSON.stringify({ error: document.getElementById('error').textContent, warn: document.getElementById('sdWarn').textContent, status: document.getElementById('status').textContent, setups: (JSON.parse(document.getElementById('job').value).setups || []).map((s) => s.id) })")} ${JSON.stringify(gate)}`);
+      });
       await settle();
       const d = JSON.parse(await js("document.getElementById('job').value"));
       const s = d.setups[d.setups.length - 1];
@@ -3249,6 +3255,7 @@ try {
       r.s.kind === "rotary" && !r.frame.stock_box && Math.abs(st.length - 60) < 1e-6 && Math.abs(st.radius - Math.hypot(20, 5)) < 1e-6 && Math.abs(r.m.bounds[0][0] + 60) < 0.5 && Math.abs(r.m.bounds[1][0]) < 0.5,
       `${JSON.stringify(r.s.stock)}; ${JSON.stringify(st)}; bounds ${JSON.stringify(r.m.bounds)}`);
     await js(`document.querySelector('#tree .tree-setup[data-setup="${r.s.id}"] [data-act=delsetup]').click(); true`);
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups.length === 1"), "the rotary setup deleted", 30000);
     await settle();
     const e = await addCarried("vise", 90);
     await shot("40c_plate_on_end");
