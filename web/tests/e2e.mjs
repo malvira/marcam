@@ -39,6 +39,14 @@ const argUrl = process.argv.includes("--url") ? process.argv[process.argv.indexO
 const children = [];
 const cleanup = () => children.forEach((c) => { try { c.kill(); } catch {} });
 process.on("exit", cleanup);
+// (Windows, Node 22: Chrome gone with the DevTools socket open can trip an assertion inside
+// undici's WebSocket; once closing, that one is not a test failure)
+let closing = false;
+process.on("uncaughtException", (e) => {
+  if (closing && e?.code === "ERR_ASSERTION" && /undici/.test(e.stack || "")) return;
+  console.error(e);
+  process.exit(1);
+});
 
 function freePort() {
   return new Promise((resolve) => {
@@ -3468,7 +3476,11 @@ try {
   console.log(`FAIL  ${e.message}`);
   try { await shot("99_failure"); } catch {}
 } finally {
-  try { await cdp.send("Browser.close"); } catch {}
+  // (closed in order: the browser asked, our socket closed, then whatever is left killed)
+  closing = true;
+  try { await Promise.race([cdp.send("Browser.close"), sleep(2000)]); } catch {}
+  try { cdp.ws.onmessage = null; cdp.ws.close(); } catch {}
+  await sleep(300);
   cleanup();
   await sleep(500);
   try { rmSync(profile, { recursive: true, force: true }); } catch {}

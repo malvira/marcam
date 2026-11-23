@@ -79,6 +79,14 @@ function findBrowser() {
 const children = [];
 const cleanup = () => children.forEach((c) => { try { c.kill(); } catch {} });
 process.on("exit", cleanup);
+// (Windows, Node 22: Chrome gone with the DevTools socket open can trip an assertion inside
+// undici's WebSocket; once closing, that one is not a test failure)
+let closing = false;
+process.on("uncaughtException", (e) => {
+  if (closing && e?.code === "ERR_ASSERTION" && /undici/.test(e.stack || "")) return;
+  console.error(e);
+  process.exit(1);
+});
 const port = await freePort();
 const py = spawn(process.platform === "win32" ? "python" : "python3", ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", root], { stdio: "ignore" });
 children.push(py);
@@ -831,7 +839,11 @@ try {
   failed = true;
   console.log(`FAIL  ${e.message}`);
 } finally {
-  try { await send("Browser.close"); } catch {}
+  // (closed in order: the browser asked, our socket closed, then whatever is left killed)
+  closing = true;
+  try { await Promise.race([send("Browser.close"), sleep(2000)]); } catch {}
+  try { ws.onmessage = null; ws.close(); } catch {}
+  await sleep(300);
   cleanup();
   await sleep(300);
   try { rmSync(profile, { recursive: true, force: true }); } catch {}

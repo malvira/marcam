@@ -28,6 +28,14 @@ const httpOk = (u) => (u.startsWith("http:") ? httpGet(u) : fetch(u).then(async 
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// (Windows, Node 22: Chrome gone with the DevTools socket open can trip an assertion inside
+// undici's WebSocket; once closing, that one is not a test failure)
+let closing = false;
+process.on("uncaughtException", (e) => {
+  if (closing && e?.code === "ERR_ASSERTION" && /undici/.test(e.stack || "")) return;
+  console.error(e);
+  process.exit(1);
+});
 
 export async function waitFor(fn, what, timeoutMs = 30000) {
   const t0 = Date.now();
@@ -147,7 +155,11 @@ export async function startApp(opts = {}) {
       }
     },
     async close() {
-      try { await send("Browser.close"); } catch {}
+      // (closed in order: the browser asked, our socket closed, then whatever is left killed)
+      closing = true;
+      try { await Promise.race([send("Browser.close"), sleep(2000)]); } catch {}
+      try { ws.onmessage = null; ws.close(); } catch {}
+      await sleep(300);
       cleanup();
       await sleep(300);
       try { rmSync(profile, { recursive: true, force: true }); } catch {}
