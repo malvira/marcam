@@ -1299,10 +1299,14 @@ export function setupProject(ctx) {
       stockBox = fr.stock_box ?? null;
       if (m && window.__marcam.meshFor(m.file)) {
         const { result: mt } = await engine("meshTriangles", doc, { setup: s.id, max_triangles: 20000 }, state.mesh);
-        const t = mt.triangles;
-        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-        for (let i = 0; i < t.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], t[i + k]); hi[k] = Math.max(hi[k], t[i + k]); }
-        if (lo[0] <= hi[0]) partBox = { min: lo, max: hi };
+        // (the part's own box: its thinned triangles stop short of it)
+        if (mt.bounds) partBox = { min: mt.bounds[0], max: mt.bounds[1] };
+        else {
+          const t = mt.triangles;
+          const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+          for (let i = 0; i < t.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], t[i + k]); hi[k] = Math.max(hi[k], t[i + k]); }
+          if (lo[0] <= hi[0]) partBox = { min: lo, max: hi };
+        }
       }
     } catch {}
     if (opts.host && !opts.host.isConnected) {

@@ -187,3 +187,130 @@ fn a_project_whose_part_is_a_step_file_plans() {
     assert!(marcam::verify_gcode(&text, &marcam::limits_for(&tps[0], &m.post)).is_empty());
     assert!(text.lines().count() > 100);
 }
+
+/// Triangle area of a mesh.
+fn area(m: &Mesh) -> f64 {
+    m.triangles
+        .iter()
+        .map(|[a, b, c]| {
+            let (u, v) = (
+                [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+            );
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt()
+        })
+        .sum()
+}
+
+/// A face wound round its surface that no iso line can seam (an impeller's hub floor: blade
+/// roots twisted past every angle; tests/fixtures/step/make_wound_face.py). The kernel cannot
+/// make it, so it is meshed from the file: all of it, within the chord, facing up.
+#[test]
+fn a_face_the_kernel_cannot_make_is_meshed_from_the_file() {
+    for chord in [0.05, 0.01] {
+        let p = marcam_step::import(&fixture("wound_face.step"), chord).unwrap();
+        assert_eq!((p.bodies, p.faces), (1, 1), "{:?}", p.warnings);
+        assert!(
+            p.warnings
+                .iter()
+                .any(|w| w.contains("meshed from the file")),
+            "{:?}",
+            p.warnings
+        );
+        assert!(
+            !p.warnings.iter().any(|w| w.contains("left out")),
+            "{:?}",
+            p.warnings
+        );
+        // the dish r5..r20 less its three notches (make_wound_face.py: 1199.986 mm2)
+        let a = area(&p.mesh);
+        assert!((a - 1199.986).abs() < 4.0, "area {a} at chord {chord}");
+        // up the dish, as the face's sense says
+        let up = p
+            .mesh
+            .triangles
+            .iter()
+            .filter(|[a, b, c]| {
+                let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - a[0], c[1] - a[1]]);
+                u[0] * v[1] - u[1] * v[0] > 0.0
+            })
+            .count();
+        assert!(
+            up * 100 >= p.mesh.triangles.len() * 99,
+            "{up} of {}",
+            p.mesh.triangles.len()
+        );
+        // every facet on the surface: z = the profile's height at its radius, within the chord
+        let z_at = |r: f64| {
+            let u = (r - 5.0) / 15.0;
+            (1.0 - u) * (1.0 - u) * 1.5 + 2.0 * u * (1.0 - u) * 1.0 + u * u * 6.0
+        };
+        for t in &p.mesh.triangles {
+            let c = [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0);
+            let r = c[0].hypot(c[1]);
+            assert!(r > 5.0 - 1e-6 && r < 20.0 + 1e-6, "{c:?}");
+            // (the profile's slope at most ~0.6, so a height off by d is about d off the surface)
+            assert!(
+                (c[2] - z_at(r)).abs() < 1.5 * chord,
+                "{c:?}: {} vs {}",
+                c[2],
+                z_at(r)
+            );
+        }
+        // nothing in the notches: a point in the middle of one at r 14 has no facet over it
+        let notch = |r: f64, deg: f64| {
+            let a = deg.to_radians();
+            [r * a.cos(), r * a.sin()]
+        };
+        let over = |q: [f64; 2]| {
+            p.mesh.triangles.iter().any(|[a, b, c]| {
+                let s = |p: &[f64; 3], q2: &[f64; 3]| {
+                    (q2[0] - p[0]) * (q[1] - p[1]) - (q2[1] - p[1]) * (q[0] - p[0])
+                };
+                let (d1, d2, d3) = (s(a, b), s(b, c), s(c, a));
+                (d1 >= 0.0 && d2 >= 0.0 && d3 >= 0.0) || (d1 <= 0.0 && d2 <= 0.0 && d3 <= 0.0)
+            })
+        };
+        for k in 0..3 {
+            let phi = 120.0 * k as f64;
+            // at r 14 a notch is at phi + 150 * (20 - 14) / 12 .. + 8
+            let mid = phi + 75.0 + 4.0;
+            assert!(!over(notch(14.0, mid)), "notch {k} covered");
+            assert!(
+                over(notch(14.0, mid + 60.0)),
+                "the face beside notch {k} missing"
+            );
+        }
+    }
+}
+
+/// Mar's impeller (NX, one solid of 46 faces; its hub floor is such a face): every face comes
+/// in and it matches the STL made from the same model. The file is not in the repository (not
+/// ours to publish): set MARCAM_IMPELLER_STEP to its path to run this.
+#[test]
+fn the_impeller_comes_in_whole() {
+    let Ok(path) = std::env::var("MARCAM_IMPELLER_STEP") else {
+        eprintln!("MARCAM_IMPELLER_STEP not set: skipped");
+        return;
+    };
+    let p = marcam_step::import(&std::fs::read(path).unwrap(), 0.01).unwrap();
+    assert_eq!((p.bodies, p.faces), (1, 46), "{:?}", p.warnings);
+    assert!(
+        !p.warnings.iter().any(|w| w.contains("left out")),
+        "{:?}",
+        p.warnings
+    );
+    let (lo, hi) = bounds(&p.mesh);
+    assert!(
+        (hi[0] - lo[0] - 48.0).abs() < 0.01 && (hi[2] - lo[2] - 43.0).abs() < 0.012,
+        "{lo:?} {hi:?}"
+    );
+    // the STL's volume 50 385 mm3 (a coarser tessellation of the same solid)
+    let v = volume(&p.mesh);
+    assert!((v - 50_385.0).abs() < 60.0, "volume {v}");
+}

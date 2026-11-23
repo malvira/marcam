@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### STEP import: no missing faces, and big parts drawn whole (2026-11-23)
+
+A face SolidCraft's kernel cannot trim (one wound round a closed surface that no iso line can
+seam, as an impeller's hub floor between twisted blade roots) was left out, so the part came in
+with a hole. Such faces, and bodies the kernel cannot mesh, are now meshed by `marcam-step`
+from the file itself, within the chord (warning: "face #N meshed from the file"). The web app's
+3D view kept every n-th triangle of a part over its display budget (a STEP part at 0.01 mm has
+about 440 000), which drew it striped with holes; it now merges nearby vertices instead, so
+the part stays whole. Planning always used every triangle.
+
 ### Project files are TOML (2026-11-19)
 
 Projects are written as TOML (`name.marcam.toml`), easier to read and edit by hand: the

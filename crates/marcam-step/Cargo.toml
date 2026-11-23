@@ -32,6 +32,10 @@ serde_json = "1"
 # SolidCraft (MIT OR Apache-2.0) and its SolidCore kernel (Apache-2.0), pinned to one commit
 solidcraft-kernel = { git = "https://github.com/tangency-labs/solidcraft", rev = "31a14bace97c3d1b7ed6a927b49d6a67f1066f73" }
 solidcore-tess = { git = "https://github.com/tangency-labs/solidcraft", rev = "31a14bace97c3d1b7ed6a927b49d6a67f1066f73" }
+# for faces the kernel leaves out: the file's geometry (solidcore-step) and a constrained
+# triangulation (spade, MIT OR Apache-2.0; already in the kernel's tree)
+solidcore-step = { git = "https://github.com/tangency-labs/solidcraft", rev = "31a14bace97c3d1b7ed6a927b49d6a67f1066f73" }
+spade = "2.15"
 
 [dev-dependencies]
 serde_json = "1"
