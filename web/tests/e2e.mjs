@@ -2255,17 +2255,22 @@ try {
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate's dome mesh", 60000);
     await settle();
-    await js("document.getElementById('treeAddSetup').click(); true");
-    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
-    const offered = await js("!document.getElementById('sdCarryOpt').classList.contains('hidden')");
-    await js(`document.querySelector('.sd-kind[data-kind="vise"]').click();
-      const r = document.querySelector('input[name="sdStock"][value="previous"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true }));
-      const t = document.getElementById('sdTurn'); t.value = 'y180'; t.dispatchEvent(new Event('change', { bubbles: true })); true`);
-    await sleep(200);
-    const hidden = await js("({ carry: !document.getElementById('sdCarry').classList.contains('hidden'), dims: document.getElementById('sdDims').classList.contains('hidden') })");
+    // (Mar: no setup dialogs) + Add setup: 3-axis, continuing; turned over in its Stock
+    await dialogs(false);
+    const offered = await js("(() => { const f = document.getElementById('treeAddFrom'); return !!f && [...f.options].some((o) => o.value === 'carry'); })()");
+    await js("(() => { for (const [id, v] of [['treeAddKind', 'vise'], ['treeAddFrom', 'carry']]) { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); } document.getElementById('treeAddSetup').click(); return true; })()");
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups.length === 2"), "the setup added", 60000);
+    await settle();
+    await js("document.querySelector('#tree .tree-setup.active [data-act=stock]').click(); true");
+    await waitFor(() => js("!!document.getElementById('stType')"), "the Stock pane", 30000);
+    await js("(() => { const m = document.querySelector('#stockPane details.op-more'); if (m) m.open = true; return true; })()");
+    const hidden = await js("({ carry: /Cut result/.test(document.getElementById('stType').selectedOptions[0]?.textContent || ''), dims: !document.getElementById('stX') })");
+    await js("(() => { const t = document.getElementById('stTurn'); t.value = 'y180'; t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await shot("32a_carry_dialog");
-    await js("document.getElementById('sdOk').click(); true");
-    await waitFor(() => js("document.body.dataset.state === 'ready' && JSON.parse(document.getElementById('job').value).setups.length === 2"), "the carried setup", 60000);
+    await waitFor(() => js("document.body.dataset.state !== 'busy' && JSON.parse(document.getElementById('job').value).setups[1].stock.turn === 'y180'"), "the carried setup turned over", 60000);
+    await dialogs(true);
+    // (back to the setup's details, as the sections after expect)
+    await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
     const d = JSON.parse(await js("document.getElementById('job').value"));
     const s2 = d.setups[1];
     const frame = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${s2.id}' }).then((r) => r.result)`);
@@ -2275,7 +2280,7 @@ try {
     const v = await js("({ stock: window.__marcam.state.three.groups.stock.children.length, tabs: [...document.querySelectorAll('#tabs button')].map((b) => b.textContent) })");
     await shot("32b_carried_setup");
     check("a setup takes the stock the one before left, turned over: offered in + Setup, the part turned with it, the block where it was, planned",
-      offered && hidden.carry && hidden.dims && JSON.stringify(s2.stock) === JSON.stringify({ shape: "from_previous", turn: "y180" }) && frame.mesh.turn === "y180" &&
+      offered && hidden.carry && hidden.dims && s2.stock.shape === "from_previous" && s2.stock.turn === "y180" && !s2.stock.rotate && frame.mesh.turn === "y180" &&
       JSON.stringify([frame.stock_box.min, frame.stock_box.max]) === JSON.stringify([d.setups[0].stock.min, d.setups[0].stock.max]) && frame.carry.from === d.setups[0].id && v.stock > 0 && v.tabs.length >= 1 && v.tabs.every((t) => t.endsWith("OK")),
       `${JSON.stringify(s2.stock)}; ${JSON.stringify(frame.stock_box)}; turn ${frame.mesh?.turn}; tabs ${v.tabs}`);
   }
@@ -2865,12 +2870,12 @@ try {
     await waitDone("the plate", 120000);
     const jawsLook = () => js("(() => { const g = window.__marcam.state.three.groups.jaws; return { n: g?.children.length || 0, visible: !!g?.visible, top: g?.children[0] ? +(g.children[0].position.z + g.children[0].children[0].geometry.parameters.depth / 2).toFixed(3) : null }; })()");
     const before = { look: await jawsLook(), warnings: await js("window.__marcam.state.result.programs.flatMap((p) => p.warnings || [])") };
-    await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
-    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
-    const shownJaws = await js("!document.getElementById('sdJawsRow').classList.contains('hidden')");
-    await js("(() => { const e = document.getElementById('sdJaws'); e.value = '8.5'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
-    await js("document.getElementById('sdOk').click(); true");
-    await waitFor(() => js("!(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the dialog closed", 60000);
+    // (the grip depth: the Fixture's)
+    await js("document.querySelector('#tree .tree-setup.active [data-act=fixture]').click(); true");
+    await waitFor(() => js("!!document.getElementById('fxGrip')"), "the Fixture pane", 30000);
+    const shownJaws = await js("!!document.getElementById('fxGrip')");
+    await js("(() => { const e = document.getElementById('fxGrip'); e.value = '8.5'; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups[0].holding?.jaws === 8.5"), "the grip depth", 60000);
     await settle();
     await clickGenerate();
     await waitDone("the plate with the jaws higher", 120000);
@@ -2984,7 +2989,7 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(text)}, "knob_two_setups.marcam.toml").then(() => true)`);
     await settle();
     await waitFor(() => js("document.querySelectorAll('#tree .tree-setup').length === 2"), "both setups in the tree", 30000);
-    const t0 = await js("(() => { const h = [...document.querySelectorAll('#tree .tree-setup')]; return { names: h.map((x) => x.querySelector('[data-act=setup]').textContent).join('|'), active: document.querySelector('#tree .tree-setup.active').dataset.setup, details: !!document.getElementById('treeEditSetup'), ops: document.querySelectorAll('#tree .tree-setup.active .tree-op').length }; })()");
+    const t0 = await js("(() => { const h = [...document.querySelectorAll('#tree .tree-setup')]; return { names: h.map((x) => x.querySelector('[data-act=setup]').textContent).join('|'), active: document.querySelector('#tree .tree-setup.active').dataset.setup, details: !!document.getElementById('setupSummary'), ops: document.querySelectorAll('#tree .tree-setup.active .tree-op').length }; })()");
     // the second setup's name: it is worked on, its details shown
     await js("document.querySelectorAll('#tree .tree-setup')[1].querySelector('[data-act=setup]').click(); true");
     await settle();
@@ -2995,7 +3000,7 @@ try {
     const other = await js("document.querySelectorAll('#tree .tree-setup')[0].querySelectorAll('.tree-op').length");
     await js("document.querySelectorAll('#tree .tree-setup')[0].querySelector('.tree-op [data-act=select]').click(); true");
     await settle();
-    const t2 = await js("({ active: document.querySelector('#tree .tree-setup.active').dataset.setup, selected: window.__marcam.state.tree.selected, form: !!document.querySelector('#treeDetails #opForm'), setupDetails: !!document.getElementById('treeEditSetup') })");
+    const t2 = await js("({ active: document.querySelector('#tree .tree-setup.active').dataset.setup, selected: window.__marcam.state.tree.selected, form: !!document.querySelector('#treeDetails #opForm'), setupDetails: !!document.getElementById('setupSummary') })");
     // folding the setup worked on hides its operations
     await js("document.querySelector('#tree .tree-setup.active [data-act=fold]').click(); true");
     await settle();
