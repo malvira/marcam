@@ -410,6 +410,49 @@ try {
   res = await typed("partPane", "#ptRZ", "90");
   check("setup 1: an angle typed (Z 90) stays and turns the part", res.ok, res.why);
   await clean("setup 1 placed");
+  // ---------------------------------------------------------------- the part's presets (vise)
+  // (Mar: preset buttons) the knob in the vise: Center XY puts its middle at the block's, Top
+  // flush its top at the block's top, Z +90° turns it (its outline on the screen turns); each
+  // one edit. In setup 1, then in setup 2 independent (its own block), then continuing (the
+  // piece itself is the block: turns only)
+  const placed3 = () => read(`(async () => { const M = window.__marcam; const d = JSON.parse(document.getElementById('job').value); const id = M.state.tree.setup; const [lo, hi] = (await M.engine('meshTriangles', d, { setup: id }, M.state.mesh)).result.bounds; const sb = (await M.engine('setupFrame', d, { setup: id })).result.stock_box; return { mid: [0, 1, 2].map((i) => (lo[i] + hi[i]) / 2), top: hi[2], size: [0, 1, 2].map((i) => hi[i] - lo[i]), sb }; })()`);
+  const presets3 = async (where_, positions) => {
+    await click("#tree .tree-setup.active [data-act=part]");
+    await settled();
+    if (positions) {
+      await click(".part-presets button", "^Center XY$");
+      await settled();
+      let p = await placed3();
+      const cx = (p.sb.min[0] + p.sb.max[0]) / 2, cy = (p.sb.min[1] + p.sb.max[1]) / 2;
+      check(`${where_}: Center XY puts the part's middle at the block's`, Math.abs(p.mid[0] - cx) < 0.01 && Math.abs(p.mid[1] - cy) < 0.01, `part ${p.mid.slice(0, 2).map((v) => v.toFixed(3))}, block ${[cx, cy].map((v) => v.toFixed(3))}`);
+      await click(".part-presets button", "^Top flush$");
+      await settled();
+      p = await placed3();
+      check(`${where_}: Top flush puts the part's top at the block's top`, Math.abs(p.top - p.sb.max[2]) < 0.01, `${p.top.toFixed(3)} vs ${p.sb.max[2]}`);
+    }
+    const before = await placed3();
+    const vr3 = await viewRect();
+    const i0 = await shot("preset_before_turn");
+    await click(".part-presets button", "^Z \\+90°$");
+    await settled();
+    const after = await placed3();
+    const i1 = await shot("preset_after_turn");
+    let px = 0;
+    for (let y = vr3[1]; y < vr3[1] + vr3[3]; y += 2)
+      for (let x = vr3[0]; x < vr3[0] + vr3[2]; x += 2) {
+        const p = i0.at(x, y), q = i1.at(x, y);
+        if (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]) > 60) px++;
+      }
+    const swapped = Math.abs(after.size[0] - before.size[1]) < 0.05 && Math.abs(after.size[1] - before.size[0]) < 0.05;
+    check(`${where_}: Z +90° turns the part a quarter (its X and Y sizes swap; the screen changes)`, swapped && px > 150, `${before.size.slice(0, 2).map((v) => v.toFixed(2))} -> ${after.size.slice(0, 2).map((v) => v.toFixed(2))}; ${px} px changed`);
+    await read("document.activeElement?.blur?.(); true");
+    await key("z", 2);
+    await settled();
+    const undone = await placed3();
+    check(`${where_}: Ctrl+Z takes the turn back (one edit)`, Math.abs(undone.size[0] - before.size[0]) < 0.05 && Math.abs(undone.size[1] - before.size[1]) < 0.05, `${undone.size.slice(0, 2).map((v) => v.toFixed(2))}`);
+  };
+  if (await read("JSON.parse(document.getElementById('job').value).setups[0].kind === 'vise'")) await presets3("setup 1", true);
+  else check("setup 1 is a vise setup (for its presets)", false);
   // ---------------------------------------------------------------- the cut result carried
   await click("#treeAddSetup");
   await sleep(2500);
@@ -468,6 +511,13 @@ try {
     check("Undo takes setup 2 back to continuing from setup 1", back === "carry", back);
   }
   await clean("setup 2 independent placed");
+  // the presets in setup 2: continuing (turns only: the piece is the block), then independent
+  await presets3("setup 2 (continuing)", false);
+  await click("#tree .tree-setup.active [data-act=setup]");
+  await settled();
+  await read("(() => { const s = document.getElementById('stSource'); s.value = 'own'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await settled();
+  await presets3("setup 2 (independent)", true);
 
   // ---------------------------------------------------------------- an operation edited live
   // (Mar: "don't want the apply button ... as you change the toolpaths should be updating")
