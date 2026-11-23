@@ -265,3 +265,45 @@ fn indexed_holder_on_the_knob() {
     assert!(reps[2].collisions.iter().all(|c| c.tool == indexed_tool));
     lines_are_moves(&short, &tps, &reps);
 }
+
+#[test]
+fn the_chuck_and_the_tailstock_are_checked_when_the_setup_has_them() {
+    // (Mar's Fixture) the knob: without a chuck or a tailstock, as before; a chuck gripping
+    // the bar up to near the part's back: the tool reaches it
+    let mut job = load("examples/knob/knob.job.json");
+    let m = builtin_machine("makera-z1-4axis").unwrap();
+    let tps = plan_with_mesh(&job, None).unwrap();
+    let plain = collision_check(&job, &tps, &m.post).unwrap();
+    let any = |reps: &[marcam::collision::CollisionReport], c: Contact| {
+        reps.iter()
+            .any(|r| r.collisions.iter().any(|k| k.contact == c))
+    };
+    assert!(!any(&plain, Contact::OnTailstock) && !any(&plain, Contact::OnChuck));
+    // the tailstock: its centre's cone (60° across) from its point 3 mm into the front
+    // face, then the quill (Ø24): a tool low over the front face meets it, one high does not
+    let fx = marcam::job::Fixture {
+        tailstock: true,
+        centre_depth: Some(3.0),
+        ..Default::default()
+    };
+    let b = ToolBody::of(&Tool::new(1, "t", ToolShape::Flat { diameter: 3.175 }));
+    let at = |x: f64, r: f64| marcam::collision::contact_holders(&fx, 100.0, [x, 0.0, r], &b);
+    assert!(
+        matches!(at(0.5, 1.0), Some((Contact::OnTailstock, _))),
+        "{:?}",
+        at(0.5, 1.0)
+    );
+    assert!(at(-10.0, 1.0).is_none() && at(0.5, 13.0).is_none());
+    assert!(matches!(at(25.0, 8.0), Some((Contact::OnTailstock, _))));
+    job.fixture = Some(marcam::job::Fixture {
+        chuck_diameter: Some(65.0),
+        grip: Some(job.stock.length - 15.0),
+        ..Default::default()
+    });
+    let chuck = collision_check(&job, &tps, &m.post).unwrap();
+    assert!(
+        any(&chuck, Contact::OnChuck),
+        "{:?}",
+        chuck.iter().map(|r| r.count).collect::<Vec<_>>()
+    );
+}

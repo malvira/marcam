@@ -2107,6 +2107,7 @@ pub fn simulate_job(
             (dx * 2.0).min(0.1),
             bar,
             false,
+            job.fixture.as_ref(),
         );
         let dev = sim::deviation_with(&stock, &part, x_lo, x_hi, tol, &|t| intended.contains(&t));
         programs.push((tp.name.clone(), st, dev));
@@ -2142,7 +2143,11 @@ pub fn collision_check(
         Some(sb) => (sim3::segments3(tps), sb.max[2]),
         None => (sim::segments(tps), job.stock.radius),
     };
-    if !collision::can_touch(&segs, &bodies, top) {
+    // (a chuck or a tailstock: checked whatever the tools' bodies)
+    let holders = job.fixture.as_ref().is_some_and(|f| {
+        job.stock_box.is_none() && (f.chuck(job.stock.length).is_some() || f.tailstock().is_some())
+    });
+    if !holders && !collision::can_touch(&segs, &bodies, top) {
         return Ok(tps
             .iter()
             .map(|tp| collision::CollisionReport {
@@ -2162,6 +2167,7 @@ pub fn collision_check(
                 step,
                 sb.max[2],
                 job.jaws.map(|g| (*sb, sb.min[2] + g)),
+                job.fixture.as_ref(),
             );
             out.push(rep);
         }
@@ -2179,8 +2185,16 @@ pub fn collision_check(
         for (k, tp) in tps.iter().enumerate() {
             // the last program's stock is not needed after its last move that can touch
             let last = k + 1 == tps.len();
-            let (_, rep) =
-                collision::simulate_rotary(&mut stock, tp, &cutters, &bodies, step, bar, last);
+            let (_, rep) = collision::simulate_rotary(
+                &mut stock,
+                tp,
+                &cutters,
+                &bodies,
+                step,
+                bar,
+                last,
+                job.fixture.as_ref(),
+            );
             out.push(rep);
         }
     }

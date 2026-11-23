@@ -94,6 +94,24 @@ pub struct Holding {
     /// A bar in a vise: along "y", or "z" (standing up); None: along X (Mar).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub along: Option<String>,
+    /// (Mar's Fixture) a vise's jaws: their length along X, their height, the opening
+    /// between them (mm; None: the usual).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jaw_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jaw_height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening: Option<f64>,
+    /// The chuck: its diameter and its body's length behind the bar (mm; None: not checked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chuck_diameter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chuck_length: Option<f64>,
+    /// The tailstock's point (X, mm; None: the bar's front) and how deep its centre goes in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailstock_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub centre_depth: Option<f64>,
 }
 
 impl Default for Holding {
@@ -104,6 +122,13 @@ impl Default for Holding {
             chuck: None,
             jaws: None,
             along: None,
+            jaw_width: None,
+            jaw_height: None,
+            opening: None,
+            chuck_diameter: None,
+            chuck_length: None,
+            tailstock_x: None,
+            centre_depth: None,
         }
     }
 }
@@ -1162,6 +1187,22 @@ impl Project {
                 },
             );
             v["jaws"] = serde_json::json!(grip.clamp(0.0, h));
+        }
+        // what holds it (only what the setup says: a project without it plans as before)
+        let hd = &setup.holding;
+        let fixture = job::Fixture {
+            jaw_width: hd.jaw_width,
+            jaw_height: hd.jaw_height,
+            opening: hd.opening,
+            chuck_diameter: hd.chuck_diameter,
+            chuck_length: hd.chuck_length,
+            grip: hd.chuck,
+            tailstock_x: hd.tailstock_x,
+            centre_depth: hd.centre_depth,
+            tailstock: hd.tailstock && hd.kind != "vise",
+        };
+        if fixture != job::Fixture::default() {
+            v["fixture"] = serde_json::to_value(&fixture).map_err(|e| e.to_string())?;
         }
         self.number_tools(&mut v);
         profiles::resolve_job_tools(&mut v, libraries)?;

@@ -66,8 +66,7 @@ export function stockPane(doc, s, esc, opts = {}) {
   // the rest, folded
   const more = [];
   if (!from) more.push(`<label title="Fit to part leaves this much round the part">Margin <input id="stMargin" type="text" inputmode="decimal" value="${r3(opts.margin ?? (vise ? 2 : 0.5))}"> <span class="u">mm</span></label>`);
-  if (vise) more.push(`<label title="The depth the vise's jaws grip, up from the stock's bottom (empty: the default)">Jaw grip <input id="stJaws" type="text" inputmode="decimal" value="${s.holding?.jaws ?? ""}" placeholder="default"> <span class="u">mm</span></label>`);
-  else if (!from) more.push(`<label title="The bar's length held in the chuck">In the chuck <input id="stChuck" type="text" inputmode="decimal" value="${s.holding?.chuck ?? ""}" placeholder="0"> <span class="u">mm</span></label>`);
+
   if (from) {
     const rot = st.rotate || [0, 0, 0], off = st.offset || [0, 0, 0];
     more.push(`<div class="small muted">Turned (degrees about X, then Y, then Z), then moved:</div>`);
@@ -123,6 +122,65 @@ export function partPane(doc, s, esc, opts = {}) {
     <div class="small muted">Moved (mm):</div>${["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="ptT${a}" type="text" inputmode="decimal" value="${r3(t[i])}"></label>`).join("")}
     <div class="small muted">Turned (degrees about X, then Y, then Z):</div>${["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="ptR${a}" type="text" inputmode="decimal" value="${r3(r[i])}"></label>`).join("")}</details>`;
   return html + `</div>`;
+}
+
+// ------------------------------------------------------------ the fixture (Mar)
+/** What holds setup `s`: "vise", "chuck" or "chuck_tailstock". */
+export function fixtureOf(s) {
+  if (kindOf(s) === "vise") return "vise";
+  return s.holding?.tailstock ? "chuck_tailstock" : "chuck";
+}
+export const FIXTURES = { vise: "Vise", chuck: "Chuck", chuck_tailstock: "Chuck + tailstock" };
+/** The chuck's diameter when none is given (mm): the 4th axis's own. */
+export const CHUCK_D = 65;
+
+/** The Fixture's pane: its preset (those that fit the setup's type) and its sizes, each
+ *  applied as it is typed. */
+export function fixturePane(doc, s, esc) {
+  const which = fixtureOf(s);
+  const h = s.holding || {};
+  const opts = (kindOf(s) === "vise" ? ["vise"] : ["chuck", "chuck_tailstock"]).map((k) => `<option value="${k}" ${k === which ? "selected" : ""}>${FIXTURES[k]}</option>`).join("");
+  const f = (id, label, v, ph, title) => `<label title="${esc(title)}">${label} <input id="${id}" type="text" inputmode="decimal" value="${v ?? ""}" placeholder="${ph}"> <span class="u">mm</span></label>`;
+  let html = `<div id="fixturePane" class="stock-pane" data-setup="${esc(s.id)}"><div class="tree-outname">Fixture <span class="muted">${esc(FIXTURES[which])}</span></div>
+    <label>Fixture <select id="fxPreset" aria-label="What holds the stock">${opts}</select></label>`;
+  if (which === "vise") {
+    html += f("fxJawW", "Jaw width", h.jaw_width, "block + 20", "The jaws' length along X");
+    html += f("fxJawH", "Jaw height", h.jaw_height, "to the grip", "The jaws' own height (drawn)");
+    html += f("fxOpen", "Opening", h.opening, "the block's width", "Between the jaws (Y); empty: gripping the block");
+    html += f("fxGrip", "Grip depth", h.jaws, "default", "How deep the jaws grip the stock, up from its bottom");
+  } else {
+    html += f("fxChuckD", "Chuck Ø", h.chuck_diameter, String(CHUCK_D), "The chuck's diameter: the tool is checked against it");
+    html += f("fxChuckL", "Chuck length", h.chuck_length, "30", "The chuck's body behind the bar");
+    html += f("fxGripLen", "Jaw grip", h.chuck, "0", "The bar's length held in the chuck's jaws, from its back end");
+    if (which === "chuck_tailstock") {
+      html += f("fxTailX", "Tailstock at X", h.tailstock_x, "0 (the bar's front)", "Where the tailstock's centre meets the bar");
+      html += f("fxDepth", "Centre depth", h.centre_depth, "3", "How deep the tailstock's centre goes into the bar");
+    }
+  }
+  return html + `<div class="muted small">Drawn in the view, and the tool checked against it.</div></div>`;
+}
+
+/** A Fixture pane field (`id`) changed: setup `s`'s holding to match; a label for Undo. */
+export function applyFixtureField(doc, s, id, val) {
+  s.holding ||= { kind: kindOf(s) === "vise" ? "vise" : "rotary_chuck", tailstock: false };
+  const h = s.holding;
+  const name = `Setup "${s.name || s.id}"`;
+  if (id === "fxPreset") {
+    if (val === "vise") Object.assign(h, { kind: "vise", tailstock: false });
+    else {
+      Object.assign(h, { kind: "rotary_chuck", tailstock: val === "chuck_tailstock" });
+      // (picked: its chuck checked, at the usual size unless one is given)
+      h.chuck_diameter ??= CHUCK_D;
+    }
+    return `${name}: held by ${FIXTURES[val] || val}.`;
+  }
+  const key = { fxJawW: "jaw_width", fxJawH: "jaw_height", fxOpen: "opening", fxGrip: "jaws", fxChuckD: "chuck_diameter", fxChuckL: "chuck_length", fxGripLen: "chuck", fxTailX: "tailstock_x", fxDepth: "centre_depth" }[id];
+  if (!key) return null;
+  const v = num(val);
+  if (val === "" || v == null) delete h[key];
+  else if (key !== "tailstock_x" && v < 0) return null;
+  else h[key] = r3(v);
+  return `${name}: the fixture's ${key.replace(/_/g, " ")}.`;
 }
 
 /** The stock a type change starts from: its sizes kept as near as they go. */

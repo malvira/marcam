@@ -869,6 +869,7 @@ pub mod api {
                 step,
                 sb.max[2],
                 job.jaws.map(|g| (*sb, sb.min[2] + g)),
+                job.fixture.as_ref(),
             );
             let dev = sim3::deviation3_with(&hm, &part, 0.02, &|t| intended.contains(&t));
             stocks.push(json!({

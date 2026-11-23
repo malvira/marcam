@@ -316,3 +316,6 @@ details.menu[open] > summary { border-color: var(--accent); }
 /* (the walkthrough: "Cannot add ... needs a vbit tool" was below the fold) the error kept in
    view at the foot of the left pane */
 #left > #error:not(.hidden) { position: sticky; bottom: 0; z-index: 5; box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.35); }
+
+/* (Mar) what holds the stock is the Fixture's: not in the setup's details */
+#setupDialog.embedded #sdTailRow, #setupDialog.embedded #sdJawsRow { display: none; }

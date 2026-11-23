@@ -628,13 +628,16 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       const spec = stockSpec();
       const carry = stockMode() === "previous" ? { turn: $("sdTurn").value, offset: ["sdOffX", "sdOffY", "sdOffZ"].map((id) => num(id) || 0), from: $("sdCarryFrom").value || null, rotate: rotate() } : null;
       const noModel = c.modelPick?.kind === "none";
-      const need = carry ? [] : noModel && spec.mode !== "given" ? ["no model to fit it to"] : missing(spec);
+      // (Mar: a setup with no part made another type in its details: the usual plate, or bar,
+      // of that type, its sizes then in its Stock)
+      const usual = noModel && spec.mode !== "given" && c.embedded ? (k === "vise" ? { shape: "block", mode: "given", dims: { x: 60, y: 40, z: 20 } } : { shape: "round", mode: "given", dims: { radius: 12.5 }, length: 60 }) : null;
+      const need = carry || usual ? [] : noModel && spec.mode !== "given" ? ["no model to fit it to"] : missing(spec);
       if (need.length) {
         $("sdWarn").textContent = noModel && spec.mode !== "given" ? "With no model, give the stock's sizes, or take the stock from a setup before." : `Give every stock size (${need.join(", ")}), or fit the stock to the part.`;
         $("sdWarn").classList.remove("hidden");
         return;
       }
-      let ex = spec.mode === "given" ? spec : undefined;
+      let ex = spec.mode === "given" ? spec : usual || undefined;
       // fitted round a part that is not placed again (a revolved profile): the sizes fitted here
       if (!ex && !c.parsed?.tris && !c.preset.tris && c.preset.previewTris && bar(k)) {
         const place = placePart(c.preset.previewTris, options());

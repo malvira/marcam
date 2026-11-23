@@ -888,6 +888,55 @@ try {
     check("the knurl's body on the part as the 4th axis holds it (X within -60.5..0, radius under the bar's)", ok, JSON.stringify(body));
   }
   await clean("vise then the 4th axis");
+  // ---------------------------------------------------------------- the Fixture
+  // (Mar) a 4th-axis setup added from the tree, made 3-axis in its details: its Fixture line
+  // a Vise, its opening typed wider, the jaws move on the screen; made 4th axis again with a
+  // Chuck + tailstock: the tailstock drawn; no dialogs
+  await click("#menuFile > summary");
+  await sleep(200);
+  await click("#projectNew");
+  await settled();
+  await read("(() => { const s = document.getElementById('treeAddKind'); s.value = 'rotary'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await click("#treeAddSetup");
+  await settled();
+  check("a 4th-axis setup added from the tree (+ Add setup, 4th axis)", /4th axis|Rotary/i.test(await read("document.querySelector('#tree .tree-setup.active')?.textContent || ''")));
+  await click("#tree .tree-setup.active [data-act=setup]");
+  await settled();
+  await click("#setupHost .sd-kind[data-kind=vise]");
+  await settled();
+  check("made 3-axis in its details", /vise/i.test(await read("document.querySelector('#tree .tree-setup.active')?.textContent || ''")));
+  await click("#tree .tree-setup.active [data-act=fixture]");
+  await settled();
+  const fxOpts = await read("[...(document.getElementById('fxPreset')?.options || [])].map((o) => o.textContent).join(',')");
+  check("its Fixture line: a Vise (the presets that fit a 3-axis setup)", fxOpts === "Vise", fxOpts);
+  const jawsAt = () => read("(() => { const g = window.__marcam.state.three.groups.jaws; return g ? g.children.filter((c) => c.userData.jaw).map((c) => +c.position.y.toFixed(2)) : []; })()");
+  const vrF = await viewRect();
+  const j0 = await jawsAt();
+  const iJ0 = await shot("fixture_jaws_before");
+  await typeInto("#fxOpen", "90");
+  await settled();
+  const j1 = await jawsAt();
+  const iJ1 = await shot("fixture_jaws_after");
+  let pxJ = 0;
+  for (let y = vrF[1]; y < vrF[1] + vrF[3]; y += 2)
+    for (let x = vrF[0]; x < vrF[0] + vrF[2]; x += 2) {
+      const a = iJ0.at(x, y), b = iJ1.at(x, y);
+      if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 60) pxJ++;
+    }
+  const spread = (j) => (j.length === 2 ? Math.abs(j[1] - j[0]) : 0);
+  check("the Vise's opening typed (90): the jaws move apart, on the screen", spread(j1) > spread(j0) + 20 && pxJ > 150, `jaws ${JSON.stringify(j0)} -> ${JSON.stringify(j1)}; ${pxJ} px`);
+  await clean("the Vise's opening");
+  await click("#tree .tree-setup.active [data-act=setup]");
+  await settled();
+  await click("#setupHost .sd-kind[data-kind=rotary]");
+  await settled();
+  await click("#tree .tree-setup.active [data-act=fixture]");
+  await settled();
+  await read("(() => { const s = document.getElementById('fxPreset'); s.value = 'chuck_tailstock'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await settled();
+  const tail = await read("(() => { const v = window.__marcam.state.three; const t = v.groups.jaws?.children.find((c) => c.userData.tailstock); if (!t) return null; const T = v.THREE; const b = new T.Box3().setFromObject(t); const p = b.getCenter(new T.Vector3()).project(v.camera); return [p.x, p.y, p.z]; })()");
+  check("Chuck + tailstock: the tailstock drawn, in the view", !!tail && Math.abs(tail[0]) < 0.95 && Math.abs(tail[1]) < 0.95, JSON.stringify(tail));
+  await clean("Chuck + tailstock");
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

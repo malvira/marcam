@@ -29,6 +29,10 @@ pub struct Job {
     /// jaws stand beside its Y faces up to there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jaws: Option<f64>,
+    /// What holds the stock, as drawn and as the tool bodies are checked against (Mar's
+    /// Fixture): the vise's jaws' length and opening, or the chuck and the tailstock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixture: Option<Fixture>,
     /// Radial clearance above the stock for safe rapids (mm).
     #[serde(default = "default_clearance")]
     pub clearance: f64,
@@ -137,6 +141,59 @@ impl Carry {
 
 fn default_clearance() -> f64 {
     3.0
+}
+
+/// What holds the stock (see [`Job::fixture`]); every size optional (None: the usual).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Fixture {
+    /// A vise: its jaws' length along X (mm; None: the block's and 10 mm past each end).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jaw_width: Option<f64>,
+    /// A vise: the jaws' own height (mm, drawn).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jaw_height: Option<f64>,
+    /// A vise: between the jaws (mm; None: the block's width, gripped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening: Option<f64>,
+    /// The 4th axis: the chuck's diameter (mm; present: checked against the tool) and its
+    /// body's length behind the bar's back end (mm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chuck_diameter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chuck_length: Option<f64>,
+    /// The bar's length held in the chuck's jaws (mm, from its back end).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grip: Option<f64>,
+    /// A tailstock: its centre's rim at X `tailstock_x` (mm; None: the bar's front, X0), its
+    /// point `centre_depth` into the bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailstock_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub centre_depth: Option<f64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tailstock: bool,
+}
+
+impl Fixture {
+    /// The chuck: (x from, x to, radius) for a bar `length` long (its back at -length).
+    pub fn chuck(&self, length: f64) -> Option<(f64, f64, f64)> {
+        let d = self.chuck_diameter?;
+        let grip = self.grip.unwrap_or(0.0).max(0.0);
+        Some((
+            -length - self.chuck_length.unwrap_or(30.0),
+            -length + grip,
+            d / 2.0,
+        ))
+    }
+
+    /// The tailstock: its point's X, the centre's depth (its cone 60° across), the quill's
+    /// radius.
+    pub fn tailstock(&self) -> Option<(f64, f64, f64)> {
+        self.tailstock.then(|| {
+            let depth = self.centre_depth.unwrap_or(3.0).max(0.0);
+            (self.tailstock_x.unwrap_or(0.0) - depth, depth, 12.0)
+        })
+    }
 }
 
 impl Job {

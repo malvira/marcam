@@ -1293,6 +1293,8 @@ export function setupProject(ctx) {
       kind, machine: s.machine ?? currentMachine()?.id, setupName: s.name, axis, tailstock: !!s.holding?.tailstock, material: s.material,
       stock: s.stock, chuck: s.holding?.chuck, jaws: s.holding?.jaws, hasMesh: !!(m && window.__marcam.meshFor(m.file)), tris: m && window.__marcam.meshFor(m.file) ? parseStl(window.__marcam.meshFor(m.file)).tris : null, previewTris, post: s.post,
       canCarry: doc.setups.indexOf(s) > 0, setupId: s.id, rotate: s.stock?.shape === "from_previous" ? s.stock.rotate : m?.rotate,
+      // (a setup with no part at all: no model, so any type fits it, a vise too)
+      ...(!m && !s.part?.length ? { modelDefault: "none" } : {}),
       // (Mar) this setup's part: its own, another setup's, or another file
       modelChoices: m ? [{ value: "own", label: `its own: ${m.file}` }]
         .concat(doc.setups.filter((o) => o !== s).map((o) => [o, doc.models.find((x) => o.part.includes(x.id) && x.kind === "mesh")]).filter(([, om]) => om && om.file !== m.file && window.__marcam.meshFor(om.file)).map(([o, om]) => ({ value: `setup:${o.id}`, label: `as ${o.name || o.id}: ${om.file}` })))

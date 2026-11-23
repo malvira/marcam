@@ -1486,7 +1486,7 @@ async function drawModel() {
   let fitKey = null;
   // (framed again for another setup, stock shape or part: not as a size is typed or a handle
   // dragged, the camera jumping under the person)
-  const frameKey = JSON.stringify([setup?.id ?? null, st0?.shape ?? null, setup?.kind ?? null, setup?.holding?.along ?? null, ids]);
+  const frameKey = JSON.stringify([setup?.id ?? null, st0?.shape ?? null, setup?.kind ?? null, setup?.holding?.along ?? null, !!setup?.holding?.tailstock, ids]);
   if (viseBar) {
     const corners = barCorners(st0);
     const geo = corners ? prismGeometry(THREE, corners, 0, st0.length) : toGeometry(THREE, cylinder(st0.radius, 0, st0.length, 96));
@@ -1576,9 +1576,13 @@ async function drawModel() {
   if (sb && v2 && (setup?.kind === "vise" || setup?.holding?.kind === "vise" || setup?.stock?.shape === "box")) {
     // (carried: the block as the engine has it)
     const grip = jawGrip(frame?.stock_box ? { ...setup, stock: { shape: "box", ...frame.stock_box } } : setup);
-    const top = sb.min[2] + grip, low = sb.min[2] - 4;
-    const len = sb.max[0] - sb.min[0] + 20, thick = 8;
-    for (const y of [sb.min[1] - thick / 2, sb.max[1] + thick / 2]) {
+    // (Mar's Fixture: its jaws' length, height and opening)
+    const hd = setup?.holding || {};
+    const low = sb.min[2] - 4;
+    const top = hd.jaw_height > 0 ? low + hd.jaw_height : sb.min[2] + grip;
+    const len = hd.jaw_width > 0 ? hd.jaw_width : sb.max[0] - sb.min[0] + 20, thick = 8;
+    const cy = (sb.min[1] + sb.max[1]) / 2, half = hd.opening > 0 ? hd.opening / 2 : (sb.max[1] - sb.min[1]) / 2;
+    for (const y of [cy - half - thick / 2, cy + half + thick / 2]) {
       // (steel, not the stock's colour: Mar)
       const geo = new THREE.BoxGeometry(len, thick, top - low);
       const jaw = new THREE.Group();
@@ -1587,6 +1591,50 @@ async function drawModel() {
       jaw.position.set((sb.min[0] + sb.max[0]) / 2, y, (top + low) / 2);
       jaw.userData.jaw = true;
       groups.jaws.add(jaw);
+    }
+  } else if (v2 && setup && !sb && v.bounds) {
+    // (Mar's Fixture) the 4th axis: its chuck behind the bar, and its tailstock at the front
+    const hd = setup.holding || {};
+    const steel = () => new THREE.MeshStandardMaterial({ color: colorNum("fixture"), metalness: 0.55, roughness: 0.5 });
+    const edge = () => new THREE.LineBasicMaterial({ color: colorNum("fixtureEdge") });
+    const alongX = (geo) => geo.rotateZ(-Math.PI / 2);
+    const back = v.bounds.xmin + 1, R = hd.chuck_diameter > 0 ? hd.chuck_diameter / 2 : 32.5;
+    const cl = hd.chuck_length > 0 ? hd.chuck_length : 30, grip = Math.max(0, hd.chuck || 0);
+    const chuck = new THREE.Group();
+    const body = alongX(new THREE.CylinderGeometry(R, R, cl, 48));
+    const bm = new THREE.Mesh(body, steel());
+    bm.position.x = back - cl / 2;
+    chuck.add(bm);
+    // its three jaws, gripping the bar's last `grip` mm
+    if (grip > 0) {
+      const rBar = Math.max(1, v.bounds.R);
+      for (let k = 0; k < 3; k++) {
+        const g = new THREE.BoxGeometry(grip, 6, 8);
+        const j = new THREE.Mesh(g, steel());
+        const a = (k * 2 * Math.PI) / 3;
+        j.position.set(back + grip / 2, Math.cos(a) * (rBar + 3), Math.sin(a) * (rBar + 3));
+        j.rotation.x = a;
+        chuck.add(j);
+      }
+    }
+    const bodyEdges = new THREE.LineSegments(new THREE.EdgesGeometry(body, 25), edge());
+    bodyEdges.position.copy(bm.position);
+    chuck.add(bodyEdges);
+    chuck.userData.chuck = true;
+    groups.jaws.add(chuck);
+    if (hd.tailstock) {
+      const depth = hd.centre_depth >= 0 && hd.centre_depth != null ? hd.centre_depth : 3;
+      const point = (hd.tailstock_x ?? 0) - depth, q = 12, coneL = q / Math.tan(Math.PI / 6);
+      const tail = new THREE.Group();
+      const cone = alongX(new THREE.CylinderGeometry(q, 0, coneL, 32));
+      const cm = new THREE.Mesh(cone, steel());
+      cm.position.x = point + coneL / 2;
+      const quill = alongX(new THREE.CylinderGeometry(q, q, 40, 32));
+      const qm = new THREE.Mesh(quill, steel());
+      qm.position.x = point + coneL + 20;
+      tail.add(cm, qm);
+      tail.userData.tailstock = true;
+      groups.jaws.add(tail);
     }
   }
   // frame the view when the stock changes; keep the person's orbit otherwise
@@ -1597,7 +1645,9 @@ async function drawModel() {
       v.camera.position.set(c[0] - span * 0.3, c[1] - span * 1.2, c[2] + span * 0.9);
       v.controls.target.set(...c);
     } else {
-      const { xmin, xmax, R } = v.bounds;
+      // (a tailstock at the front: framed in too)
+      const { xmin, R } = v.bounds;
+      const xmax = v.bounds.xmax + (setup?.holding?.tailstock && !sb ? 30 : 0);
       const span = xmax - xmin;
       v.camera.position.set((xmin + xmax) / 2 - span * 0.2, -span * 1.3, R * 2.2);
       v.controls.target.set((xmin + xmax) / 2, 0, 0);

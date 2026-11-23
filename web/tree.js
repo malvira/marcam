@@ -7,7 +7,7 @@ const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 import { describeStock, stockRadius } from "./project.js";
-import { applyPartField, applyStockField, carriedFrom, fitStock, meshModelOf, partPane, rangesFollow, stockPane } from "./stockpane.js";
+import { applyFixtureField, applyPartField, applyStockField, carriedFrom, FIXTURES, fixtureOf, fixturePane, fitStock, meshModelOf, partPane, rangesFollow, stockPane } from "./stockpane.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
 import { moveSetup } from "./handles.js";
 
@@ -292,6 +292,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       html += stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore });
     } else if (t.focus === "part" && !t.selected) {
       html += partPane(t.doc, s, esc, { moreOpen: t.ptMore, choices: modelChoices(s) });
+    } else if (t.focus === "fixture" && !t.selected) {
+      html += fixturePane(t.doc, s, esc);
     } else if (!t.selected) {
       // (Mar) everything about the setup here: its stock (with handles in the view), its
       // type, machine, holding, material, G-code options and work zero (applied as changed)
@@ -338,7 +340,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const part = from ? "with the stock" : m ? m.file : x.part?.length ? "revolved profile" : "no model";
     const row = (act, name, what, title) =>
       `<div class="tree-stock ${t.focus === act && !t.selected ? "sel" : ""}" data-node="${act}"><span class="tree-label" data-act="${act}" title="${esc(title)}">${name} <span class="muted">${esc(what)}</span></span></div>`;
-    return row("stock", "Stock", st, "The stock: its type and sizes (and handles to move it, carried)") + row("part", "Part", part, "Where the part sits in the stock (handles in the 3D view)");
+    return row("stock", "Stock", st, "The stock: its type and sizes (and handles to move it, carried)") + row("part", "Part", part, "Where the part sits in the stock (handles in the 3D view)") + row("fixture", "Fixture", FIXTURES[fixtureOf(x)], "What holds the stock: its preset and sizes (drawn, and the tool checked against it)");
   }
 
   /** (Mar: "a way in 4th to center up a part") The part on the rotary axis placed in one edit:
@@ -1401,7 +1403,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.retype = null;
       return render();
     }
-    if (el.dataset?.act === "stock" || el.dataset?.act === "part") {
+    if (el.dataset?.act === "stock" || el.dataset?.act === "part" || el.dataset?.act === "fixture") {
       if (t.picking) endPicking(false);
       t.focus = el.dataset.act;
       t.selected = null;
@@ -1880,6 +1882,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       await window.__marcam.project.setSource(s.id, el.value);
       return;
     }
+    if (el.closest?.("#fixturePane")) {
+      const s = setup();
+      const label = s && applyFixtureField(t.doc, s, el.id, el.value);
+      if (label) await commit({ label });
+      return;
+    }
     if (el.closest?.("#stockPane") || el.closest?.("#partPane")) {
       const s = setup();
       if (!s) return;
@@ -1979,13 +1987,13 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   let paneTimer = null;
   $("tree").addEventListener("input", (ev) => {
     const el = ev.target;
-    if (!(el.closest?.("#stockPane") || el.closest?.("#partPane")) || el.tagName !== "INPUT" || el.id === "stMargin") return;
+    if (!(el.closest?.("#stockPane") || el.closest?.("#partPane") || el.closest?.("#fixturePane")) || el.tagName !== "INPUT" || el.id === "stMargin") return;
     clearTimeout(paneTimer);
     paneTimer = setTimeout(async () => {
       const s = setup();
       if (!s || !el.isConnected || el.value === "" || !Number.isFinite(+el.value)) return;
       const id = el.id;
-      const label = el.closest("#stockPane") ? applyStockField(t.doc, s, id, el.value, null) : applyPartField(t.doc, s, id, el.value);
+      const label = el.closest("#fixturePane") ? applyFixtureField(t.doc, s, id, el.value) : el.closest("#stockPane") ? applyStockField(t.doc, s, id, el.value, null) : applyPartField(t.doc, s, id, el.value);
       if (!label) return;
       // (a burst of typing one edit: Undo takes it back whole)
       await commit({ label, typing: true });

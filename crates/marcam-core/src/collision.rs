@@ -120,6 +120,12 @@ pub enum Contact {
     /// The holder against the vise's jaws.
     #[serde(rename = "holder on the vise jaws")]
     HolderOnJaws,
+    /// The tool (any of it) against the 4th axis's chuck.
+    #[serde(rename = "tool on the chuck")]
+    OnChuck,
+    /// The tool (any of it) against the tailstock.
+    #[serde(rename = "tool on the tailstock")]
+    OnTailstock,
 }
 
 impl std::fmt::Display for Contact {
@@ -129,6 +135,8 @@ impl std::fmt::Display for Contact {
             Contact::Holder => "holder",
             Contact::ShankOnJaws => "shank on the vise jaws",
             Contact::HolderOnJaws => "holder on the vise jaws",
+            Contact::OnChuck => "tool on the chuck",
+            Contact::OnTailstock => "tool on the tailstock",
         })
     }
 }
@@ -358,6 +366,25 @@ pub fn contact_block(
 /// How far beyond the stock's X ends the vise's jaws reach (mm; as drawn).
 pub const JAW_X: f64 = 10.0;
 
+/// Where a vise's jaws stand: their X span and the Y of their inner faces, from the block
+/// `sb` and the fixture's sizes (None: 10 mm past the block's ends, against its Y faces).
+pub fn jaw_span(
+    sb: &crate::job::StockBox,
+    fx: Option<&crate::job::Fixture>,
+) -> ([f64; 2], [f64; 2]) {
+    let cx = 0.5 * (sb.min[0] + sb.max[0]);
+    let cy = 0.5 * (sb.min[1] + sb.max[1]);
+    let x = match fx.and_then(|f| f.jaw_width) {
+        Some(w) => [cx - w / 2.0, cx + w / 2.0],
+        None => [sb.min[0] - JAW_X, sb.max[0] + JAW_X],
+    };
+    let y = match fx.and_then(|f| f.opening) {
+        Some(o) => [cy - o / 2.0, cy + o / 2.0],
+        None => [sb.min[1], sb.max[1]],
+    };
+    (x, y)
+}
+
 /// Deepest contact of the shank or holder with the vise's jaws (beside the stock's Y faces
 /// `sb`, up to `jaw_top`), tip at work `tip`.
 pub fn contact_jaws(
@@ -366,6 +393,17 @@ pub fn contact_jaws(
     tip: [f64; 3],
     body: &ToolBody,
 ) -> Option<(Contact, f64)> {
+    contact_jaws_at(jaw_span(sb, None), jaw_top, tip, body)
+}
+
+/// [`contact_jaws`] with the jaws where `span` (see [`jaw_span`]) puts them.
+pub fn contact_jaws_at(
+    span: ([f64; 2], [f64; 2]),
+    jaw_top: f64,
+    tip: [f64; 3],
+    body: &ToolBody,
+) -> Option<(Contact, f64)> {
+    let (jx, jy) = span;
     let mut best: Option<(Contact, f64)> = None;
     for (which, lo, hi, rad) in body.zones() {
         if rad <= 0.0 || hi <= lo {
@@ -375,8 +413,8 @@ pub fn contact_jaws(
         if z_lo >= jaw_top {
             continue;
         }
-        let in_x = tip[0] + rad >= sb.min[0] - JAW_X && tip[0] - rad <= sb.max[0] + JAW_X;
-        let past_y = tip[1] - rad < sb.min[1] - 1e-9 || tip[1] + rad > sb.max[1] + 1e-9;
+        let in_x = tip[0] + rad >= jx[0] && tip[0] - rad <= jx[1];
+        let past_y = tip[1] - rad < jy[0] - 1e-9 || tip[1] + rad > jy[1] + 1e-9;
         if !(in_x && past_y) {
             continue;
         }
@@ -388,6 +426,50 @@ pub fn contact_jaws(
         };
         if d > CONTACT_TOL && best.is_none_or(|(_, b)| d > b) {
             best = Some((which, d));
+        }
+    }
+    best
+}
+
+/// Deepest contact of any of the tool (its flutes too) with the 4th axis's chuck or
+/// tailstock (bodies round the X axis, the same at every A), tip at machine `tip`; the bar
+/// `length` long (its back at -length).
+pub fn contact_holders(
+    fx: &crate::job::Fixture,
+    length: f64,
+    tip: [f64; 3],
+    body: &ToolBody,
+) -> Option<(Contact, f64)> {
+    let mut best: Option<(Contact, f64)> = None;
+    let mut zones = vec![(0.0, body.flute_length, body.cut_radius)];
+    zones.extend(body.zones().iter().map(|&(_, lo, hi, r)| (lo, hi, r)));
+    let tan30 = 30f64.to_radians().tan();
+    // (a zone: the tool's axis at (x, y), from z_lo up; nearest the X axis at its lowest)
+    for (lo, hi, rad) in zones {
+        if rad <= 0.0 || hi <= lo {
+            continue;
+        }
+        let z_lo = tip[2] + lo;
+        let near = z_lo.max(0.0).hypot((tip[1].abs() - rad).max(0.0));
+        let (x0, x1) = (tip[0] - rad, tip[0] + rad);
+        let mut hit = |c: Contact, r: f64| {
+            if near < r {
+                let d = (r - near).min(hi - lo);
+                if d > CONTACT_TOL && best.is_none_or(|(_, w)| d > w) {
+                    best = Some((c, d));
+                }
+            }
+        };
+        if let Some((a, b, r)) = fx.chuck(length) {
+            if x1 >= a && x0 <= b {
+                hit(Contact::OnChuck, r);
+            }
+        }
+        if let Some((point, _, quill)) = fx.tailstock() {
+            // its centre a cone 60° across from its point, then the quill
+            if x1 >= point {
+                hit(Contact::OnTailstock, ((x1 - point) * tan30).min(quill));
+            }
         }
     }
     best
@@ -500,7 +582,14 @@ pub fn simulate_rotary(
     step: f64,
     bar: (f64, f64, f64),
     check_only: bool,
+    fixture: Option<&crate::job::Fixture>,
 ) -> (SimStats, CollisionReport) {
+    // (the chuck and the tailstock reach as far out as they are)
+    let reach_fx = fixture.map_or(0.0, |f| {
+        f.chuck(-bar.1)
+            .map_or(0.0, |c| c.2)
+            .max(f.tailstock().map_or(0.0, |t| t.2))
+    });
     let segs = sim::segments(std::slice::from_ref(tp));
     let cutters: Vec<Option<Cutter>> = segs.iter().map(|s| s.tool.and_then(cutter_for)).collect();
     let mut st = SimStats::default();
@@ -511,7 +600,7 @@ pub fn simulate_rotary(
     let risky = |s: &Segment| -> Option<(u32, ToolBody)> {
         let t = s.tool?;
         let b = body_for(t)?;
-        (lowest_tip(s) + b.lowest() < bar.0).then_some((t, b))
+        (lowest_tip(s) + b.lowest() < bar.0 || lowest_tip(s) < reach_fx).then_some((t, b))
     };
     let threads = sim::sim_threads(stock.grid.nx);
     // nothing after the last move that can touch matters
@@ -550,7 +639,14 @@ pub fn simulate_rotary(
         }
         let seg = &segs[k];
         if let Some((t, b)) = risky(seg) {
-            let contact = |tip: [f64; 3], a: f64| contact_radial(stock, bar, tip, a, &b);
+            let contact = |tip: [f64; 3], a: f64| {
+                let st = contact_radial(stock, bar, tip, a, &b);
+                let fx = fixture.and_then(|f| contact_holders(f, -bar.1, tip, &b));
+                match (st, fx) {
+                    (Some(x), Some(y)) => Some(if y.1 > x.1 { y } else { x }),
+                    (x, y) => x.or(y),
+                }
+            };
             if let Some(c) = worst(seg, step, t, &contact, &mut since) {
                 rep.add(c);
                 if rep.full() {
@@ -575,6 +671,7 @@ pub fn simulate_block(
     step: f64,
     top: f64,
     jaws: Option<(crate::job::StockBox, f64)>,
+    fixture: Option<&crate::job::Fixture>,
 ) -> (SimStats, CollisionReport) {
     let mut st = SimStats::default();
     let mut rep = CollisionReport {
@@ -593,7 +690,8 @@ pub fn simulate_block(
             Some((t, b)) if !rep.full() => {
                 let contact = |tip: [f64; 3], _a: f64| {
                     let stock = contact_block(hm, top, tip, &b);
-                    let jaw = jaws.and_then(|(sb, jt)| contact_jaws(&sb, jt, tip, &b));
+                    let jaw = jaws
+                        .and_then(|(sb, jt)| contact_jaws_at(jaw_span(&sb, fixture), jt, tip, &b));
                     match (stock, jaw) {
                         (Some(s), Some(j)) => Some(if j.1 > s.1 { j } else { s }),
                         (s, j) => s.or(j),
