@@ -485,10 +485,20 @@ try {
   const SEL = "(() => { const t = window.__marcam.state.tree; return t.draft?.op.id === t.selected ? t.draft.op : t.doc?.setups.find((x) => x.id === t.setup)?.operations.find((o) => o.id === t.selected); })()";
   /** The setup worked on made `kind` in its details (applied as it is clicked). */
   const setKind = async (kind) => {
-    await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
-    await waitFor(() => js("!!document.querySelector('#setupHost #setupDialog[open]')"), "the setup's form in its details", 60000);
-    await js(`document.querySelector('#setupHost .sd-kind[data-kind="${kind}"]').click(); true`);
-    await waitFor(() => js(`(() => { try { const d = JSON.parse(document.getElementById('job').value); return d.setups.find((x) => x.id === window.__marcam.state.tree.setup)?.kind === '${kind}' && document.body.dataset.state !== 'busy'; } catch { return false; } })()`), `the setup a ${kind}`, 120000);
+    const done = `(() => { try { const d = JSON.parse(document.getElementById('job').value); return (d.setups.find((x) => x.id === window.__marcam.state.tree.setup) ?? (d.setups.length === 1 ? d.setups[0] : null))?.kind === '${kind}' && document.body.dataset.state !== 'busy'; } catch { return false; } })()`;
+    // (a plan landing meanwhile draws the tree again and opens the form afresh, the click
+    // lost with it, on a slow runner: clicked again)
+    for (let k = 0; k < 3; k++) {
+      await settle();
+      await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
+      await waitFor(() => js("!!document.querySelector('#setupHost #setupDialog[open]')"), "the setup's form in its details", 60000);
+      await js(`document.querySelector('#setupHost .sd-kind[data-kind="${kind}"]').click(); true`);
+      if (await waitFor(() => js(done), `the setup a ${kind}`, 30000).then(() => true, () => false)) break;
+    }
+    await waitFor(() => js(`(() => { try { const d = JSON.parse(document.getElementById('job').value); return (d.setups.find((x) => x.id === window.__marcam.state.tree.setup) ?? (d.setups.length === 1 ? d.setups[0] : null))?.kind === '${kind}' && document.body.dataset.state !== 'busy'; } catch { return false; } })()`), `the setup a ${kind}`, 120000).catch(async (e) => {
+      // (why not: the setups' kinds, the one worked on, what was said)
+      throw new Error(`${e.message}: ${await js("JSON.stringify({ kinds: (() => { try { return JSON.parse(document.getElementById('job').value).setups.map((x) => x.id + ':' + x.kind); } catch { return 'no project'; } })(), tree: window.__marcam.state.tree.setup, error: document.getElementById('error').textContent, warn: document.getElementById('sdWarn')?.textContent, form: !!document.querySelector('#setupHost #setupDialog[open]'), checked: document.querySelector('#setupHost input[name=sdKind]:checked')?.value })")}`);
+    });
     await settle();
   };
   /** The setup worked on: its details form open, `fill` (a page expression) run on it, its
