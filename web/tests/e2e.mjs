@@ -3407,7 +3407,7 @@ try {
     const kframe = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${ks.id}' }).then((r) => r.result.stock_box)`);
     await shot("42c_knob_stood");
     check("the knob's cut result in a vise stood on end by the Stock's Y ring: turned 90° (stock and part together), the block round it 100 tall",
-      /Y [+-]90°/.test(stood) && Math.abs(Math.abs(ks.stock.rotate?.[1] ?? 0) - 90) < 1e-9 && Math.abs(kframe.max[2] - kframe.min[2] - 100) < 1e-6,
+      /Y: -?90\.00/.test(stood) && Math.abs(Math.abs(ks.stock.rotate?.[1] ?? 0) - 90) < 1e-9 && Math.abs(kframe.max[2] - kframe.min[2] - 100) < 1e-6,
       `"${stood}" ${JSON.stringify(ks.stock)}; box ${JSON.stringify(kframe)}`);
   }
 
