@@ -157,7 +157,7 @@ export function fixturePane(doc, s, esc) {
       html += f("fxDepth", "Centre depth", h.centre_depth, "3", "How deep the tailstock's centre goes into the bar");
     }
   }
-  return html + `<div class="muted small">Drawn in the view, and the tool checked against it.</div></div>`;
+  return html + `<div class="muted small">${which === "vise" ? "Drawn in the view, and the tool" : "The tool"} checked against it.</div></div>`;
 }
 
 /** A Fixture pane field (`id`) changed: setup `s`'s holding to match; a label for Undo. */

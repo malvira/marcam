@@ -891,7 +891,7 @@ try {
   // ---------------------------------------------------------------- the Fixture
   // (Mar) a 4th-axis setup added from the tree, made 3-axis in its details: its Fixture line
   // a Vise, its opening typed wider, the jaws move on the screen; made 4th axis again with a
-  // Chuck + tailstock: the tailstock drawn; no dialogs
+  // Chuck + tailstock: its sizes given; no dialogs
   await click("#menuFile > summary");
   await sleep(200);
   await click("#projectNew");
@@ -934,8 +934,10 @@ try {
   await settled();
   await read("(() => { const s = document.getElementById('fxPreset'); s.value = 'chuck_tailstock'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
   await settled();
-  const tail = await read("(() => { const v = window.__marcam.state.three; const t = v.groups.jaws?.children.find((c) => c.userData.tailstock); if (!t) return null; const T = v.THREE; const b = new T.Box3().setFromObject(t); const p = b.getCenter(new T.Vector3()).project(v.camera); return [p.x, p.y, p.z]; })()");
-  check("Chuck + tailstock: the tailstock drawn, in the view", !!tail && Math.abs(tail[0]) < 0.95 && Math.abs(tail[1]) < 0.95, JSON.stringify(tail));
+  // (Mar: neither the chuck nor the tailstock is drawn on the 4th axis; their sizes are there)
+  const tailRow = await where("#fxDepth");
+  const drawn = await read("!!window.__marcam.state.three.groups.jaws?.children.some((c) => c.userData.tailstock || c.userData.chuck)");
+  check("Chuck + tailstock: its sizes in the Fixture (the centre's depth), nothing drawn for it on the 4th axis", !!tailRow && !drawn, JSON.stringify({ row: !!tailRow, drawn }));
   await clean("Chuck + tailstock");
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
