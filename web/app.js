@@ -438,7 +438,7 @@ async function resetProject(msg, actions) {
 }
 
 /** No results (a new or just opened project); `msg`, if given, says what to do. */
-function clearResults(msg, actions = ["import", "open"]) {
+function clearResults(msg, actions = ["add"]) {
   // (results cleared because the project needs planning: live, it is planned now)
   if (actions?.includes("generate") && autoOn()) setTimeout(liveLoaded, 0);
   // the viewer's playback goes with them
@@ -449,7 +449,8 @@ function clearResults(msg, actions = ["import", "open"]) {
   state.stale = false;
   document.body.classList.remove("stale");
   $("tabs").innerHTML = "";
-  const btn = { import: '<button type="button" data-empty="import" class="primary">Import STL...</button>', open: '<button type="button" data-empty="open">Open project...</button>', generate: '<button type="button" data-empty="generate" class="primary" id="emptyGenerate">Generate</button>' };
+  // (Mar: "No setups yet" and its button, nothing else; a setup's part is loaded on its Part line)
+  const btn = { add: '<button type="button" data-empty="add" class="primary">+ Add setup</button>', import: '<button type="button" data-empty="import" class="primary">Import STL...</button>', open: '<button type="button" data-empty="open">Open project...</button>', generate: '<button type="button" data-empty="generate" class="primary" id="emptyGenerate">Generate</button>' };
   $("summary").innerHTML = msg ? `<div class="empty-state" id="emptyState">${msg}<br>${actions.map((k) => btn[k]).join("")}</div>` : "";
   $("gcode").value = "";
   $("codeInfo").textContent = "";
@@ -1836,6 +1837,7 @@ document.addEventListener("keydown", (ev) => {
 $("summary").addEventListener("click", (ev) => {
   if (ev.target.id === "staleRegen") generate();
   if (ev.target.dataset?.empty === "import") $("importStl").click();
+  if (ev.target.dataset?.empty === "add") window.__marcam.project.addSetup({ kind: "vise" });
   if (ev.target.dataset?.empty === "open") $("projectOpen").click();
   if (ev.target.dataset?.empty === "generate") generate();
 });

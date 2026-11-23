@@ -202,7 +202,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (!s) {
       const lib = window.__marcam.tools?.summary?.() || "";
       setTree(`<div class="tree-list"><div class="tree-lib ${t.focus === "library" ? "sel" : ""}"><div class="tree-setuphead"><span class="twisty-pad"></span><span class="tree-label" data-act="library" title="The tools of every project: add, edit, import, export">Tool library</span> <span class="muted">${esc(lib)}</span></div></div>
-        <div class="muted small" id="treeEmpty">No part yet: Import STL (or drop one on the page) to get a setup, then add its operations.</div>
+        <div class="muted small" id="treeEmpty">No setups yet.</div>
         <div class="row small add-setup"><button type="button" id="treeAddSetup" title="A new setup, made at once (its type and where it starts from chosen beside)">+ Add setup</button>
         <select id="treeAddKind" aria-label="The new setup's type" title="The new setup's type"><option value="vise">3-axis</option><option value="rotary">4th axis</option></select>
         ${t.doc?.setups?.length ? `<select id="treeAddFrom" aria-label="Where the new setup starts" title="Continue from the setup before (its cut result and part), or its own new stock and part"><option value="carry">continue from previous</option><option value="own">independent</option></select>` : ""}</div></div>
@@ -524,7 +524,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       state.extraMeshes?.clear();
       window.__marcam.setMesh?.(null, "");
       await commit({ label: `Deleted the setup "${name}" (the last).` });
-      window.__marcam.clearResults?.("No setups: import an STL (button or drop it here), add a setup, or open a project.", ["import", "open"]);
+      window.__marcam.clearResults?.("No setups yet.", ["add"]);
       return;
     }
     const before = doc.setups[k - 1] || null;

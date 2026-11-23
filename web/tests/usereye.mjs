@@ -232,7 +232,20 @@ try {
   await click("#projectNew");
   await sleep(1200);
   await clean("New project");
-  // the knob's STL through the file chooser
+  // (Mar's left pane) no Machine and no Attach mesh at its top; "No setups yet" and its
+  // button; Add setup makes one at once (a plate), its part then loaded on its Part line
+  const top = await read(`(() => { const vis = ${VISIBLE}; return { machine: vis(document.getElementById('machine')), mesh: vis(document.getElementById('mesh')) }; })()`);
+  check("a new project: no Machine and no Attach mesh at the top of the left pane", !top.machine && !top.mesh, JSON.stringify(top));
+  const prompt = await read("document.getElementById('emptyState')?.textContent || ''");
+  check("a new project says \"No setups yet\" with its + Add setup button (no Import STL there)", /No setups yet/.test(prompt) && !!(await where("#emptyState button", "Add setup")) && !(await where("#emptyState button", "Import STL")), prompt.trim());
+  await click("#emptyState button", "Add setup");
+  await waitFor(() => where("#tree .tree-setup [data-act=setup]"), "the setup added", 60000).catch(() => {});
+  await sleep(1500);
+  await clean("Add setup with nothing loaded");
+  check("Add setup with nothing loaded: a setup at once (a plate)", /block|plate/i.test(await read("document.querySelector('#tree .tree-setup.active')?.textContent || ''")), await read("document.querySelector('#tree .tree-setup.active')?.textContent.trim().slice(0, 80) || ''"));
+  await click("#tree .tree-setup.active [data-act=part]");
+  await sleep(800);
+  // the knob's STL through the Part line's file chooser
   const chooser = new Promise((resolve) => {
     const t0 = events.length;
     const tick = setInterval(() => {
@@ -243,13 +256,13 @@ try {
       }
     }, 50);
   });
-  await click("#importStl");
+  await click("#ptReplace", "Import model");
   const fc = await Promise.race([chooser, sleep(10000).then(() => null)]);
-  if (!fc) throw new Error("no file chooser opened by Import STL");
+  if (!fc) throw new Error("no file chooser opened by the Part line's Import model");
   await S("DOM.setFileInputFiles", { files: [join(root, "examples", "knob", "knob.stl")], backendNodeId: fc.backendNodeId });
   await sleep(1500);
-  await clean("Import STL");
-  await waitFor(() => where("#tree .tree-setup [data-act=setup]"), "a setup in the tree", 60000);
+  await clean("Import model (the Part line)");
+  await waitFor(() => read("/knob/.test(document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || '')"), "the knob as the setup's part", 60000);
   // the setup selected: switched to a 3-axis vise in its details
   await click("#tree .tree-setup [data-act=setup]");
   await sleep(800);

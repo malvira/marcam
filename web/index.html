@@ -64,17 +64,19 @@
 </nav>
 <main>
   <section id="left">
-    <div class="row">
+    <!-- (Mar) the machine is each setup's (its details); the app still keeps the one in use here -->
+    <div class="row hidden" id="machineRow">
       <label for="machine">Machine</label>
       <select id="machine"></select>
     </div>
-    <div id="machineInfo" class="muted small"></div>
+    <div id="machineInfo" class="muted small hidden"></div>
     <textarea id="machineJson" class="code hidden" rows="8" spellcheck="false" aria-label="Machine JSON"></textarea>
-    <div class="row">
+    <!-- (Mar) a part is loaded on its setup's Part line (Import or Replace model) -->
+    <div class="row hidden" id="meshRow">
       <label for="mesh" title="The mesh file an opened project names, attached as it is (STL or 3MF); to bring in a new part, use Import STL">Attach mesh file</label>
       <input id="mesh" type="file" accept=".stl,.3mf,.step,.stp">
     </div>
-    <div id="meshInfo" class="muted small"></div>
+    <div id="meshInfo" class="muted small hidden"></div>
     <details id="libraryPanel">
       <summary>Tool library</summary>
       <div class="row">

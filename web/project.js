@@ -688,7 +688,7 @@ export function setupProject(ctx) {
     // (Mar: no modal) a new, empty project at once: its name and setups made in the tree
     const cfg = await dialog.open("new", { name: "untitled", machine: currentMachine()?.id, kind: p.pending?.kind ?? "rotary" }, { auto: !settings.dialogs });
     if (!cfg || cfg.error) return false;
-    await resetProject("New project: import an STL (button or drop it here) or open a project to start.");
+    await resetProject("No setups yet.", ["add"]);
     setStatus("New project", "ready");
     if (cfg.machine) ctx.selectMachine(cfg.machine);
     const doc = { schema_version: "0.2", name: cfg.name || "untitled", models: [], tools: [], setups: [] };
@@ -1209,7 +1209,7 @@ export function setupProject(ctx) {
       setMesh(bytes, `${file.name} (${partSummary(part)})`, part.step ? { name, bytes: part.step.bytes } : null);
       // (its machine as it is: the one chosen, when the setup names none)
       const report = await applySetup(doc, here, { kind, axis: kind === "vise" ? "z" : "x", tailstock: here.holding?.tailstock, rotate: [0, 0, 0], machine: here.machine || engineMachine() || undefined }, part.tris);
-      await commitSetupChange(doc, report, { label: `Setup "${here.name || here.id}": its part is ${file.name} (was its revolved profile).`, job: before });
+      await commitSetupChange(doc, report, { label: `Setup "${here.name || here.id}": its part is ${file.name}${was.length ? " (was its revolved profile)" : ""}.`, job: before });
       setStatus(`Replaced the model with ${file.name}.`, "done");
       return { project: doc, operations: [] };
     }
@@ -1491,7 +1491,16 @@ export function setupProject(ctx) {
     document.body.classList.remove("dropping");
     if (!f) return;
     ev.preventDefault();
-    if (/\.(stl|step|stp)$/i.test(f.name)) await importMesh(f);
+    // (Mar) a part dropped on the page: the selected setup's part, or a new setup when there
+    // is none
+    if (/\.(stl|step|stp)$/i.test(f.name)) {
+      let has = false;
+      try {
+        has = !!readJob().setups?.length;
+      } catch {}
+      if (has) await replaceModel(f);
+      else await importMesh(f);
+    }
     else if (/\.(marcam|toml|json)$/i.test(f.name)) await openFile(f);
     else showError(`${f.name}: drop an .stl or a .step to import it, or a .marcam (or .marcam.toml, .json) project to open it`);
   });
