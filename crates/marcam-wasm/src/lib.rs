@@ -661,8 +661,8 @@ pub mod api {
                         sums.len() - 1
                     });
                     let s = &mut sums[id];
-                    for k in 0..3 {
-                        s.0[k] += p[k];
+                    for (a, b) in s.0.iter_mut().zip(p) {
+                        *a += b;
                     }
                     s.1 += 1.0;
                     id
