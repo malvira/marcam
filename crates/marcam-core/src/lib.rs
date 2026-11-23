@@ -473,9 +473,18 @@ fn indexed_bar(job: &Job, prior: &[Vec<Move>]) -> sim::RadialMap {
     let tps: Vec<Toolpath> = prior.iter().map(|m| bar_toolpath(job, m)).collect();
     for seg in sim::segments(&tps) {
         let cut = seg.tool.and_then(cutter_of);
-        sim::apply_segment(&mut map, &seg, cut.as_ref(), 0.2);
+        sim::apply_segment(&mut map, &seg, cut.as_ref(), indexed_step(cut.as_ref()));
     }
     map
+}
+
+/// (Mar: "lets try the coarser sampling") how far apart the in-process stock of indexed
+/// roughing is cut along each move: half the tool's radius (not less than 0.2 mm). Coarser
+/// only ever leaves more material in the simulation (thin slivers at the edges of a tool's
+/// path, under 0.03 of its radius deep), never less: the angles after it plan for at least
+/// what is there.
+fn indexed_step(c: Option<&Cutter>) -> f64 {
+    c.map_or(0.2, |c| (0.5 * c.radius()).max(0.2))
 }
 
 fn bar_toolpath(job: &Job, moves: &[Move]) -> Toolpath {
@@ -514,7 +523,7 @@ fn indexed_stock(
             continue;
         }
         let cut = seg.tool.and_then(cutter_of);
-        sim::apply_segment(map, &seg, cut.as_ref(), 0.2);
+        sim::apply_segment(map, &seg, cut.as_ref(), indexed_step(cut.as_ref()));
     }
     *applied = before.len();
     let m = carry_mesh::bar_mesh(map).rotated_x(index);
@@ -538,61 +547,185 @@ fn indexed_stock(
 /// `n` A angles equally apart, the first where the part is lowest under the upright tool
 /// (between its blades): the part turned to each candidate as the indexed roughing turns
 /// it, the tool dropped on it along X at Y0; the angle whose `n` turns, and the turns a
-/// quarter of the way to the next either side, leave it deepest.
+/// quarter of the way to the next either side, leave it deepest. (Mar: "the coarser
+/// sampling") candidates every 6 degrees, then every 2 round the best of those. The turns'
+/// depths are independent of each other: found in parallel natively, and across workers in
+/// the browser (see [`gap_keys`], [`gap_fine_keys`], [`gap_depth`] and [`gap_pick`]).
 fn gap_angles(mesh: &Mesh, c: Cutter, n: u32, x0: f64, x1: f64) -> Vec<f64> {
+    let depths_of = |keys: &[i64]| -> Vec<f64> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            keys.par_iter().map(|&k| gap_depth(mesh, c, x0, x1, k)).collect()
+        }
+        #[cfg(target_arch = "wasm32")]
+        keys.iter().map(|&k| gap_depth(mesh, c, x0, x1, k)).collect()
+    };
+    let keys = gap_keys(n);
+    let mut at: std::collections::HashMap<i64, f64> =
+        keys.iter().copied().zip(depths_of(&keys)).collect();
+    let fine = gap_fine_keys(n, |k| at[&k]);
+    let fine: Vec<i64> = fine.into_iter().filter(|k| !at.contains_key(k)).collect();
+    at.extend(fine.iter().copied().zip(depths_of(&fine)));
+    gap_pick(n, |k| at[&k])
+}
+
+/// The candidates every `every` degrees across the first step of `n` angles, each with its
+/// `n` turns and a quarter of a step either side.
+fn gap_candidates(n: u32, every: f64) -> Vec<(f64, Vec<f64>)> {
+    let step = 360.0 / n.max(1) as f64;
+    let mut out = Vec::new();
+    let mut a0 = 0.0;
+    while n > 0 && a0 < step - 1e-9 {
+        out.push((a0, gap_turns(n, a0)));
+        a0 += every;
+    }
+    out
+}
+
+/// Candidate `a0`'s turns: its `n` angles, and a quarter of a step either side of each.
+fn gap_turns(n: u32, a0: f64) -> Vec<f64> {
+    let step = 360.0 / n as f64;
+    (0..n)
+        .flat_map(|k| [-0.25, 0.0, 0.25].map(|f| a0 + (k as f64 + f) * step))
+        .collect()
+}
+
+/// The coarse candidates' best (the first of the deepest), and the fine ones round it: every 2
+/// degrees within 4 of it (the first step's angles, wrapped).
+fn gap_fine(n: u32, depth: &impl Fn(i64) -> f64) -> Vec<f64> {
+    let step = 360.0 / n as f64;
+    let mut best = (f64::INFINITY, 0.0);
+    for (a0, turns) in gap_candidates(n, GAP_COARSE) {
+        let s: f64 = turns.iter().map(|&a| depth(gap_key(a))).sum();
+        if s < best.0 {
+            best = (s, a0);
+        }
+    }
+    [-4.0, -2.0, 2.0, 4.0]
+        .iter()
+        .map(|d| (best.1 + d).rem_euclid(step))
+        .filter(|a| *a < step - 1e-9)
+        .collect()
+}
+
+/// Degrees between the coarse candidates.
+const GAP_COARSE: f64 = 6.0;
+
+/// An angle as [`gap_angles`] keys its depths: tenths of a degree, 0 to 3599.
+fn gap_key(a: f64) -> i64 {
+    (a.rem_euclid(360.0) * 10.0).round() as i64
+}
+
+fn keys_of(angles: impl Iterator<Item = f64>) -> Vec<i64> {
+    let mut seen = std::collections::HashSet::new();
+    angles.map(gap_key).filter(|k| seen.insert(*k)).collect()
+}
+
+/// The turns (keys: tenths of a degree) whose depths the coarse search needs for `n` angles,
+/// each once, in the order they are first wanted.
+pub fn gap_keys(n: u32) -> Vec<i64> {
+    keys_of(gap_candidates(n, GAP_COARSE).into_iter().flat_map(|(_, t)| t))
+}
+
+/// The turns the fine search needs, given the coarse ones' depths (`depth` of a key).
+pub fn gap_fine_keys(n: u32, depth: impl Fn(i64) -> f64) -> Vec<i64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    keys_of(gap_fine(n, &depth).into_iter().flat_map(|a0| gap_turns(n, a0)))
+}
+
+/// How deep the upright tool `c` drops on `mesh` turned to `key` (tenths of a degree): the sum
+/// of its depths along X (`x0`..`x1`) at Y0.
+pub fn gap_depth(mesh: &Mesh, c: Cutter, x0: f64, x1: f64, key: i64) -> f64 {
+    let xs: Vec<f64> = (0..=16).map(|i| x0 + (x1 - x0) * i as f64 / 16.0).collect();
+    // (only the triangles the tool can touch along its line: the strip it travels, as wide as
+    // the tool; the depths are the same, the drop cutter far quicker to make)
+    let (sn, cs) = (key as f64 / 10.0).to_radians().dsin_cos();
+    let r = c.radius() + 1e-6;
+    let strip = Mesh {
+        triangles: mesh
+            .triangles
+            .iter()
+            .filter_map(|t| {
+                let q = t.map(|p| [p[0], cs * p[1] - sn * p[2], sn * p[1] + cs * p[2]]);
+                let (xa, xb) = (
+                    q[0][0].min(q[1][0]).min(q[2][0]),
+                    q[0][0].max(q[1][0]).max(q[2][0]),
+                );
+                let (ya, yb) = (
+                    q[0][1].min(q[1][1]).min(q[2][1]),
+                    q[0][1].max(q[1][1]).max(q[2][1]),
+                );
+                (xb >= x0 - r && xa <= x1 + r && yb >= -r && ya <= r).then_some(q)
+            })
+            .collect(),
+        faces: Vec::new(),
+    };
+    let dc = strategy::three_axis::DropCutter3::new(&strip, c);
+    xs.iter()
+        .map(|&x| dc.z_at(x, 0.0, -1e9).max(-1e3))
+        .sum::<f64>()
+}
+
+/// The `n` angles from the turns' depths (`depth` of a key, see [`gap_keys`] and
+/// [`gap_fine_keys`]): of the coarse candidates and the fine ones round their best, in order,
+/// the first of the deepest.
+pub fn gap_pick(n: u32, depth: impl Fn(i64) -> f64) -> Vec<f64> {
     if n == 0 {
         return Vec::new();
     }
     let step = 360.0 / n as f64;
-    let xs: Vec<f64> = (0..=16).map(|i| x0 + (x1 - x0) * i as f64 / 16.0).collect();
-    // (each turn's depth, once: every candidate's n turns are among them)
-    let mut depth = std::collections::HashMap::new();
-    let mut at = |a: f64| -> f64 {
-        let k = (a.rem_euclid(360.0) * 10.0).round() as i64;
-        *depth.entry(k).or_insert_with(|| {
-            // (only the triangles the tool can touch along its line: the strip it travels, as
-            // wide as the tool; the depths are the same, the drop cutter far quicker to make)
-            let (sn, cs) = (k as f64 / 10.0).to_radians().dsin_cos();
-            let r = c.radius() + 1e-6;
-            let strip = Mesh {
-                triangles: mesh
-                    .triangles
-                    .iter()
-                    .filter_map(|t| {
-                        let q = t.map(|p| [p[0], cs * p[1] - sn * p[2], sn * p[1] + cs * p[2]]);
-                        let (xa, xb) = (
-                            q[0][0].min(q[1][0]).min(q[2][0]),
-                            q[0][0].max(q[1][0]).max(q[2][0]),
-                        );
-                        let (ya, yb) = (
-                            q[0][1].min(q[1][1]).min(q[2][1]),
-                            q[0][1].max(q[1][1]).max(q[2][1]),
-                        );
-                        (xb >= x0 - r && xa <= x1 + r && yb >= -r && ya <= r).then_some(q)
-                    })
-                    .collect(),
-                faces: Vec::new(),
-            };
-            let dc = strategy::three_axis::DropCutter3::new(&strip, c);
-            xs.iter()
-                .map(|&x| dc.z_at(x, 0.0, -1e9).max(-1e3))
-                .sum::<f64>()
-        })
-    };
+    let mut cands: Vec<f64> = gap_candidates(n, GAP_COARSE).into_iter().map(|c| c.0).collect();
+    cands.extend(gap_fine(n, &depth));
+    cands.sort_by(f64::total_cmp);
+    cands.dedup();
     let mut best = (f64::INFINITY, 0.0);
-    let mut a0 = 0.0;
-    while a0 < step - 1e-9 {
+    for a0 in cands {
         // (with the turns either side: in the middle of a gap, not at its edge)
-        let s: f64 = (0..n)
-            .flat_map(|k| [-0.25, 0.0, 0.25].map(|f| a0 + (k as f64 + f) * step))
-            .map(&mut at)
-            .sum();
+        let s: f64 = gap_turns(n, a0).iter().map(|&a| depth(gap_key(a))).sum();
         if s < best.0 {
             best = (s, a0);
         }
-        a0 += 2.0;
     }
     (0..n).map(|k| best.1 + k as f64 * step).collect()
+}
+
+/// (The browser's workers) the depths [`gap_angles`] finds for indexed 3D roughing with tool
+/// `tool` in `job` (its part `mesh`), at `keys`: the part as the setup places it, the X range
+/// it spans.
+pub fn indexed_gap_depths(
+    job: &Job,
+    mesh: Option<&Mesh>,
+    tool: u32,
+    keys: &[i64],
+) -> Result<Vec<f64>, Error> {
+    let t = job.tool(tool).ok_or_else(|| Error::Invalid(format!("no tool T{tool}")))?;
+    let c = cutter_for(tool, t.shape)?;
+    let revolved;
+    let m = match mesh {
+        Some(m) => m,
+        None => {
+            let p = job.part.profile.as_ref().ok_or_else(|| {
+                Error::Invalid("indexed roughing needs the part's mesh or profile".into())
+            })?;
+            revolved = Mesh::revolve(p, PROFILE_SEGMENTS);
+            &revolved
+        }
+    };
+    // (the block's X range, as planning finds it: the part's)
+    let profile = job
+        .part
+        .profile
+        .as_ref()
+        .map(|p| RevolvedProfile::new(p, job.stock.radius));
+    let (x0, x1) = match (&profile, mesh.and_then(Mesh::bounds)) {
+        (_, Some((lo, hi))) => (lo[0], hi[0]),
+        (Some(p), None) => (p.x_min(), p.x_max()),
+        _ => (-job.stock.length, 0.0),
+    };
+    Ok(keys.iter().map(|&k| gap_depth(m, c, x0, x1, k)).collect())
 }
 
 /// What the moves before leave of the stock, at `cell` mm cells (for a tool of `radius`;

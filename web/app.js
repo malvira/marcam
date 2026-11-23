@@ -133,8 +133,13 @@ function showSimRing() {
 }
 /** Engine calls by command, since the page loaded (window.__marcam.calls). */
 const calls = {};
-const WITH_LIBRARIES = new Set(["opDefaults", "setMaterial", "simulate", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
+const WITH_LIBRARIES = new Set(["gapDepths", "opDefaults", "setMaterial", "simulate", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
 function engine(cmd, ...args) {
+  return engineOn(SIM_WORKER.has(cmd) ? "sim" : "main", cmd, ...args);
+}
+
+/** An engine call on worker `which` ("main", "sim", or one of the pool's, see [`pool`]). */
+function engineOn(which, cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
   // (Mar) setups with their own parts: the part file and theirs, given together
   if (state.extraMeshes?.size) args = args.map((a) => (a && a === state.mesh ? meshBundle() : a));
@@ -143,7 +148,7 @@ function engine(cmd, ...args) {
   if (WITH_LIBRARIES.has(cmd) && args[1] && typeof args[1] === "object" && !args[1].libraries) args[1] = { ...args[1], libraries: libraries() };
   const id = nextId++;
   simCallStart(cmd);
-  const which = SIM_WORKER.has(cmd) ? "sim" : "main";
+  if (!workers[which]) startWorker(which);
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject, cmd, worker: which, t0: performance.now() });
     workers[which].postMessage({ id, cmd, args });
@@ -629,6 +634,57 @@ export function fmtTime(sec) {
 }
 window.__marcam = Object.assign(window.__marcam || {}, { fmtTime, setMesh, clearResults });
 
+// ---- (Mar: indexed roughing on every core) a pool of workers for work that splits into
+// independent pieces: one fewer than the machine's cores (the planner has one), at most six,
+// none on a single core (the planner then does it all itself, as before)
+const POOL = Math.max(0, Math.min(6, (navigator.hardwareConcurrency || 1) - 1));
+/** The angles indexed 3D roughing finds for itself (index count, no indexes), by what they
+ *  depend on: found again only when one of those changes. */
+const gapCache = new Map();
+
+/** `job` (0.2) with the angles of its indexed 3D roughing (an index count, no indexes) found
+ *  across the pool and written in as its indexes: the planner then takes them as given, the
+ *  same angles it would find (the same toolpaths), without searching for them on its one
+ *  worker. `job` itself is left as it is. `stale()`: a newer run asked for meanwhile. */
+async function withGapAngles(job, setupId, stale) {
+  if (!POOL || job.schema_version !== "0.2") return job;
+  const todo = [];
+  for (const s of job.setups || []) {
+    if (setupId && s.id !== setupId) continue;
+    for (const op of s.operations || [])
+      if (op.type === "rough3d" && op.enabled !== false && op.index_count > 0 && !op.indexes?.length) todo.push([s, op]);
+  }
+  if (!todo.length) return job;
+  const copy = structuredClone(job);
+  for (const [s, op] of todo) {
+    const parts = (job.models || []).filter((m) => s.part?.includes(m.id));
+    const key = JSON.stringify([state.meshesGen, state.meshName, parts, s.stock, s.holding, s.kind, (job.tools || []).find((t) => t.number === op.tool), op.tool, op.index_count]);
+    let angles = gapCache.get(key);
+    if (!angles) {
+      const n = op.index_count;
+      // (the turns shared out: every worker a run of them)
+      const depthsAt = async (keys) => {
+        const per = Math.ceil(keys.length / POOL);
+        const chunks = Array.from({ length: POOL }, (_, i) => keys.slice(i * per, (i + 1) * per)).filter((c) => c.length);
+        const got = await Promise.all(chunks.map((ks, i) => engineOn(`pool${i}`, "gapDepths", job, { setup: s.id, tool: op.tool, keys: ks }, state.mesh)));
+        return got.flatMap((p) => p.result.depths);
+      };
+      // the coarse search, then the fine one round its best
+      const keys = (await engineOn("pool0", "gapKeys", { n })).result.keys;
+      const depths = await depthsAt(keys);
+      if (stale()) return null;
+      const fine = (await engineOn("pool0", "gapFineKeys", { n, keys, depths })).result.keys;
+      const all = { n, keys: keys.concat(fine), depths: depths.concat(await depthsAt(fine)) };
+      if (stale()) return null;
+      angles = (await engineOn("pool0", "gapPick", all)).result.angles;
+      gapCache.set(key, angles);
+    }
+    const o = copy.setups.find((x) => x.id === s.id).operations.find((x) => x.id === op.id);
+    o.indexes = angles;
+  }
+  return copy;
+}
+
 async function generate(opts = {}) {
   // (a click passes an event)
   if (opts instanceof Event) opts = {};
@@ -669,7 +725,14 @@ async function generate(opts = {}) {
   window.__marcam.tree?.renderStates?.();
   try {
     const setupId = state.tree?.setup;
-    const { result, ms } = await engine("planAndPost", job, machineArg(), state.mesh, { max_points: 150000, libraries: libraries(), setup: job.schema_version === "0.2" ? setupId : undefined });
+    const t0 = performance.now();
+    // (indexed roughing's angles found across the pool first; a newer run meanwhile: dropped)
+    const planned = await withGapAngles(job, job.schema_version === "0.2" ? setupId : undefined, () => run !== state.genRun).catch(() => job);
+    // (diagnostics: how long the angles took, across the pool)
+    state.gapMs = performance.now() - t0;
+    if (run !== state.genRun || !planned) return;
+    const { result } = await engine("planAndPost", planned, machineArg(), state.mesh, { max_points: 150000, libraries: libraries(), setup: job.schema_version === "0.2" ? setupId : undefined });
+    const ms = performance.now() - t0;
     // an edit since then (auto-regenerate) has asked for a newer run: this one is dropped
     if (run !== state.genRun) return;
     state.result = result;

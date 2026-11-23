@@ -110,6 +110,13 @@ export async function load(source, opts = {}) {
     // convert a profile file (marcam JSON, Fusion .tools/.json/.mch/.f3d) -> {kind, profile, notes}
     importProfile: (bytes, name) => call("import_profile", bytes, name || "profile.json"),
     meshTriangles: (job, opts, meshBytes) => call("mesh_triangles", job, opts || {}, meshBytes),
+    // indexed 3D roughing's angle search, split across workers: the turns the coarse search
+    // needs for {n}, their depths for {setup, tool, keys}, the fine search's turns from
+    // {n, keys, depths}, then the n angles from {n, keys, depths} (all of them)
+    gapKeys: (opts) => call("gap_keys", opts || {}),
+    gapDepths: (job, opts, meshBytes) => call("gap_depths", job, opts || {}, meshBytes),
+    gapFineKeys: (opts) => call("gap_fine_keys", opts || {}),
+    gapPick: (opts) => call("gap_pick", opts || {}),
     // the stock a setup starts with (what a setup before left): {triangles, bounds, stl?}
     carriedMesh: (job, opts, meshBytes) => call("carried_mesh", job, opts || {}, meshBytes),
     // material-removal playback: open a session, then seek to any segment

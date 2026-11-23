@@ -103,7 +103,12 @@ async function start() {
       const w = waiters.get(msg.id);
       waiters.delete(msg.id);
       msg.error ? w.reject(new Error(msg.error.message)) : w.resolve(msg.result);
-    } else if (msg.method) events.push(msg);
+    } else if (msg.method) {
+      events.push(msg);
+      // (a page's own question: leaving with unsaved changes, a confirm) answered OK, as a
+      // person clicks it; left open, the page waits on it and every later step hangs
+      if (msg.method === "Page.javascriptDialogOpening") ws.send(JSON.stringify({ id: ++n, method: "Page.handleJavaScriptDialog", params: { accept: true }, ...(msg.sessionId ? { sessionId: msg.sessionId } : {}) }));
+    }
   });
   const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
     const id = ++n;
@@ -126,6 +131,34 @@ async function start() {
   };
   await S("Page.navigate", { url });
   return { S, read, events, url };
+}
+
+/** A part like an impeller (a hub along X, three blades out to radius 18), as binary STL. */
+function bladesStl() {
+  const tris = [];
+  const quad = (a, b, c, d) => tris.push([a, b, c], [a, c, d]);
+  const n = 48;
+  const rp = (k, r, x) => {
+    const t = (k / n) * 2 * Math.PI;
+    return [x, r * Math.cos(t), r * Math.sin(t)];
+  };
+  for (let k = 0; k < n; k++) {
+    quad(rp(k, 6, -30), rp(k + 1, 6, -30), rp(k + 1, 6, 0), rp(k, 6, 0));
+    quad([-30, 0, 0], rp(k + 1, 6, -30), rp(k, 6, -30), [-30, 0, 0]);
+    quad([0, 0, 0], rp(k, 6, 0), rp(k + 1, 6, 0), [0, 0, 0]);
+  }
+  for (let b = 0; b < 3; b++) {
+    const t = (b / 3) * 2 * Math.PI;
+    const [c, s] = [Math.cos(t), Math.sin(t)];
+    const at = (x, r, w) => [x, r * c - w * s, r * s + w * c];
+    const [x0, x1, r0, r1, w] = [-28, -2, 5, 18, 1.5];
+    const P = [[x0, r0, -w], [x1, r0, -w], [x1, r1, -w], [x0, r1, -w], [x0, r0, w], [x1, r0, w], [x1, r1, w], [x0, r1, w]].map(([x, r, ww]) => at(x, r, ww));
+    for (const f of [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [2, 3, 7, 6], [1, 2, 6, 5], [0, 4, 7, 3]]) quad(P[f[0]], P[f[1]], P[f[2]], P[f[3]]);
+  }
+  const buf = Buffer.alloc(84 + 50 * tris.length);
+  buf.writeUInt32LE(tris.length, 80);
+  tris.forEach((t, i) => t.forEach((p, j) => p.forEach((v, k) => buf.writeFloatLE(v, 84 + 50 * i + 12 + 12 * j + 4 * k))));
+  return buf;
 }
 
 const { S, read, events, url } = await start();
@@ -1076,6 +1109,82 @@ try {
   const pb3 = await turnedBox();
   check("0°: not turned, still on the axis with its front at X0", onAxis(pb3) && Math.abs(pb3.hi[0] - pb3.lo[0] - (pb0.hi[0] - pb0.lo[0])) < 0.05, `${JSON.stringify(pb0)} -> ${JSON.stringify(pb3)}`);
   await clean("the 4th axis's quarter turns");
+  // ---------------------------------------------------------------- indexed roughing, timed
+  // (Mar's option b and a: the angle search across workers, the stock sampled coarser) a part
+  // like the impeller (a hub with three blades) through Mar's path in a fresh page: Indexed
+  // roughing (3+1) on the screen within the time it should take, the page answering
+  // meanwhile; then the same with the browser saying it has one core (no workers): planned
+  // the same (the same G-code)
+  const blades = join(mkdtempSync(join(tmpdir(), "marcam-blades-")), "blades.stl");
+  writeFileSync(blades, bladesStl());
+  const SLACK = Number(process.env.MARCAM_PERF_SLACK || 1);
+  const indexedRun = async (what) => {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await click("#menuFile > summary");
+    await sleep(200);
+    await click("#projectNew");
+    await settled();
+    await read("(() => { const s = document.getElementById('treeAddKind'); s.value = 'rotary'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAddSetup");
+    await settled();
+    await click("#tree .tree-setup.active [data-act=part]");
+    await sleep(800);
+    const ch = new Promise((resolve) => {
+      const t0 = events.length;
+      const tick = setInterval(() => {
+        const e = events.slice(t0).find((x) => x.method === "Page.fileChooserOpened");
+        if (e) {
+          clearInterval(tick);
+          resolve(e.params);
+        }
+      }, 50);
+    });
+    await click("#ptReplace", "Import model");
+    const fc = await Promise.race([ch, sleep(10000).then(() => null)]);
+    if (!fc) throw new Error(`${what}: no file chooser from Import model`);
+    await S("DOM.setFileInputFiles", { files: [blades], backendNodeId: fc.backendNodeId });
+    await waitFor(() => read("/blades/.test(document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || '')"), "the blades on the 4th axis", 60000);
+    await settled();
+    // (the bar round it: its Stock's Fit to part)
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    await click("#stFit", "Fit to part");
+    await settled();
+    // the page's frames from here on: the longest wait between two
+    await read("(() => { window.__eyeGap = 0; let last = performance.now(); const f = (t) => { window.__eyeGap = Math.max(window.__eyeGap, t - last); last = t; window.__eyeRaf = requestAnimationFrame(f); }; cancelAnimationFrame(window.__eyeRaf); window.__eyeRaf = requestAnimationFrame(f); return true; })()");
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = [...s.options].find((o) => o.textContent === 'Indexed roughing (3+1)')?.value ?? ''; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    await waitFor(() => where("dialog[open] .tp-row", "flat 3\\.175"), `${what}: the library`, 30000);
+    const t0 = Date.now();
+    await click("dialog[open] .tp-row", "flat 3\\.175");
+    const tab = await waitFor(() => read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return t && /OK|issue/.test(t.textContent) ? t.textContent : null; })()`), `${what}: the toolpath`, 180000).catch(() => null);
+    const ms = Date.now() - t0;
+    const gap = await read("(cancelAnimationFrame(window.__eyeRaf), window.__eyeGap)");
+    await settled();
+    const vr = await viewRect();
+    const img = await shot(`indexed_${what.replace(/\W+/g, "_")}`);
+    let px = 0;
+    for (let y = vr[1]; y < vr[1] + vr[3]; y += 2)
+      for (let x = vr[0]; x < vr[0] + vr[2]; x += 2) {
+        const q = img.at(x, y);
+        if (q[2] > 150 && q[2] > q[0] + 60 && q[2] > q[1] + 20) px++;
+      }
+    const status = await read("document.getElementById('status').textContent");
+    const gcode = await read("(async () => { const t = document.getElementById('gcode').value; const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(b)].slice(0, 8).map((x) => x.toString(16).padStart(2, '0')).join('') + ' ' + t.length; })()");
+    return { tab, ms, gap: Math.round(gap), px, status, gcode };
+  };
+  const many = await indexedRun("workers");
+  check("Indexed roughing (3+1) on a bladed part: its cuts on the screen within 60 s (the angles found across the workers)", !!many.tab && many.px > 400 && many.ms < 60000 * SLACK, JSON.stringify(many));
+  check("the page answers while it plans (no frame held over 1 s)", many.gap < 1000 * SLACK, `${many.gap} ms`);
+  await clean("indexed roughing across the workers");
+  // a browser with one core: no workers; the planner finds the angles itself
+  await S("Emulation.setHardwareConcurrencyOverride", { hardwareConcurrency: 1 });
+  const one = await indexedRun("one core");
+  await S("Emulation.setHardwareConcurrencyOverride", { hardwareConcurrency: 8 }).catch(() => {});
+  check("with one core (no workers): planned too, the same G-code, on the screen, the page answering", !!one.tab && one.px > 400 && one.gcode === many.gcode && one.gap < 1000 * SLACK, `${JSON.stringify(one)} vs ${many.gcode}`);
+  await clean("indexed roughing on one core");
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

@@ -16,6 +16,10 @@ exclude = ["tests/", "examples/"]
 [lib]
 name = "marcam"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# (natively) work that splits into independent pieces done on every core
+rayon = "1"
+
 [dependencies]
 flate2 = "1"
 # transcendental functions computed the same on every platform (see src/det.rs)

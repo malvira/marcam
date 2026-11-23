@@ -715,6 +715,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "libm",
+ "rayon",
  "ruzstd",
  "serde",
  "serde_json",

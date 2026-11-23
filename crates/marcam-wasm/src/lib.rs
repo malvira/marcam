@@ -579,6 +579,89 @@ pub mod api {
         out
     }
 
+    /// (Indexed 3D roughing's angle search, across the page's workers) the turns whose depths
+    /// it needs for `opts.n` angles: `{keys}` (tenths of a degree).
+    pub fn gap_keys(opts: &str) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        json!({ "keys": marcam::gap_keys(o["n"].as_u64().unwrap_or(0) as u32) })
+    }
+
+    /// The depths at `opts.keys` for tool `opts.tool` in setup `opts.setup`: `{depths}`.
+    pub fn gap_depths(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let keys: Vec<i64> = opts["keys"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_i64).collect())
+            .unwrap_or_default();
+        let tool = opts["tool"].as_u64().unwrap_or(0) as u32;
+        match marcam::indexed_gap_depths(&job, mesh.as_ref(), tool, &keys) {
+            Ok(d) => json!({ "depths": d }),
+            Err(e) => err(e),
+        }
+    }
+
+    /// The turns the fine search needs, given the coarse ones' `opts.depths` at `opts.keys`:
+    /// `{keys}` (those not given).
+    pub fn gap_fine_keys(opts: &str) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let at = depths_at(&o);
+        let n = o["n"].as_u64().unwrap_or(0) as u32;
+        if marcam::gap_keys(n).iter().any(|k| !at.contains_key(k)) {
+            return err("gap_fine_keys: depths missing");
+        }
+        let keys: Vec<i64> = marcam::gap_fine_keys(n, |k| at[&k])
+            .into_iter()
+            .filter(|k| !at.contains_key(k))
+            .collect();
+        json!({ "keys": keys })
+    }
+
+    fn depths_at(o: &Value) -> std::collections::HashMap<i64, f64> {
+        let nums = |k: &str| -> Vec<f64> {
+            o[k].as_array()
+                .map(|a| a.iter().filter_map(Value::as_f64).collect())
+                .unwrap_or_default()
+        };
+        nums("keys")
+            .into_iter()
+            .map(|k| k as i64)
+            .zip(nums("depths"))
+            .collect()
+    }
+
+    /// The `opts.n` angles from the depths `opts.depths` at `opts.keys`: `{angles}`.
+    pub fn gap_pick(opts: &str) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let at = depths_at(&o);
+        let n = o["n"].as_u64().unwrap_or(0) as u32;
+        // (a depth missing: the planner finds the angles itself)
+        let missing = |k: &i64| !at.contains_key(k);
+        if marcam::gap_keys(n).iter().any(missing)
+            || marcam::gap_fine_keys(n, |k| at.get(&k).copied().unwrap_or(f64::INFINITY))
+                .iter()
+                .any(missing)
+        {
+            return err("gap_pick: depths missing");
+        }
+        json!({ "angles": marcam::gap_pick(n, |k| at[&k]) })
+    }
+
     /// Oriented mesh triangles (flattened xyz, f32) for display, thinned to about
     /// `max_triangles` (`opts`, default 200000).
     pub fn mesh_triangles(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
@@ -1975,6 +2058,10 @@ pub mod api {
             "sim_close" => sim_close(),
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&d(a), &s(b), c),
+            "gap_keys" => gap_keys(&s(a)),
+            "gap_depths" => gap_depths(&d(a), &s(b), c),
+            "gap_pick" => gap_pick(&s(a)),
+            "gap_fine_keys" => gap_fine_keys(&s(a)),
             "carried_mesh" => carried_mesh(&d(a), &s(b), c),
             "svg_paths" => svg_paths(&s(a), &s(b)),
             "estimate_gcode" => estimate_gcode(&s(a), &s(b)),
