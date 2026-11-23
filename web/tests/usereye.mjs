@@ -327,7 +327,9 @@ try {
     // (the arrow's shaft starts at the middle, the ring goes round it: the red nearest the
     // middle, a little out, is the arrow)
     const near = hc.pts.red.filter((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) > 12).sort((a, b) => Math.hypot(a[0] - c[0], a[1] - c[1]) - Math.hypot(b[0] - c[0], b[1] - c[1]));
-    const from = near[Math.min(near.length - 1, 6)] || red;
+    // (the arrow where the handles say it is: red pixels may be its ring's too)
+    const ax = await read("JSON.stringify(window.__marcam.handles.screenOf('translate', 'X'))").then((t) => (t ? JSON.parse(t) : null));
+    const from = ax || near[Math.min(near.length - 1, 6)] || red;
     d[0] = from[0] - c[0];
     d[1] = from[1] - c[1];
     l = Math.hypot(...d) || 1;
@@ -397,7 +399,8 @@ try {
     const mid = (ps) => ps.reduce((a, p) => [a[0] + p[0] / ps.length, a[1] + p[1] / ps.length], [0, 0]);
     const c = mid([...hc0.pts.green, ...hc0.pts.blue]);
     const near = hc0.pts.red.filter((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) > 12).sort((a, b) => Math.hypot(a[0] - c[0], a[1] - c[1]) - Math.hypot(b[0] - c[0], b[1] - c[1]));
-    const from = near[Math.min(near.length - 1, 6)];
+    const ax = await read("JSON.stringify(window.__marcam.handles.screenOf('translate', 'X'))").then((t) => (t ? JSON.parse(t) : null));
+    const from = ax || near[Math.min(near.length - 1, 6)];
     const d = [from[0] - c[0], from[1] - c[1]];
     const l = Math.hypot(...d) || 1;
     const b0 = partBox(img0, r);
