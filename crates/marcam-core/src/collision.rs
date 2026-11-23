@@ -663,6 +663,7 @@ pub fn simulate_rotary(
 
 /// [`sim3::simulate3`] that also checks the tool bodies (see [`simulate_rotary`]); `top` is
 /// the block's starting top.
+#[allow(clippy::too_many_arguments)]
 pub fn simulate_block(
     hm: &mut Heightmap3,
     tp: &Toolpath,
