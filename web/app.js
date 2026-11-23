@@ -1486,7 +1486,8 @@ async function drawModel() {
   let fitKey = null;
   // (framed again for another setup, stock shape or part: not as a size is typed or a handle
   // dragged, the camera jumping under the person)
-  const frameKey = JSON.stringify([setup?.id ?? null, st0?.shape ?? null, setup?.kind ?? null, setup?.holding?.along ?? null, ids]);
+  // (Mar: framed after an import: the part's file, not only its id, which an import keeps)
+  const frameKey = JSON.stringify([setup?.id ?? null, st0?.shape ?? null, setup?.kind ?? null, setup?.holding?.along ?? null, ids, ids.map((id) => doc.models?.find((m) => m.id === id)?.file ?? null)]);
   if (viseBar) {
     const corners = barCorners(st0);
     const geo = corners ? prismGeometry(THREE, corners, 0, st0.length) : toGeometry(THREE, cylinder(st0.radius, 0, st0.length, 96));
@@ -1842,7 +1843,7 @@ document.addEventListener("keydown", (ev) => {
 });
 $("summary").addEventListener("click", (ev) => {
   if (ev.target.id === "staleRegen") generate();
-  if (ev.target.dataset?.empty === "import") $("importStl").click();
+  if (ev.target.dataset?.empty === "import") $("importStlFile").click();
   if (ev.target.dataset?.empty === "add") window.__marcam.project.addSetup({ kind: "vise" });
   if (ev.target.dataset?.empty === "open") $("projectOpen").click();
   if (ev.target.dataset?.empty === "generate") generate();
@@ -2442,7 +2443,8 @@ window.__marcam.pixelAt = (fx, fy) => {
 
 // ---------------------------------------------------------------- the menus
 // File: what the toolbar's buttons did; a menu closes once something in it is chosen.
-$("menuImport").addEventListener("click", () => $("importStl").click());
+// (Mar: one Import, not two) File > Import part; the Part line's Import model
+$("menuImport").addEventListener("click", () => $("importStlFile").click());
 $("menuReplace").addEventListener("click", () => $("replaceModelFile").click());
 $("menuDownload").addEventListener("click", () => $("download").click());
 $("menuColors").addEventListener("click", () => openColors());
