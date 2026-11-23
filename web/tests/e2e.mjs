@@ -2989,6 +2989,9 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(text)}, "knob_two_setups.marcam.toml").then(() => true)`);
     await settle();
     await waitFor(() => js("document.querySelectorAll('#tree .tree-setup').length === 2"), "both setups in the tree", 30000);
+    // (the setup worked on: its details, whatever was selected before the project opened)
+    await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
+    await sleep(400);
     const t0 = await js("(() => { const h = [...document.querySelectorAll('#tree .tree-setup')]; return { names: h.map((x) => x.querySelector('[data-act=setup]').textContent).join('|'), active: document.querySelector('#tree .tree-setup.active').dataset.setup, details: !!document.getElementById('setupSummary'), ops: document.querySelectorAll('#tree .tree-setup.active .tree-op').length }; })()");
     // the second setup's name: it is worked on, its details shown
     await js("document.querySelectorAll('#tree .tree-setup')[1].querySelector('[data-act=setup]').click(); true");
