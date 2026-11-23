@@ -687,6 +687,7 @@ export function setupProject(ctx) {
     if (!mayDiscard("Start a new project")) return false;
     // (Mar: no modal) a new, empty project at once: its name and setups made in the tree
     const cfg = await dialog.open("new", { name: "untitled", machine: currentMachine()?.id, kind: p.pending?.kind ?? "rotary" }, { auto: !settings.dialogs });
+    if (cfg?.error) showError(`New project: ${cfg.error}`);
     if (!cfg || cfg.error) return false;
     await resetProject("No setups yet.", ["add"]);
     setStatus("New project", "ready");

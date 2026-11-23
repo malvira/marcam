@@ -631,7 +631,8 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       // (Mar: a setup with no part made another type in its details: the usual plate, or bar,
       // of that type, its sizes then in its Stock)
       const usual = noModel && spec.mode !== "given" && c.embedded ? (k === "vise" ? { shape: "block", mode: "given", dims: { x: 60, y: 40, z: 20 } } : { shape: "round", mode: "given", dims: { radius: 12.5 }, length: 60 }) : null;
-      const need = carry || usual ? [] : noModel && spec.mode !== "given" ? ["no model to fit it to"] : missing(spec);
+      // (a new project: no setup yet, no stock to give)
+      const need = carry || usual || c.mode === "new" ? [] : noModel && spec.mode !== "given" ? ["no model to fit it to"] : missing(spec);
       if (need.length) {
         $("sdWarn").textContent = noModel && spec.mode !== "given" ? "With no model, give the stock's sizes, or take the stock from a setup before." : `Give every stock size (${need.join(", ")}), or fit the stock to the part.`;
         $("sdWarn").classList.remove("hidden");

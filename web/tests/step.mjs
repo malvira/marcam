@@ -33,11 +33,20 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "step", models: [], tools: [], setups: [] } }))}, "step.marcam.json").then(() => true)`);
     await app.settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${b64}"), (c) => c.charCodeAt(0))], "${name}")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the import dialog", 120000);
-    const shown = await js("document.getElementById('sdFileName').textContent");
-    await js(`document.querySelector('.sd-kind[data-kind="${kind}"]').click(); document.getElementById('sdOk').click(); true`);
+    // (Mar: no setup dialogs) placed at once (4th axis) and planned; its type then its Setup's
     await waitFor(() => js("document.body.dataset.state === 'done' || document.body.dataset.state === 'error'"), `${name} imported and planned`, 240000);
     await app.settle(500);
+    const shown = await js("document.getElementById('meshInfo').textContent");
+    if (kind !== "rotary") {
+      await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
+      await waitFor(() => js("!!document.querySelector('#setupHost #setupDialog[open]')"), "the setup's form in its details", 60000);
+      await js(`document.querySelector('#setupHost .sd-kind[data-kind="${kind}"]').click(); true`);
+      await waitFor(() => js(`JSON.parse(document.getElementById('job').value).setups[0].kind === '${kind}' && document.body.dataset.state !== 'busy'`), `the setup a ${kind}`, 120000);
+      await app.settle(500);
+      await js("document.getElementById('generate').click(); true");
+      await waitFor(() => js("document.body.dataset.state === 'done' || document.body.dataset.state === 'error'"), `${name} planned as a ${kind}`, 240000);
+      await app.settle(500);
+    }
     return shown;
   };
   const mark = app.events.length;

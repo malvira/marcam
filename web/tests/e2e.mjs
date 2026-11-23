@@ -505,6 +505,19 @@ try {
     await js(`const t = document.getElementById('stType'); t.value = '${type}'; t.dispatchEvent(new Event('change', { bubbles: true })); true`);
     await settle();
   };
+  /** + Add setup in the tree (no dialog): `kind` (vise or rotary), continuing from the setup
+   *  before ("carry") or independent ("own"); added at once, its Stock shown. */
+  const addSetup = async (kind = "vise", from = "carry") => {
+    // (the tree's: a 0.1 job shown as a project has its setups there only)
+    const count = "(window.__marcam.state.tree.doc?.setups || []).length";
+    const n0 = await js(count);
+    const was = await js("!!window.__marcam.project.settings.dialogs");
+    await dialogs(false);
+    await js(`(() => { for (const [id, v] of [['treeAddKind', '${kind}'], ['treeAddFrom', '${from}']]) { const e = document.getElementById(id); if (!e) continue; e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); } document.getElementById('treeAddSetup').click(); return true; })()`);
+    await waitFor(() => js(`${count} === ${n0 + 1} && document.body.dataset.state !== 'busy'`), "the setup added", 60000);
+    await settle();
+    await dialogs(was);
+  };
   await treeAct("op3", "enable");
   await settle();
   const off = await gen();
@@ -1061,34 +1074,21 @@ try {
     const fileJs = (name, buf) => `new File([Uint8Array.from(atob("${Buffer.from(buf).toString("base64")}"), (c) => c.charCodeAt(0))], ${JSON.stringify(name)})`;
     const setFile = (input, name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); const i = document.getElementById('${input}'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     const drop = (name, buf) => js(`(() => { const dt = new DataTransfer(); dt.items.add(${fileJs(name, buf)}); document.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); document.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); return true; })()`);
-    const dialogs = () => cdp.dialogs.map((d) => `${d.type}: ${d.message}`);
+    const cdpDialogs = () => cdp.dialogs.map((d) => `${d.type}: ${d.message}`);
     const allGcode = () => js("window.__marcam.state.result.programs.map((p) => p.name + '\\n' + p.gcode).join('\\n')");
     const viewsOk = () => js(`(() => { const v = window.__marcam.state.three; const s = document.getElementById('side'); const px = s.getContext('2d').getImageData(0, 0, s.width, s.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++;
       return { part: v.groups.part.children.length, stock: v.groups.stock.children.length, path: v.groups.path.children.length, side: ink, tabs: [...document.querySelectorAll('#tabs button')].map((b) => b.textContent), ops: document.querySelectorAll('#tree .tree-op').length, stale: document.body.classList.contains('stale') }; })()`);
-    const dialogOpen = () => waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
-    // fill the setup dialog: { kind, units, axis, name, file: [name, bytes] }, then OK
-    async function inDialog(o = {}) {
-      await dialogOpen();
-      if (o.name !== undefined) await js(`document.getElementById('sdName').value = ${JSON.stringify(o.name)}; true`);
-      if (o.kind) await js(`document.querySelector('.sd-kind[data-kind="${o.kind}"]').click(); true`);
-      if (o.units) await js(`const u = document.getElementById('sdUnits'); u.value = '${o.units}'; u.dispatchEvent(new Event('change', { bubbles: true })); true`);
-      if (o.axis) await js(`const a = document.getElementById('sdAxis'); a.value = '${o.axis}'; a.dispatchEvent(new Event('change', { bubbles: true })); true`);
-      if (o.file) {
-        await setFile("sdFile", o.file[0], o.file[1]);
-        await waitFor(() => js("document.getElementById('sdFileName').textContent.length > 0"), "the STL in the dialog", 60000);
-      }
-      await sleep(200);
-      if (o.shot) await shot(o.shot);
-      const info = await js("document.getElementById('sdInfo').textContent");
-      if (o.cancel) await js("document.getElementById('sdCancel').click(); true");
-      else await js("document.getElementById('sdOk').click(); true");
-      return info;
-    }
+    // (Mar: no setup dialogs) New: an empty project at once; an STL: placed at once, planned
+    const newProject = async () => {
+      await js("document.getElementById('projectNew').click(); true");
+      await emptyReady();
+    };
     const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
     const emptyReady = () => waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 60000).catch(async (e) => {
       throw new Error(`${e.message}: ${await js("JSON.stringify({ empty: !!document.getElementById('emptyState'), state: document.body.dataset.state, status: document.getElementById('status').textContent })")}`);
     });
 
+    await dialogs(false);
     // New, from a project with unsaved edits: asked first; declining keeps it
     await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
     const dirty0 = await js("!document.getElementById('projectDirty').classList.contains('hidden')");
@@ -1098,39 +1098,42 @@ try {
     const kept = await js("document.querySelectorAll('#tree .tree-op').length");
     const noDialog = !(await js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"));
     cdp.dialogAnswer = true;
-    check("unsaved changes are marked, and New asks before discarding them (declined: nothing lost)", dirty0 && /unsaved changes/.test(dialogs().pop() || "") && kept > 0 && noDialog, `${dialogs().slice(-1)}; ${kept} operations kept`);
+    check("unsaved changes are marked, and New asks before discarding them (declined: nothing lost)", dirty0 && /unsaved changes/.test(cdpDialogs().pop() || "") && kept > 0 && noDialog, `${cdpDialogs().slice(-1)}; ${kept} operations kept`);
 
-    // New: the setup dialog (name, machine, setup type); without an STL, an empty project
-    await js("document.getElementById('projectNew').click(); true");
-    await dialogOpen();
-    const choices = await js("[...document.querySelectorAll('.sd-kind')].map((k) => k.querySelector('b').textContent + ': ' + k.querySelector('small').textContent.slice(0, 30))");
-    await inDialog({ name: "bracket", kind: "vise", shot: "15a_new_dialog" });
-    await emptyReady();
+    // New: no dialog, an empty project at once; its setups added in the tree
+    await newProject();
+    const choices = await js("[...(document.getElementById('treeAddKind')?.options || [])].map((o) => o.textContent)");
     const empty = await js("({ name: document.getElementById('projectName').textContent, ops: document.querySelectorAll('#tree .tree-op').length, tabs: document.querySelectorAll('#tabs button').length, gcode: (window.__marcam.state.result?.programs || []).length, cta: document.getElementById('emptyState').textContent })");
     // nothing to plan: Generate is disabled and says why
     const nothing = await js("document.getElementById('generate').disabled ? document.getElementById('generate').title : 'enabled'");
-    check("New: a dialog with the three setup types; without an STL, an empty project saying \"No setups yet\" (its + Add setup)",
-      choices.length === 3 && /Rotary 4th axis/.test(choices[0]) && /Indexed 3\+1/.test(choices[1]) && /3-axis vise/.test(choices[2]) && empty.name === "bracket" && empty.ops === 0 && empty.tabs === 0 && /No setups yet/i.test(empty.cta) && /Import an STL first|setup/i.test(nothing),
+    check("New: no dialog; an empty project at once saying \"No setups yet\" (its + Add setup: 3-axis or 4th axis)",
+      !(await js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))")) && choices.join() === "3-axis,4th axis" && empty.name === "untitled" && empty.ops === 0 && empty.tabs === 0 && /No setups yet/i.test(empty.cta) && /Import an STL first|setup/i.test(nothing),
       `${choices.join(" | ")}; ${JSON.stringify(empty)}`);
     await shot("14a_new_project");
-    // the type chosen in New is pre-selected when the STL comes
+    // an STL into it: placed at once (4th axis), made a 3-axis vise in its Setup
     await setFile("importStlFile", "dome.stl", readFileSync(join(root, "examples", "plate", "dome.stl")));
-    await dialogOpen();
-    const pre = await js("document.querySelector('input[name=\"sdKind\"]:checked').value");
-    await inDialog({});
-    await waitDone("generation after importing into the new vise project", 240000);
+    await waitDone("generation after importing into the new project", 240000);
+    await setKind("vise");
+    await clickGenerate();
+    await waitDone("generation of the vise setup", 240000);
     const dv = await doc();
-    check("Import STL into it: the dialog keeps the vise chosen in New; block stock, 3-axis operations generated",
-      pre === "vise" && dv.setups[0].kind === "vise" && dv.setups[0].stock.shape === "box" && dv.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && (await viewsOk()).tabs.every((t) => t.endsWith("OK")),
-      `${pre}; ${JSON.stringify(dv.setups[0].stock)}`);
+    check("Import STL into it, then its Setup made a 3-axis vise: block stock, 3-axis operations generated",
+      dv.setups[0].kind === "vise" && dv.setups[0].stock.shape === "box" && dv.setups[0].operations.map((o) => o.type).join() === "rough3d,raster3d" && (await viewsOk()).tabs.every((t) => t.endsWith("OK")),
+      JSON.stringify(dv.setups[0].stock));
 
-    // each setup type, from New with the STL chosen in the dialog
+    // each setup type: New, the STL, its Setup's type
     const byKind = {};
     for (const [kind, ops] of [["rotary", "rotary_rough,rotary_finish"], ["indexed", "rough3d,rough3d,raster3d,raster3d"], ["vise", "rough3d,raster3d"]]) {
-      await js("document.getElementById('projectNew').click(); true");
-      const info = await inDialog({ name: `knob_${kind}`, kind, axis: kind === "vise" ? "x" : "x", file: ["knob.stl", knobStl], shot: `15b_new_${kind}` });
-      await waitFor(async () => (await doc()).setups?.[0]?.kind === kind, `the new ${kind} project`, 30000);
-      await waitDone(`generation of a new ${kind} project`, 240000);
+      await newProject();
+      await setFile("importStlFile", "knob.stl", knobStl);
+      await waitDone("generation of the imported knob", 240000);
+      if (kind !== "rotary") {
+        await setKind(kind);
+        await clickGenerate();
+        await waitDone(`generation of a new ${kind} project`, 240000);
+      }
+      await shot(`15b_new_${kind}`);
+      const info = await js("document.getElementById('meshInfo').textContent");
       const d = await doc();
       const v = await viewsOk();
       const offered = await addTypes();
@@ -1145,11 +1148,8 @@ try {
     }
 
     // a rotary project: import, save, reopen (the earlier round trip), then change its type
-    await js("document.getElementById('projectNew').click(); true");
-    await inDialog({ name: "knob", kind: "rotary" });
-    await emptyReady();
+    await newProject();
     await setFile("importStlFile", "knob.stl", knobStl);
-    await inDialog({});
     await waitDone("generation after the STL import", 240000);
     const info1 = await js("document.getElementById('meshInfo').textContent");
     const doc1 = await doc();
@@ -1191,8 +1191,7 @@ try {
       inside.files.some(([n, l]) => n === "knob.stl" && l === 84 + 50 * 10080) && clean1,
       `${saved}; ${JSON.stringify(inside)}`);
     const savedText = savedBytes;
-    await js("document.getElementById('projectNew').click(); true");
-    await inDialog({ cancel: true });
+    await newProject();
     const dialogsBefore = cdp.dialogs.length;
     await setFile("projectOpenFile", saved, Buffer.from(savedText));
     await waitFor(() => js("document.body.dataset.state === 'ready' && !!document.getElementById('emptyGenerate')"), "the opened project", 30000);
@@ -1208,12 +1207,10 @@ try {
     await shot("14d_reopened");
 
     // Edit setup: rotary -> 3-axis vise converts it (warned), regenerates, and can be undone
-    await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
-    await dialogOpen();
-    const editPre = await js("({ kind: document.querySelector('input[name=\"sdKind\"]:checked').value, machine: document.getElementById('sdMachine').value, title: document.getElementById('sdTitle').textContent })");
+    const editPre = { kind: (await doc()).setups[0].kind };
     const nDialogs = cdp.dialogs.length;
-    await inDialog({ kind: "vise", shot: "15d_edit_setup_dialog" });
-    await waitFor(() => js("document.body.dataset.state === 'ready'"), "the converted setup", 60000);
+    await setKind("vise");
+    await shot("15d_edit_setup_dialog");
     const staleAfterEdit = await js("({ stale: document.body.classList.contains('stale'), attention: document.getElementById('generate').classList.contains('attention') })");
     const convertMsg = await js("document.getElementById('error').textContent");
     check("a setup change marks the results out of date and highlights Generate (nothing planned yet)", staleAfterEdit.stale && staleAfterEdit.attention, JSON.stringify(staleAfterEdit));
@@ -1236,10 +1233,15 @@ try {
     check("Undo brings the rotary setup back, regenerated", du.setups[0].kind === "rotary" && du.setups[0].operations.map((o) => o.type).join() === "rotary_rough,rotary_finish" && (await allGcode()) === gcode2,
       du.setups[0].operations.map((o) => o.type).join());
 
-    // + Setup: a second setup (indexed 3+1) for the same part, its own placement
-    await js("document.getElementById('treeAddSetup').click(); true");
-    await inDialog({ kind: "indexed", name: "Flats", shot: "15f_add_setup_dialog" });
-    await waitFor(() => js("document.body.dataset.state === 'ready'"), "the added setup", 60000);
+    // + Setup: a second setup for the same part, its own placement (independent), made
+    // indexed 3+1 and named in its Setup
+    await js("(() => { for (const [id, v] of [['treeAddKind', 'rotary'], ['treeAddFrom', 'own']]) { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); } document.getElementById('treeAddSetup').click(); return true; })()");
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups.length === 2 && document.body.dataset.state !== 'busy'"), "the added setup", 60000);
+    await settle();
+    await setKind("indexed");
+    await inDetails("const n = document.getElementById('sdName'); n.value = 'Flats'; n.dispatchEvent(new Event('change', { bubbles: true }))",
+      "JSON.parse(document.getElementById('job').value).setups[1].name === 'Flats' && document.body.dataset.state !== 'busy'", "the setup named");
+    await shot("15f_add_setup_dialog");
     await clickGenerate();
     await waitDone("generation of the added setup", 240000);
     const da = await doc();
@@ -1250,33 +1252,29 @@ try {
     await shot("15g_two_setups");
 
     // ASCII STL dropped on the page, and an inch STL: the same part
-    await js("document.getElementById('projectNew').click(); true");
-    await inDialog({ name: "untitled", kind: "rotary" });
-    await emptyReady();
+    await newProject();
     await drop("knob_ascii.stl", Buffer.from(ascii));
-    await inDialog({});
     await waitDone("generation after dropping an ASCII STL", 240000);
     const infoA = await js("document.getElementById('meshInfo').textContent");
     const gA = await allGcode();
     check("drag-and-drop an ASCII STL: imported and generated like the binary one", /ASCII STL, 10080 triangles/.test(infoA) && /21\.70 x 20\.00 x 20\.00 mm/.test(infoA) && gA.replace(/knob_ascii/g, "knob") === gcode1, infoA);
     await shot("14e_ascii_dropped");
-    await js("document.getElementById('projectNew').click(); true");
-    await inDialog({ name: "untitled", kind: "rotary" });
-    await emptyReady();
+    await newProject();
     await setFile("importStlFile", "knob_inch.stl", inch);
-    await inDialog({ units: "inch" });
     await waitDone("generation after an inch STL", 240000);
+    // (its Part: "File in inches")
+    await js("document.querySelector('#tree .tree-setup.active [data-act=part]').click(); true");
+    await waitFor(() => js("!!document.getElementById('ptInch')"), "the Part pane", 30000);
+    await js("document.getElementById('ptInch').click(); true");
+    await waitFor(() => js("/21\\.70 x 20\\.00 x 20\\.00 mm/.test(document.getElementById('meshInfo').textContent) && document.body.dataset.state !== 'busy'"), "the part in mm", 120000);
     const infoI = await js("document.getElementById('meshInfo').textContent");
-    check("an inch STL with units = inch comes in at the same size in mm", /inch/.test(infoI) && /21\.70 x 20\.00 x 20\.00 mm/.test(infoI), infoI);
+    check("an inch STL, its Part's \"File in inches\": the same size in mm", /21\.70 x 20\.00 x 20\.00 mm/.test(infoI), infoI);
 
-    // a second STL into a project with a part: the dialog (type pre-selected), then replace or add
+    // a second STL into a project with a part: replace (OK) or add (Cancel)
     await setFile("importStlFile", "knob.stl", knobStl);
-    await dialogOpen();
-    const preI = await js("document.querySelector('input[name=\"sdKind\"]:checked').value");
-    await inDialog({});
     await waitDone("generation after replacing the part", 240000);
-    const asked = dialogs().pop() || "";
-    check("importing into a project with a part: the setup type pre-selected, then replace (OK) or add (Cancel)", preI === "rotary" && /Replace the part with knob\.stl/.test(asked), `${preI}; ${asked}`);
+    const asked = cdpDialogs().pop() || "";
+    check("importing into a project with a part: replace (OK) or add (Cancel)", /Replace the part with knob\.stl/.test(asked), asked);
 
     // bad files: a clear error, nothing replaced
     const opsBefore = await js("document.querySelectorAll('#tree .tree-op').length");
@@ -1308,16 +1306,13 @@ try {
           error: document.getElementById('error').textContent, side: (() => { const c = document.getElementById('side'); const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let ink = 0; for (let i = 3; i < px.length; i += 4) if (px[i]) ink++; return ink; })() }; })()`);
       const workerSession = () => js("await window.__marcam.engine('simSeek', 1).then((r) => !(r.result && r.result.error), () => false)");
       const newEmpty = async () => {
-        await js("document.getElementById('projectNew').click(); true");
-        await inDialog({ name: "untitled", kind: "rotary" });
-        await emptyReady();
+        await newProject();
         await sleep(300);
         return scene();
       };
       const base = await newEmpty();
       // A: the knob, generated, with the playback open and faces being picked
       await setFile("importStlFile", "knob.stl", knobStl);
-      await inDialog({});
       await waitDone("generation of part A", 240000);
       await js("document.getElementById('simOpen').click(); true");
       await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the playback of A", 120000);
@@ -1342,7 +1337,6 @@ try {
       await shot("14h_reset_after_new");
       // B: only B's geometry and G-code
       await setFile("importStlFile", "dome.stl", domeStl);
-      await inDialog({});
       await waitDone("generation of part B", 240000);
       const withB = await scene();
       const gB = await allGcode();
@@ -1368,12 +1362,13 @@ try {
       check("loading an example resets too: the previous example's part, toolpaths and mesh are gone; only the ring's bar and part",
         ex.path === 0 && ex.part === 1 && ex.stock === 1 && !ex.mesh && ex.gcode === 0 && !ex.result && ex.partTris !== domeTris, JSON.stringify(ex));
     }
+    await dialogs(true);
 
     // leaving with unsaved changes: the browser asks
     await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
     await S("Page.reload");
     await waitFor(() => js("document.body.dataset.state === 'ready'"), "the page after reload", 30000);
-    check("leaving with unsaved changes: the browser asks first", cdp.dialogs.some((d) => d.type === "beforeunload"), dialogs().slice(-1).join());
+    check("leaving with unsaved changes: the browser asks first", cdp.dialogs.some((d) => d.type === "beforeunload"), cdpDialogs().slice(-1).join());
   }
 
   // 8k. planning only when asked: view actions plan nothing and mark nothing stale; an edit
@@ -2208,12 +2203,11 @@ try {
       const p = (await window.__marcam.engine('opDefaults', d, { type: 'pocket', setup: s.id, tool: 1 })).result;
       const f = (await window.__marcam.engine('opDefaults', d, { type: 'face', setup: s.id, tool: 1 })).result;
       return { pocket: p.feed, depth: p.step_down, face: f.feed }; })()`);
-    // reopened, the dialog shows the material
-    await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
-    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
+    // the setup's details show the material
+    await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
+    await waitFor(() => js("!!document.querySelector('#setupHost #setupDialog[open]')"), "the setup's form in its details", 60000);
     const shown = await js("document.getElementById('sdMaterial').value");
-    await js("document.getElementById('sdCancel').click(); true");
-    check("a new operation takes the tool's data for its type in the setup's material, else the tool's for the material; the dialog shows the material",
+    check("a new operation takes the tool's data for its type in the setup's material, else the tool's for the material; the setup's details show the material",
       fresh.pocket === 450 && fresh.depth === 0.4 && fresh.face === 500 && shown === "aluminium", `${JSON.stringify(fresh)} ${shown}`);
   }
 
@@ -2759,105 +2753,83 @@ try {
   // each with all its sizes (labelled, with units), given or fitted to the part, in mm or
   // inches, from a list of common sizes; written to the project (and its file), drawn
   {
+    // (Mar: no setup dialogs) its Stock in the tree: the type, its sizes, Fit to part
     await js("window.__confirm0 = window.confirm; window.confirm = () => true; true");
-    const openEdit = async () => {
-      await js("(document.getElementById('treeEditSetup') || (document.querySelector('#tree .tree-setup.active [data-act=setup]').click(), document.getElementById('treeEditSetup'))).click(); true");
-      await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the setup dialog", 60000);
+    const openStock = async () => {
+      await js("document.querySelector('#tree .tree-setup.active [data-act=stock]').click(); true");
+      await waitFor(() => js("!!document.getElementById('stType')"), "the Stock pane", 30000);
     };
-    const set = (id, v) => js(`(() => { const e = document.getElementById('${id}'); e.value = '${v}'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    const pick = (name, v) => js(`(() => { const e = document.querySelector('input[name="${name}"][value="${v}"]'); e.checked = true; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    const shown = () => js("[...document.querySelectorAll('#sdDims label:not(.hidden), #sdMargins label:not(.hidden)')].map((l) => l.querySelector('input').id)");
-    const apply = async () => {
-      await js("document.getElementById('sdOk').click(); true");
-      await waitFor(() => js("!(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the dialog closed", 60000);
+    // (each change applied as a person's is; the pane drawn again after it)
+    const set = async (id, v) => {
+      await js(`(() => { const e = document.getElementById('${id}'); e.value = '${v}'; e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+      await sleep(250);
       await settle();
+      await openStock();
     };
+    const shown = () => js("[...document.querySelectorAll('#stockPane label input')].map((i) => i.id)");
     const stockNow = () => js("JSON.parse(document.getElementById('job').value).setups[0].stock");
     // the bars, on the knob (rotary)
     await js("document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");
     await settle();
     const bars = {};
     for (const [shape, fields, want] of [
-      ["round", { sdDia: 25, sdLen: 40, sdChuck: 10 }, { shape: "cylinder", radius: 12.5, length: 40 }],
-      ["square", { sdSide: 22, sdAngle: 0, sdLen: 40 }, { shape: "square", side: 22, length: 40, angle: 0 }],
-      ["rect", { sdW: 30, sdH: 22, sdAngle: 15, sdLen: 40 }, { shape: "rect", width: 30, height: 22, length: 40, angle: 15 }],
-      ["hex", { sdAf: 24, sdAngle: 30, sdLen: 40 }, { shape: "hex", across_flats: 24, length: 40, angle: 30 }],
+      ["round", { stDia: 25, stLen: 40 }, { shape: "cylinder", radius: 12.5, length: 40 }],
+      ["square", { stSide: 22, stAngle: 0, stLen: 40 }, { shape: "square", side: 22, length: 40, angle: 0 }],
+      ["rect", { stW: 30, stH: 22, stAngle: 15, stLen: 40 }, { shape: "rect", width: 30, height: 22, length: 40, angle: 15 }],
+      ["hex", { stAf: 24, stAngle: 30, stLen: 40 }, { shape: "hex", across_flats: 24, length: 40, angle: 30 }],
     ]) {
-      await openEdit();
-      await pick("sdShape", shape);
-      await pick("sdStock", "explicit");
+      await openStock();
+      await set("stType", shape);
       const fieldsShown = await shown();
       for (const [id, v] of Object.entries(fields)) await set(id, v);
-      const units = await js("[...document.querySelectorAll('#sdDims label:not(.hidden) .u')].map((u) => u.textContent).join(',')");
-      if (shape === "hex") bars.corners = await js("document.getElementById('sdAc').value");
+      const units = await js("[...document.querySelectorAll('#stockPane label .u')].map((u) => u.textContent).join(',')");
       await shot(`30_stock_${shape}`);
-      await apply();
       const st = await stockNow();
       const drawnR = await js("window.__marcam.state.three.bounds.R");
       bars[shape] = { ok: Object.entries(want).every(([k, v]) => Math.abs((st[k] ?? NaN) - v) < 1e-6 || st[k] === v), st, fieldsShown, units, drawnR };
     }
     const hexR = 24 / Math.sqrt(3);
-    // inches: 1" round entered as inches
-    await openEdit();
-    await pick("sdShape", "round");
-    await pick("sdStock", "explicit");
-    await set("sdStockUnits", "inch");
-    await set("sdDia", 1);
-    await set("sdLen", 2);
-    await apply();
-    const inch = await stockNow();
-    // a common size: a 3/4" hex
-    await openEdit();
-    await pick("sdShape", "hex");
-    const common = await js("(() => { const s = document.getElementById('sdCommon'); const i = [...s.options].findIndex((o) => o.textContent.startsWith('3/4')); s.selectedIndex = i; s.dispatchEvent(new Event('change', { bubbles: true })); return document.getElementById('sdAf').value; })()");
-    await apply();
-    const commonSt = await stockNow();
-    // fitted to the part: a hex round the knob
-    await openEdit();
-    await pick("sdShape", "hex");
-    await pick("sdStock", "auto");
-    await set("sdMargin", 0.5);
-    await apply();
+    // fitted to the part: a hex round the knob (its mesh)
+    await js("document.getElementById('example').value = 'knob_finish'; document.getElementById('loadExample').click(); true");
+    await settle();
+    await openStock();
+    await set("stType", "hex");
+    await js("(() => { const m = document.getElementById('stMore'); if (m) m.open = true; return true; })()");
+    await set("stMargin", 0.5);
+    await js("document.getElementById('stFit').click(); true");
+    await sleep(250);
+    await settle();
     const fitted = await stockNow();
     // round trip through the project file (TOML)
     const toml = await js("await (async () => (await window.__marcam.engine('toToml', JSON.parse(document.getElementById('job').value))).result.text)()").catch((e) => `error: ${e.message}`);
-    // the block, on the plate (vise): every size and where the part sits
+    // the block, on the plate (vise): its sizes
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await settle();
-    await openEdit();
-    const blockOnly = await js("[...document.querySelectorAll('.sd-shape:not(.hidden)')].map((e) => e.dataset.shape).join()");
-    await pick("sdStock", "auto");
-    const blockFit = await shown();
-    await pick("sdStock", "explicit");
+    await openStock();
+    const blockOnly = await js("[...document.getElementById('stType').options].filter((o) => !o.value.startsWith('cut:')).map((o) => o.value).join()");
     const blockFields = await shown();
-    for (const [id, v] of Object.entries({ sdBx: 70, sdBy: 50, sdBz: 12, sdPx: 5, sdPy: 5 })) await set(id, v);
+    for (const [id, v] of Object.entries({ stX: 70, stY: 50, stZ: 12 })) await set(id, v);
     await shot("30_stock_block");
-    await apply();
     const block = await stockNow();
-    const blockModel = await js("JSON.parse(document.getElementById('job').value).models.find((m) => m.kind === 'mesh').translate");
     // a hex bar lying in the vise along X, 20 across flats, 70 long: the block round it for
     // the view and the engine (Z0 at its top), planned
-    await openEdit();
-    await pick("sdShape", "hex");
-    await pick("sdStock", "explicit");
+    await set("stType", "hex");
     const viseBarFields = await shown();
-    for (const [id, v] of Object.entries({ sdAf: 20, sdAngle: 0, sdLen: 70 })) await set(id, v);
-    await apply();
+    for (const [id, v] of Object.entries({ stAf: 20, stAngle: 0, stLen: 70 })) await set(id, v);
     await settle();
     const viseBar = { st: await stockNow(), bounds: await js("window.__marcam.state.three.bounds"), problems: await js("window.__marcam.state.tree.problems.join('; ')"), kind: await js("JSON.parse(document.getElementById('job').value).setups[0].kind") };
     await shot("30_stock_vise_hex");
     await js("window.confirm = window.__confirm0; true");
-    check("stock: every shape with all its sizes (labelled, with units), given, fitted, in inches, from a common size; written to the project and its file; drawn at the bar's corners",
-      Object.values(bars).filter((b) => b.st).every((b) => b.ok) && bars.square.fieldsShown.includes("sdSide") && bars.rect.fieldsShown.includes("sdW") && bars.rect.fieldsShown.includes("sdH") &&
-      bars.hex.fieldsShown.includes("sdAf") && bars.hex.fieldsShown.includes("sdAc") && bars.round.fieldsShown.includes("sdChuck") && /mm/.test(bars.round.units) &&
-      Math.abs(+bars.corners - 2 * hexR) < 1e-3 && Math.abs(bars.hex.drawnR - hexR) < 1e-6 && Math.abs(bars.square.drawnR - 11 * Math.SQRT2) < 1e-6 &&
-      Math.abs(inch.radius - 12.7) < 1e-6 && Math.abs(inch.length - 50.8) < 1e-6 && Math.abs(commonSt.across_flats - 19.05) < 1e-6 && Math.abs(+common - 19.05) < 1e-3 &&
+    check("stock (its Stock in the tree): every shape with all its sizes (labelled, with units), given or fitted to the part; written to the project and its file; drawn at the bar's corners",
+      Object.values(bars).every((b) => b.ok) && bars.square.fieldsShown.includes("stSide") && bars.rect.fieldsShown.includes("stW") && bars.rect.fieldsShown.includes("stH") &&
+      bars.hex.fieldsShown.includes("stAf") && bars.round.fieldsShown.includes("stDia") && /mm/.test(bars.round.units) &&
+      Math.abs(bars.hex.drawnR - hexR) < 1e-6 && Math.abs(bars.square.drawnR - 11 * Math.SQRT2) < 1e-6 &&
       fitted.shape === "hex" && fitted.across_flats >= 20.5 && fitted.across_flats <= 22 &&
       /shape = "hex"/.test(toml) && /across_flats/.test(toml) &&
-      blockOnly === "block,round,square,rect,hex" && ["sdMxl", "sdMxh", "sdMyl", "sdMyh", "sdMzb"].every((id) => blockFit.includes(id)) && ["sdBx", "sdBy", "sdBz", "sdPx", "sdPy"].every((id) => blockFields.includes(id)) &&
+      blockOnly === "block,round,square,hex,rect" && ["stX", "stY", "stZ"].every((id) => blockFields.includes(id)) &&
       block.shape === "box" && block.max[0] - block.min[0] === 70 && block.max[1] - block.min[1] === 50 && block.max[2] - block.min[2] === 12 &&
-      viseBar.st.shape === "hex" && viseBar.st.across_flats === 20 && viseBar.kind === "vise" && !viseBarFields.includes("sdChuck") && Math.abs(viseBar.bounds.xmax - 70) < 1e-6 && !/needs/.test(viseBar.problems),
-      `${JSON.stringify(bars)} inch ${JSON.stringify(inch)} common ${common} ${JSON.stringify(commonSt)} fitted ${JSON.stringify(fitted)} toml ${String(toml).split(String.fromCharCode(10)).filter((l) => /stock|shape|across/.test(l)).join(" | ").slice(0, 200)} block ${blockOnly} ${blockFit} ${blockFields} ${JSON.stringify(block)} part at ${blockModel} vise bar ${JSON.stringify(viseBar)} ${viseBarFields}`);
+      viseBar.st.shape === "hex" && viseBar.st.across_flats === 20 && viseBar.kind === "vise" && viseBarFields.includes("stAf") &&Math.abs(viseBar.bounds.xmax - 70) < 1e-6 && !/needs/.test(viseBar.problems),
+      `${JSON.stringify(bars)} fitted ${JSON.stringify(fitted)} toml ${String(toml).split(String.fromCharCode(10)).filter((l) => /stock|shape|across/.test(l)).join(" | ").slice(0, 200)} block ${blockOnly} ${blockFields} ${JSON.stringify(block)} vise bar ${JSON.stringify(viseBar)} ${viseBarFields}`);
   }
 
   // 8st3. (Mar) the vise's jaws: the depth they grip (3 mm or a third of a block by default,
@@ -3021,16 +2993,17 @@ try {
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
     await settle();
-    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
     const embedded = await js("(() => { const d = document.getElementById('setupDialog'); return d.open && d.classList.contains('embedded') && !!d.closest('#treeDetails'); })()");
     const add = async (from) => {
-      await js("document.getElementById('treeAddSetup').click(); true");
-      await waitFor(() => js(modal), "the add setup dialog", 30000);
-      const dflt = await js("({ carry: document.querySelector('input[name=\"sdStock\"][value=\"previous\"]').checked, from: document.getElementById('sdCarryFrom').value })");
-      if (from) await js(`document.getElementById('sdCarryFrom').value = '${from}'; true`);
-      await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
-      await waitFor(() => js(`!${modal}`), "the setup added", 60000);
-      await settle();
+      await addSetup("vise", "carry");
+      await js("document.querySelector('#tree .tree-setup.active [data-act=stock]').click(); true");
+      await waitFor(() => js("!!document.getElementById('stType')"), "the Stock pane", 30000);
+      const dflt = await js("({ carry: JSON.parse(document.getElementById('job').value).setups.at(-1).stock.shape === 'from_previous', from: document.getElementById('stType').value.replace(/^cut:/, '') })");
+      if (from) {
+        await js(`(() => { const t = document.getElementById('stType'); t.value = 'cut:${from}'; t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+        await waitFor(() => js(`JSON.parse(document.getElementById('job').value).setups.at(-1).stock.from === '${from}' && document.body.dataset.state !== 'busy'`), "the stock from that setup", 60000);
+        await settle();
+      }
       return dflt;
     };
     const d2 = await add(null);
@@ -3049,6 +3022,7 @@ try {
     await settle();
     const bounds = () => js(`await (async () => { const M = window.__marcam, d = JSON.parse(document.getElementById('job').value); const { result } = await M.engine('meshTriangles', d, { setup: d.setups[0].id, libraries: M.planArgs().libraries }, M.state.mesh); const t = result.triangles; let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; for (let i = 0; i < t.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], t[i + k]); hi[k] = Math.max(hi[k], t[i + k]); } return [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]].map((v) => +v.toFixed(2)); })()`);
     const b0 = await bounds();
+    await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
     await waitFor(() => js("document.getElementById('setupDialog').classList.contains('embedded') && document.getElementById('setupDialog').open"), "the setup's form in its details", 30000);
     await js("document.querySelector('#sdOrient [data-rot=\"2\"]').click(); document.getElementById('sdOk').click(); true");
     await settle();
@@ -3093,13 +3067,8 @@ try {
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
     await settle();
-    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
     // a second setup, its own placement (not carried)
-    await js("document.getElementById('treeAddSetup').click(); true");
-    await waitFor(() => js(modal), "the add setup dialog", 30000);
-    await js("document.querySelector('input[name=\"sdStock\"][value=\"auto\"]').click(); document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
-    await waitFor(() => js(`!${modal}`), "the setup added", 60000);
-    await settle();
+    await addSetup("vise", "own");
     const modelOf = (k) => `(() => { const d = JSON.parse(document.getElementById('job').value); const s = d.setups[${k}]; return d.models.find((m) => s.part.includes(m.id) && m.kind === 'mesh')?.file; })()`;
     await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
     await waitFor(() => js("document.getElementById('setupDialog').classList.contains('embedded') && document.getElementById('setupDialog').open"), "setup 2's form", 30000);
@@ -3157,14 +3126,7 @@ try {
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate", 60000);
     await settle();
-    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
-    for (let k = 0; k < 2; k++) {
-      await js("document.getElementById('treeAddSetup').click(); true");
-      await waitFor(() => js(modal), "the add setup dialog", 30000);
-      await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
-      await waitFor(() => js(`!${modal}`), "the setup added", 60000);
-      await settle();
-    }
+    for (let k = 0; k < 2; k++) await addSetup("vise", "carry");
     const ids = await js("JSON.parse(document.getElementById('job').value).setups.map((s) => s.id)");
     // (asked first only when it has operations: starter ones, if asked for above)
     const ops2 = await js("JSON.parse(document.getElementById('job').value).setups[1].operations.length");
@@ -3222,11 +3184,11 @@ try {
     await js("document.querySelector('#tree [data-act=library]').click(); true");
     await settle();
     const libShown = await js("!!document.getElementById('libHost')");
-    await js("document.getElementById('treeAddSetup').click(); true");
-    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
-    await waitFor(() => js(modal), "Add setup with no setups", 30000);
-    const choices = await js("[...document.getElementById('sdModel').options].map((o) => o.value).join(',')");
-    await js("document.getElementById('sdCancel').click(); true");
+    await addSetup("vise", "carry");
+    const choices = await js("(() => { const s = JSON.parse(document.getElementById('job').value).setups[0]; return s.part.length === 0 && s.stock.shape === 'box' ? 'none,file' : JSON.stringify(s); })()");
+    // (taken back: the project with none again)
+    await js("document.getElementById('menuUndo').click(); true");
+    await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups.length === 0"), "the added setup undone", 30000);
     await settle();
     const errs = exc().slice(errs0);
     await shot("41_no_setups");
@@ -3248,27 +3210,19 @@ try {
   // turned, lying in a vise (no model) and faced; the plate, cut in the vise, chucked in the
   // rotary; the plate stood on its end (Turned Y 90). Drawn as the engine has it; its STL.
   {
-    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
     const addCarried = async (kind, rot) => {
       // (the tree's: a 0.1 job shown as a project has its setups there only)
       const n0 = await js("window.__marcam.state.tree.doc.setups.length");
-      await js("document.getElementById('treeAddSetup').click(); true");
-      await waitFor(() => js(modal), "the add setup dialog", 30000);
-      await js(`const r = document.querySelector('input[name="sdStock"][value="previous"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true }));
-        document.querySelector('.sd-kind[data-kind="${kind}"]').click();
-        ${rot ? `const y = document.getElementById('sdRotY'); y.value = '${rot}'; y.dispatchEvent(new Event('input', { bubbles: true }));` : ""} true`);
-      await sleep(200);
-      // (the tree drawn again meanwhile, as a plan landing does: the dialog stays Add setup's)
-      await js("window.__marcam.tree.refresh(); true");
-      await sleep(300);
-      const stillAdd = await js("window.__marcam.project.dialog.mode");
-      if (stillAdd !== "add") throw new Error(`the Add setup dialog was taken over: ${stillAdd}`);
-      const gate = await js(`({ vise: !document.querySelector('.sd-kind[data-kind="vise"] input').disabled, model: document.getElementById('sdModel').value, kind: document.querySelector('input[name="sdKind"]:checked')?.value })`);
-      await js("document.getElementById('sdOk').click(); true");
-      await waitFor(() => js(`!${modal}`), "the carried setup added", 60000);
-      // (added: else why not)
-      await waitFor(() => js(`(JSON.parse(document.getElementById('job').value).setups || []).length === ${n0 + 1}`), "the carried setup in the project", 60000).catch(async (e) => {
-        throw new Error(`${e.message}: ${await js("JSON.stringify({ error: document.getElementById('error').textContent, warn: document.getElementById('sdWarn').textContent, status: document.getElementById('status').textContent, setups: (JSON.parse(document.getElementById('job').value).setups || []).map((s) => s.id) })")} ${JSON.stringify(gate)}`);
+      await addSetup(kind, "carry");
+      if (rot) {
+        await js("document.querySelector('#tree .tree-setup.active [data-act=stock]').click(); true");
+        await waitFor(() => js("!!document.getElementById('stRotY')"), "the carried Stock", 30000);
+        await js(`(() => { const y = document.getElementById('stRotY'); y.value = '${rot}'; y.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+        await waitFor(() => js(`(window.__marcam.state.tree.doc.setups.at(-1).stock.rotate || [])[1] === ${rot} && document.body.dataset.state !== 'busy'`), "the carried piece turned", 60000);
+      }
+      const gate = await js(`(() => { const s = window.__marcam.state.tree.doc.setups.at(-1); return { vise: s.kind === '${kind}', model: s.part.length ? 'own' : 'none', kind: s.kind }; })()`);
+      await waitFor(() => js(`window.__marcam.state.tree.doc.setups.length === ${n0 + 1}`), "the carried setup in the project", 60000).catch(async (e) => {
+        throw new Error(`${e.message}: ${await js("JSON.stringify({ error: document.getElementById('error').textContent, status: document.getElementById('status').textContent, setups: (JSON.parse(document.getElementById('job').value).setups || []).map((s) => s.id) })")} ${JSON.stringify(gate)}`);
       });
       await settle();
       const d = JSON.parse(await js("document.getElementById('job').value"));
@@ -3279,6 +3233,9 @@ try {
         throw new Error(`${e.message}: ${await js("JSON.stringify({ kind: '" + kind + "', error: window.__marcam.state.three.carriedError, drawing: window.__marcam.state.three.drawing, stock: window.__marcam.state.three.groups.stock.children.length, modelKey: !!window.__marcam.state.three.modelKey, stock0: JSON.parse(document.getElementById('job').value).setups.map((s) => s.stock?.shape) })")}`);
       });
       const m = await js(`await window.__marcam.engine('carriedMesh', JSON.parse(document.getElementById('job').value), { setup: '${s.id}', stl: true }, window.__marcam.state.mesh).then((r) => ({ total: r.result.total, bounds: r.result.bounds, stl: r.result.stl.length }))`);
+      // (its STL: in the setup's details)
+      await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
+      await sleep(400);
       const button = await js("!!document.getElementById('treeStockStl')");
       return { gate, s, frame, m, button };
     };
@@ -3408,14 +3365,7 @@ try {
     // the knob's cut result in a vise: stood on end by the Stock's Y ring (stock and all)
     await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
     await settle(1500);
-    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
-    await js("document.getElementById('treeAddSetup').click(); true");
-    await waitFor(() => js(modal), "the add setup dialog", 30000);
-    await js(`const r = document.querySelector('input[name="sdStock"][value="previous"]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('.sd-kind[data-kind="vise"]').click(); true`);
-    await sleep(200);
-    await js("document.getElementById('sdOk').click(); true");
-    await waitFor(() => js(`!${modal}`), "the carried setup", 60000);
-    await settle();
+    await addSetup("vise", "carry");
     await js("document.querySelector('#tree [data-act=stock]').click(); true");
     await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible && window.__marcam.handles.target()?.kind === 'carried'"), "the carried piece's handles", 60000);
     const stood = await drag("rotate", "Y", -220, 160, 90);
@@ -3463,12 +3413,7 @@ try {
       file1.operations.indexOf(copy.id) === file1.operations.indexOf(src.id) + 1 && sel.selected === copy.id && sel.form && undone === s0.operations.length && keyed?.name === copy.name,
       `${src.id} -> ${copy.id} "${copy.name}" same ${same}; file ${JSON.stringify(file1.operations)}; ${JSON.stringify(sel)}; undone ${undone}; Ctrl+D ${keyed?.id} "${keyed?.name}"`);
     // Ctrl+drag onto another setup's operation: a copy there (its picks looked for there)
-    await js("document.getElementById('treeAddSetup').click(); true");
-    const modal = "(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))";
-    await waitFor(() => js(modal), "the add setup dialog", 30000);
-    await js("document.querySelector('.sd-kind[data-kind=\"vise\"]').click(); document.getElementById('sdOk').click(); true");
-    await waitFor(() => js(`!${modal}`), "the setup added", 60000);
-    await settle();
+    await addSetup("vise", "carry");
     const d2 = await job();
     const other = d2.setups[1];
     // (from the first setup: worked on again, its operation dragged onto the second's head)

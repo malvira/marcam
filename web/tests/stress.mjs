@@ -271,9 +271,16 @@ const A = {
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "monkey", models: [], tools: [], setups: [] } }))}, "monkey.marcam.json").then(() => true)`);
     await settle();
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${b64(path)}"), (c) => c.charCodeAt(0))], "${name}")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    await waitFor(() => js("(document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded'))"), "the import dialog", 15000);
-    await js(`(() => { const b = document.querySelector('.sd-kind[data-kind="${kind}"]'); if (b) b.click(); document.getElementById('sdOk').click(); return true; })()`);
+    // (Mar: no setup dialogs) placed at once on the 4th axis; its type then in its Setup
+    await waitFor(() => js("(() => { try { return JSON.parse(document.getElementById('job').value).setups?.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "the STL imported", 60000);
     await settle(600);
+    if (kind !== "rotary") {
+      await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
+      await waitFor(() => js("!!document.querySelector('#setupHost #setupDialog[open]')"), "the setup's form in its details", 30000);
+      await js(`(() => { const b = document.querySelector('#setupHost .sd-kind[data-kind="${kind}"]'); if (b) b.click(); return true; })()`);
+      await waitFor(() => js(`JSON.parse(document.getElementById('job').value).setups[0].kind === '${kind}' && document.body.dataset.state !== 'busy'`), `the setup a ${kind}`, 60000);
+      await settle(600);
+    }
     return `import ${name} as ${kind}`;
   },
   async addOp(r, type) {
@@ -784,8 +791,6 @@ try {
   // (written with an import's starter operations: asked for, as a caller may; Mar: the app
   // itself starts a new project with none)
   await js("localStorage.setItem('marcam.starters', '1'); window.__marcam.project.settings.starters = true; true");
-  // (written with the setup dialogs: on, as e2e has them; a person never sees them now)
-  await js("localStorage.setItem('marcam.dialogs', '1'); window.__marcam.project.settings.dialogs = true; true");
   if (ONLY !== "monkey") {
     for (const [name, steps] of Object.entries(SCENARIOS).filter(([n]) => n.includes(MATCH))) {
       try {

@@ -231,17 +231,11 @@ function actions(r, app) {
     { name: "foldtree", w: 1, may: [], run: async () => (await click("document.querySelector('#tree .tree-setup.active [data-act=fold]')")) || null },
     { name: "carry", w: 1, may: ["project", "selected", "form", "pos", "hidden", "cam"], run: async () => {
       // (Mar) a setup taking what the last one left: a vise or the rotary, maybe stood on end
-      if (!(await click("document.getElementById('treeAddSetup')"))) return null;
-      const modal = "document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded')";
-      for (let i = 0; i < 50 && !(await js(modal)); i++) await sleep(100);
-      if (!(await js(modal))) return "(no dialog)";
+      // (Mar: no setup dialogs) + Add setup, continuing; its type beside it, turned in its Stock
       const kind = r.pick(["vise", "rotary"]), rot = r.pick([0, 0, 90]);
-      await js(`(() => { const p = document.querySelector('input[name="sdStock"][value="previous"]'); if (p.closest('label').classList.contains('hidden')) return false; p.checked = true; p.dispatchEvent(new Event('change', { bubbles: true }));
-        const k = document.querySelector('.sd-kind[data-kind="${kind}"] input'); if (!k.disabled) document.querySelector('.sd-kind[data-kind="${kind}"]').click();
-        const y = document.getElementById('sdRotY'); y.value = '${rot}'; y.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
-      await js("document.getElementById('sdOk').click(); true");
-      for (let i = 0; i < 100 && (await js(modal)); i++) await sleep(100);
-      if (await js(modal)) await js("document.getElementById('sdCancel').click(); true");
+      if (!(await js(`(() => { const b = document.getElementById('treeAddSetup'); if (!b) return false; for (const [id, v] of [['treeAddKind', '${kind}'], ['treeAddFrom', 'carry']]) { const e = document.getElementById(id); if (e) { e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); } } b.click(); return true; })()`))) return null;
+      for (let i = 0; i < 100 && (await js("document.body.dataset.state === 'busy'")); i++) await sleep(100);
+      if (rot) await js(`(() => { const y = document.getElementById('stRotY'); if (!y) return false; y.value = '${rot}'; y.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
       return `${kind} ${rot}`;
     } },
     { name: "duplicate", w: 1, may: ["project", "selected", "form", "pos"], run: async () => { const k = r.f(); const id = await js(`(() => { const e = [...document.querySelectorAll('#tree .tree-op [data-act="dup"]')]; return e.length ? e[Math.floor(${k} * e.length)].closest('.tree-op').dataset.op : null; })()`); if (id) await click(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="dup"]')`); return id; } },
