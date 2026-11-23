@@ -327,6 +327,28 @@ The tests cover:
   `cargo test`; `MARCAM_FUZZ_CASES=500` runs more, `MARCAM_FUZZ_SEED=<n> MARCAM_FUZZ_CASES=1`
   replays one (`web/tests/simfuzz.mjs` is a smaller run in the browser).
 
+### New features: checked as a person sees them
+
+Every new feature gets a check in `web/tests/usereye.mjs` before it is merged or deployed.
+The check takes the path a person would, with real mouse and keyboard input in a fresh page:
+
+1. Find the feature by its name on screen.
+2. See its fields.
+3. Use it.
+4. See its result on screen.
+
+After deploying, run usereye again against the deployed app
+(`node web/tests/usereye.mjs --url <the app's address>`). A feature is not done, or live,
+until that passes. Engine tests and `e2e.mjs` are not enough on their own: they set the
+project directly and can pass while the feature is hidden from a person.
+
+The merge checklist:
+
+1. `scripts/check.sh --fast` green.
+2. The feature's usereye check added and passing.
+3. Merged and deployed.
+4. usereye green against the deployed app.
+
 Planning and simulating are bounded: an operation set too fine to plan (more than 2 million
 moves, or 300 million units of surface checking) fails in seconds with the reason, and a
 simulation estimated to take longer than 10 minutes in a browser is refused, naming the

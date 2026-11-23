@@ -312,16 +312,23 @@ const released = () => {
 window.addEventListener("pointerup", released, true);
 window.addEventListener("pointercancel", released, true);
 
+/** (Mar: "the 'no setups yet' banner sticks around even after making the first setup") the
+ *  "No setups yet" prompt up while project `j` has a setup. */
+function staleNoSetups(j) {
+  return !!j?.setups?.length && /No setups yet/.test($("emptyState")?.textContent || "");
+}
+
 /** The results no longer match the project: say so on them until the next Generate. */
 function markStale() {
   let none = false;
   try {
     const j = readJob();
     none = !hasEnabledOps(j) && hasPart(j);
+    if (staleNoSetups(j)) clearResults(none ? NO_OPS : "", []);
   } catch {}
   if (none) {
     // nothing left to plan: the toolpaths of what was there go; the part and stock stay
-    if (state.result || !$("emptyState")) clearResults(NO_OPS, []);
+    if (state.result || !$("emptyState") || /No setups yet/.test($("emptyState").textContent)) clearResults(NO_OPS, []);
     drawModel();
     updateGenerateButton();
     return;
@@ -636,7 +643,7 @@ async function generate(opts = {}) {
   if (!hasEnabledOps(job)) {
     // (planned by itself: nothing to plan is no error, a quiet hint to add an operation)
     if (opts.auto) {
-      if (state.result || !$("emptyState")) clearResults(hasPart(job) ? NO_OPS : "", []);
+      if (state.result || !$("emptyState") || staleNoSetups(job)) clearResults(hasPart(job) ? NO_OPS : "", []);
       return;
     }
     showError(

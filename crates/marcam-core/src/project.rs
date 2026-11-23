@@ -587,7 +587,7 @@ impl Project {
             for o in &s.operations {
                 let kind = crate::ops::kind_of(&o.op);
                 if let (Some(k), Some(t)) = (s.kind.as_deref(), crate::ops::find(kind)) {
-                    if !crate::ops::fits_setup(&t, k) {
+                    if !crate::ops::fits_setup(&t, k) && !crate::ops::indexed_on_rotary(&o.op, k) {
                         out.push(format!(
                             "{} / {}: {kind} does not fit a {k} setup",
                             s.id, o.id

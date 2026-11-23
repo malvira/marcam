@@ -697,6 +697,13 @@ pub fn fits_setup(t: &OperationType, setup_kind: &str) -> bool {
     }
 }
 
+/// (Mar's impeller) 3D roughing at several A angles in turn (indexed 3+1, `indexes` or
+/// `index_count`) fits a 4th-axis setup too: the part is turned to each angle on the axis.
+pub fn indexed_on_rotary(op: &crate::job::Operation, setup_kind: &str) -> bool {
+    setup_kind == "rotary"
+        && matches!(op, crate::job::Operation::Rough3d(r) if !r.indexes.is_empty() || r.index_count > 0)
+}
+
 pub fn find(kind: &str) -> Option<OperationType> {
     registry().into_iter().find(|t| t.kind == kind)
 }

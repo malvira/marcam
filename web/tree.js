@@ -157,6 +157,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // the setup's kind (rotary, indexed 3+1 or vise) decides which types fit; a bar without a
   // kind (older projects) takes everything
   const kindOfSetup = (s) => s?.kind ?? (isBox(s) ? "vise" : "rotary");
+  /** The picker's entry for 3D roughing at several A angles (indexed 3+1) on a 4th-axis setup. */
+  const INDEXED_ROUGH = "rough3d:indexed";
   const fits = (ty, s) => {
     const k = kindOfSetup(s);
     if (k === "rotary") return !s?.kind || !ty.machine_needs.includes("xyz");
@@ -269,7 +271,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       });
       html += `</div>`;
     }
-    const opts = t.types.filter((x) => fits(x, s)).map((x) => `<option value="${x.kind}">${esc(x.title)}</option>`).join("");
+    let opts = t.types.filter((x) => fits(x, s)).map((x) => `<option value="${x.kind}">${esc(x.title)}</option>`).join("");
+    // (Mar: "not seeing the new indexed roughing for 4 axis") on a 4th-axis setup, 3D
+    // roughing at several angles in turn, by its name
+    if (kindOfSetup(s) === "rotary" && s?.kind && t.types.some((x) => x.kind === "rough3d")) opts += `<option value="${INDEXED_ROUGH}">Indexed roughing (3+1)</option>`;
     html += `<div class="row small"><select id="treeAddType" aria-label="Operation type">${opts}</select>
       <button type="button" id="treeAdd">Add operation</button></div>`;
     if (t.problems.length) html += `<div class="error small">${t.problems.map(esc).join("<br>")}</div>`;
@@ -377,6 +382,20 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         what = "unturned";
       }
       if (!what) return;
+      // (on the 4th axis: kept on the axis, its middle where it was, its front where it was)
+      const m = !carriedFrom(t.doc, s) && kindOfSetup(s) !== "vise" ? t.doc.models.find((x) => s.part?.includes(x.id) && x.kind === "mesh") : null;
+      if (m) {
+        let b;
+        try {
+          b = (await engine("meshTriangles", t.doc, { setup: s.id }, state.mesh)).result.bounds;
+        } catch (e) {
+          return showError(`${label}: ${e.message}`);
+        }
+        const r = (v) => Math.round(v * 1000) / 1000;
+        const d = [hi[0] - b[1][0], mid[1] - (b[0][1] + b[1][1]) / 2, mid[2] - (b[0][2] + b[1][2]) / 2];
+        m.translate = (m.translate || [0, 0, 0]).map((v, i) => r(v + d[i]));
+        rangesFollow(s, r(d[0]));
+      }
       return commit({ label: `Setup "${s.name || s.id}": the part ${label}.` });
     }
     const d = [0, 0, 0];
@@ -1335,8 +1354,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const label = !ev.target.closest?.("button, input, select, textarea, a") && ev.target.closest?.(".tree-label[data-act]");
     const el = label || ev.target;
     if (el.id === "treeAdd") {
-      const kind = $("treeAddType").value;
-      const ty = typeOf(kind);
+      const picked = $("treeAddType").value;
+      // (indexed roughing: 3D roughing, adaptive, at six angles between the blades)
+      const indexed = picked === INDEXED_ROUGH;
+      const kind = indexed ? "rough3d" : picked;
+      const ty = indexed ? { ...typeOf(kind), title: "Indexed roughing (3+1)" } : typeOf(kind);
       const s = setup();
       const id = newOpId(s);
       // a draft with every field filled by the engine's defaults (from the setup's tools,
@@ -1357,7 +1379,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         // setup selected, or the id taken (an undo brought one back). (A plan landing
         // meanwhile reads the same project again: t.doc is a new copy, not another project.)
         if (gen !== t.gen || t.selected !== id || t.setup !== s.id || setup()?.operations.some((o) => o.id === id)) return;
-        t.draft = { op: { id, ...result }, out, title: ty.title };
+        t.draft = { op: { id, ...result, ...(indexed ? { name: "Indexed roughing (3+1)", pattern: "adaptive", index_count: 6, indexes: [] } : {}) }, out, title: ty.title };
         render();
         await applyForm({ quiet: true });
       } catch (e) {
@@ -1366,11 +1388,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         render();
         // (the walkthrough: a knurl in a setup with no V-bit said so, below the fold) the
         // library opened on the tools that suit it; one picked, the operation is added
-        if (/needs an? \w+ tool; the job has none/.test(e.message) && window.__marcam.tools?.pick && !ev.__retried) {
+        if (/needs an? [\w ]+ tool; the job has none/.test(e.message) && window.__marcam.tools?.pick && !ev.__retried) {
           const n = await window.__marcam.tools.pick(ty.tool_shapes);
           await refresh();
           if (n) {
-            $("treeAddType").value = kind;
+            $("treeAddType").value = picked;
             ev.__retried = true;
             return $("treeAdd").dispatchEvent(Object.assign(new MouseEvent("click", { bubbles: true }), { __retried: true }));
           }

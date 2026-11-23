@@ -946,6 +946,134 @@ try {
   const drawn = await read("!!window.__marcam.state.three.groups.jaws?.children.some((c) => c.userData.tailstock || c.userData.chuck)");
   check("Chuck + tailstock: its sizes in the Fixture (the centre's depth), nothing drawn for it on the 4th axis", !!tailRow && !drawn, JSON.stringify({ row: !!tailRow, drawn }));
   await clean("Chuck + tailstock");
+  // ---------------------------------------------------------------- indexed 3+1 roughing
+  // (Mar: "not seeing the new indexed roughing for 4 axis") a new project, + Add setup as 4th
+  // axis, the knob through its Part line; "Indexed roughing (3+1)" in the operation picker;
+  // the library for a flat; its angles (index count) in its form; planned: on the screen
+  await click("#menuFile > summary");
+  await sleep(200);
+  await click("#projectNew");
+  await settled();
+  await read("(() => { const s = document.getElementById('treeAddKind'); s.value = 'rotary'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await click("#treeAddSetup");
+  await settled();
+  await click("#tree .tree-setup.active [data-act=part]");
+  await sleep(800);
+  const chooser2 = new Promise((resolve) => {
+    const t0 = events.length;
+    const tick = setInterval(() => {
+      const e = events.slice(t0).find((x) => x.method === "Page.fileChooserOpened");
+      if (e) {
+        clearInterval(tick);
+        resolve(e.params);
+      }
+    }, 50);
+  });
+  await click("#ptReplace", "Import model");
+  const fc2 = await Promise.race([chooser2, sleep(10000).then(() => null)]);
+  if (!fc2) throw new Error("no file chooser opened by the 4th-axis setup's Import model");
+  await S("DOM.setFileInputFiles", { files: [join(root, "examples", "knob", "knob.stl")], backendNodeId: fc2.backendNodeId });
+  await waitFor(() => read("/knob/.test(document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || '')"), "the knob on the 4th axis", 60000);
+  await settled();
+  const offered = await read("[...document.getElementById('treeAddType').options].map((o) => o.textContent)");
+  check("a 4th-axis setup's operation picker offers \"Indexed roughing (3+1)\"", offered.includes("Indexed roughing (3+1)"), offered.join(" | "));
+  const vrI = await viewRect();
+  const iI0 = await shot("indexed_before");
+  await read("(() => { const s = document.getElementById('treeAddType'); s.value = [...s.options].find((o) => o.textContent === 'Indexed roughing (3+1)')?.value ?? ''; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+  await click("#treeAdd");
+  // (no tool in the new project: the library opens on the cutters that suit it)
+  const flat = await waitFor(() => where("dialog[open] .tp-row", "flat 3\\.175"), "the library offering a 3.175 flat", 30000).catch(() => null);
+  check("Indexed roughing with no cutter in the setup: the library opens on the ones that suit it", !!flat);
+  if (flat) await click("dialog[open] .tp-row", "flat 3\\.175");
+  await waitFor(() => where("#opForm [name=index_count]"), "the index count in the form", 60000).catch(() => {});
+  const fields = await read(`(() => { const vis = ${VISIBLE}; const f = (n) => { const e = document.querySelector('#opForm [name=' + n + ']'); if (!e) return null; e.scrollIntoView({ block: 'nearest' }); return { value: e.value, shown: vis(e), more: !!e.closest('#opMore') }; }; return { count: f('index_count'), indexes: f('indexes'), pattern: f('pattern') }; })()`);
+  check("its form shows its angles: index count 6 (between the blades), indexes, adaptive; none under More",
+    fields.count?.shown && fields.count.value === "6" && !fields.count.more && fields.indexes?.shown && !fields.indexes.more && fields.pattern?.value === "adaptive",
+    JSON.stringify(fields));
+  await settled();
+  const planned = await waitFor(() => read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return t && /OK|issue/.test(t.textContent) ? t.textContent : null; })()`), "the indexed roughing planned", 240000).catch(() => null);
+  const iI1 = await shot("indexed_planned");
+  let pxI = 0;
+  for (let y = vrI[1]; y < vrI[1] + vrI[3]; y += 2)
+    for (let x = vrI[0]; x < vrI[0] + vrI[2]; x += 2) {
+      const q = iI1.at(x, y);
+      // (the cuts: blue)
+      if (q[2] > 150 && q[2] > q[0] + 60 && q[2] > q[1] + 20) pxI++;
+    }
+  const line = await read("[...document.querySelectorAll('#tree .tree-op .tree-label')].map((e) => e.textContent.trim()).join(' | ')");
+  check("planned: its program's tab, the operation in the tree by its name, and its cuts drawn on the screen", !!planned && /Indexed roughing \(3\+1\)/.test(line) && pxI > 400, `${planned}; ${line}; ${pxI} blue px`);
+  await clean("indexed 3+1 roughing");
+  // ---------------------------------------------------------------- "No setups yet"
+  // (Mar: "the 'no setups yet' banner sticks around even after making the first setup") gone
+  // once a setup is made (+ Add setup; File > Import part into an empty project), back when
+  // the last one is deleted
+  const banner = () => read(`(${VISIBLE})(document.getElementById('emptyState'))`);
+  await click("#menuFile > summary");
+  await sleep(200);
+  await click("#projectNew");
+  await settled();
+  const b0 = await banner();
+  await click("#emptyState button", "Add setup");
+  await settled();
+  const b1 = await banner();
+  await click("#tree .tree-setup.active [data-act=delsetup]");
+  await settled();
+  const b2 = await banner();
+  check("\"No setups yet\": shown in a new project, gone once + Add setup makes one, back when the last is deleted", b0 && !b1 && b2, JSON.stringify({ b0, b1, b2 }));
+  const chooser3 = new Promise((resolve) => {
+    const t0 = events.length;
+    const tick = setInterval(() => {
+      const e = events.slice(t0).find((x) => x.method === "Page.fileChooserOpened");
+      if (e) {
+        clearInterval(tick);
+        resolve(e.params);
+      }
+    }, 50);
+  });
+  await click("#menuFile > summary");
+  await sleep(200);
+  await click("#menuImport");
+  const fc3 = await Promise.race([chooser3, sleep(10000).then(() => null)]);
+  if (!fc3) throw new Error("no file chooser opened by File > Import part");
+  await S("DOM.setFileInputFiles", { files: [join(root, "examples", "knob", "knob.stl")], backendNodeId: fc3.backendNodeId });
+  await waitFor(() => where("#tree .tree-setup [data-act=setup]"), "the setup the import made", 60000).catch(() => {});
+  await settled();
+  const b3 = await banner();
+  check("\"No setups yet\" gone after File > Import part into an empty project (its setup made)", !b3 && !!(await where("#tree .tree-setup [data-act=setup]")), JSON.stringify({ b3 }));
+  await clean("File > Import part into an empty project");
+  // ---------------------------------------------------------------- 4th axis: quarter turns
+  // (Mar: "missing the quick buttons for part rotation") the knob just imported (on the 4th
+  // axis): its Part's Rotation row; Z +90° turns it on the screen, kept on the axis with its
+  // front at X0; Center on axis then leaves it there
+  const turnedBox = () => read("(async () => { const M = window.__marcam; const d = M.state.tree.doc; const { result } = await M.engine('meshTriangles', d, { setup: M.state.tree.setup }, M.state.mesh); const [lo, hi] = result.bounds; return { lo: lo.map((v) => +v.toFixed(2)), hi: hi.map((v) => +v.toFixed(2)) }; })()");
+  const onAxis = (b) => Math.abs(b.lo[1] + b.hi[1]) < 0.05 && Math.abs(b.lo[2] + b.hi[2]) < 0.05 && Math.abs(b.hi[0]) < 0.05;
+  await click("#tree .tree-setup.active [data-act=part]");
+  await settled();
+  const rowShown = !!(await where("#partPane [data-preset=turn]", "Z \\+90")) && !!(await where("#partPane [data-preset=unturn]", "0°"));
+  check("a 4th-axis setup's Part: the Rotation row (X/Y/Z −90° / +90°, 0°) beside its Position buttons", rowShown && !!(await where("#partPane [data-preset=axis]", "Center on axis")));
+  const vrR = await viewRect();
+  const pb0 = await turnedBox();
+  const iR0 = await shot("rotary_turn_before");
+  await click("#partPane [data-preset=turn]", "Z \\+90");
+  await settled();
+  const pb1 = await turnedBox();
+  const iR1 = await shot("rotary_turn_after");
+  let pxR = 0;
+  for (let y = vrR[1]; y < vrR[1] + vrR[3]; y += 2)
+    for (let x = vrR[0]; x < vrR[0] + vrR[2]; x += 2) {
+      const a = iR0.at(x, y), b = iR1.at(x, y);
+      if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 60) pxR++;
+    }
+  check("Z +90°: the part turns on the screen, kept on the axis with its front at X0", pxR > 300 && onAxis(pb1) && JSON.stringify(pb1) !== JSON.stringify(pb0), `${pxR} px changed; ${JSON.stringify(pb0)} -> ${JSON.stringify(pb1)}`);
+  await click("#partPane [data-preset=axis]", "Center on axis");
+  await settled();
+  const pb2 = await turnedBox();
+  check("Center on axis afterwards: on the axis", onAxis(pb2) || (Math.abs(pb2.lo[1] + pb2.hi[1]) < 0.05 && Math.abs(pb2.lo[2] + pb2.hi[2]) < 0.05), JSON.stringify(pb2));
+  await click("#partPane [data-preset=unturn]", "0°");
+  await settled();
+  const pb3 = await turnedBox();
+  check("0°: not turned, still on the axis with its front at X0", onAxis(pb3) && Math.abs(pb3.hi[0] - pb3.lo[0] - (pb0.hi[0] - pb0.lo[0])) < 0.05, `${JSON.stringify(pb0)} -> ${JSON.stringify(pb3)}`);
+  await clean("the 4th axis's quarter turns");
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

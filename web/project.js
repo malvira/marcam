@@ -471,6 +471,14 @@ export function fitsKind(type, kind, explicit = true) {
   return true;
 }
 
+/** Whether operation `op` (of `type`) fits a setup kind: as [`fitsKind`], and (Mar's impeller,
+ *  as the engine's ops::indexed_on_rotary) 3D roughing at several A angles in turn on the 4th
+ *  axis. */
+export function fitsOp(op, type, kind) {
+  if (kind === "rotary" && op.type === "rough3d" && (op.index_count > 0 || op.indexes?.length)) return true;
+  return fitsKind(type, kind);
+}
+
 /** The operations a new setup of each kind starts with: [type, tool, A, output]. */
 export const STARTERS = {
   rotary: [["rotary_rough", 1, null, "rough"], ["rotary_finish", 2, null, "finish"]],
@@ -995,7 +1003,7 @@ export function setupProject(ctx) {
     const hasProfile = s.part.some((id) => doc.models.find((x) => x.id === id)?.kind === "profile");
     for (const op of s.operations) {
       const ty = types.find((t) => t.kind === op.type);
-      if (!ty || !fitsKind(ty, kind)) {
+      if (!ty || !fitsOp(op, ty, kind)) {
         removed.push(`${op.id} (${op.type})`);
         continue;
       }
@@ -1368,7 +1376,7 @@ export function setupProject(ctx) {
     const probe = structuredClone(doc);
     const ps = probe.setups.find((x) => x.id === s.id);
     const types = state.tree?.types?.length ? state.tree.types : (await engine("opTypes")).result;
-    const going = ps.operations.filter((op) => !fitsKind(types.find((t) => t.kind === op.type) ?? { machine_needs: [] }, cfg.kind)).map((op) => `${op.id} (${op.type})`);
+    const going = ps.operations.filter((op) => !fitsOp(op, types.find((t) => t.kind === op.type) ?? { machine_needs: [] }, cfg.kind)).map((op) => `${op.id} (${op.type})`);
     if (going.length && !window.confirm(`Changing "${s.name || s.id}" to ${KINDS[cfg.kind]} removes ${going.join(", ")}: they do not fit that setup.${settings.starters ? " Starter operations are added if none are left." : ""} Go on? (You can undo it.)`)) {
       setStatus("Setup unchanged", "ready");
       return false;
