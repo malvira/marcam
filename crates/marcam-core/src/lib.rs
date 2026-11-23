@@ -464,6 +464,95 @@ fn material_in_way(
 
 /// What the moves before leave of the stock, at `cell` mm cells (for a tool of `radius`;
 /// `what` for the error).
+/// (Mar's impeller) The bar as the moves before left it, seen from above with the part turned
+/// to A `index` (indexed 3+1): each column's top and bottom over the block `sb` at `cell` mm.
+fn indexed_stock(
+    job: &Job,
+    prior: &[Vec<Move>],
+    before: &[Move],
+    sb: &job::StockBox,
+    cell: f64,
+    index: f64,
+) -> Result<(sim3::Heightmap3, Vec<f64>), String> {
+    let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
+    let tp = |moves: &[Move]| Toolpath {
+        name: String::new(),
+        title: String::new(),
+        tool: None,
+        notes: Vec::new(),
+        reset_a: false,
+        safe_r: job.safe_r(),
+        moves: moves.to_vec(),
+        origin_comment: None,
+        plunge_limit: None,
+        ramp_angle: None,
+        post: None,
+    };
+    let tps: Vec<Toolpath> = prior.iter().map(|m| tp(m)).chain([tp(before)]).collect();
+    let grid = carry::bar_grid(&job.stock);
+    let mut map = sim::RadialMap::of_job(grid, job);
+    if let Some(carry::Carried::Bar(c)) = job.carried.as_deref() {
+        map = c.clone();
+    }
+    for seg in sim::segments(&tps) {
+        let cut = seg.tool.and_then(cutter_of);
+        sim::apply_segment(&mut map, &seg, cut.as_ref(), 0.2);
+    }
+    let m = carry_mesh::bar_mesh(&map).rotated_x(index);
+    let (x0, y0, nx, ny, top, bot) = carry_mesh::sample_block(&m, cell);
+    let block = carry::Carried::Block {
+        x0,
+        y0,
+        cell,
+        nx,
+        ny,
+        top,
+        bot,
+    };
+    let hm = block
+        .heightmap(sb, cell)
+        .ok_or("the bar could not be seen from above")?;
+    let bots = block.bottoms(&hm);
+    Ok((hm, bots))
+}
+
+/// `n` A angles equally apart, the first where the part is lowest under the upright tool
+/// (between its blades): the part turned to each candidate as the indexed roughing turns
+/// it, the tool dropped on it along X at Y0; the angle whose `n` turns, and the turns a
+/// quarter of the way to the next either side, leave it deepest.
+fn gap_angles(mesh: &Mesh, c: Cutter, n: u32, x0: f64, x1: f64) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let step = 360.0 / n as f64;
+    let xs: Vec<f64> = (0..=16).map(|i| x0 + (x1 - x0) * i as f64 / 16.0).collect();
+    // (each turn's depth, once: every candidate's n turns are among them)
+    let mut depth = std::collections::HashMap::new();
+    let mut at = |a: f64| -> f64 {
+        let k = (a.rem_euclid(360.0) * 10.0).round() as i64;
+        *depth.entry(k).or_insert_with(|| {
+            let dc = strategy::three_axis::DropCutter3::new(&mesh.rotated_x(k as f64 / 10.0), c);
+            xs.iter()
+                .map(|&x| dc.z_at(x, 0.0, -1e9).max(-1e3))
+                .sum::<f64>()
+        })
+    };
+    let mut best = (f64::INFINITY, 0.0);
+    let mut a0 = 0.0;
+    while a0 < step - 1e-9 {
+        // (with the turns either side: in the middle of a gap, not at its edge)
+        let s: f64 = (0..n)
+            .flat_map(|k| [-0.25, 0.0, 0.25].map(|f| a0 + (k as f64 + f) * step))
+            .map(&mut at)
+            .sum();
+        if s < best.0 {
+            best = (s, a0);
+        }
+        a0 += 2.0;
+    }
+    (0..n).map(|k| best.1 + k as f64 * step).collect()
+}
+
 fn cut_heightmap(
     job: &Job,
     prior: &[Vec<Move>],
@@ -1268,6 +1357,69 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     b.p3 = None;
                 }
             }
+            // (Mar's impeller) roughing on the 4th axis at several angles in turn: at each, the
+            // part turned to it, the stock as the angles before left it, cleared adaptively
+            // with the tool upright (Y used), then on to the next
+            (Operation::Rough3d(o), _)
+                if !three && (!o.indexes.is_empty() || o.index_count > 0) =>
+            {
+                let sb = *stock_box.as_ref().expect("set above");
+                let err = |e: String| Error::Invalid(format!("program {}: {e}", prog.name));
+                let c = cutter.expect("set above");
+                let mesh = ctx.surface(&prog.name)?.clone();
+                let angles = if o.indexes.is_empty() {
+                    gap_angles(&mesh, c, o.index_count, sb.min[0], sb.max[0])
+                } else {
+                    o.indexes.clone()
+                };
+                let cg = c.grown(o.leave_xy).ok_or_else(|| {
+                    err(format!(
+                        "stock to leave on the walls ({} mm) takes a flat or ball tool, no thinner than it",
+                        o.leave_xy
+                    ))
+                })?;
+                for index in angles {
+                    // (each angle its own share of the work: one is a 3-axis roughing)
+                    budget::start(budget::OP_LIMIT);
+                    let turned = mesh.rotated_x(index);
+                    let dc = strategy::three_axis::DropCutter3::new(&turned, cg);
+                    let cell = (c.radius() / 4.0).clamp(0.1, 0.5);
+                    let (hm, bots) =
+                        indexed_stock(job, &ctx.prior, &b.moves, &sb, cell, index).map_err(err)?;
+                    let bottom = |x: f64, y: f64| {
+                        let i = (((x - hm.x0) / hm.cell).max(0.0) as usize).min(hm.nx - 1);
+                        let j = (((y - hm.y0) / hm.cell).max(0.0) as usize).min(hm.ny - 1);
+                        bots[j * hm.nx + i]
+                    };
+                    let indexed_from = b.moves.len();
+                    let indexed_start = [b.x.unwrap_or(sb.min[0]), 0.0, safe_r];
+                    b.rapid_r(safe_r);
+                    b.rapid(None, None, Some(index));
+                    b.p3 = Some(indexed_start);
+                    let mut oi = o.clone();
+                    oi.index_a = index;
+                    oi.pattern = "adaptive".into();
+                    strategy::three_axis::adaptive_rough(
+                        &mut b,
+                        &dc,
+                        &|x, y| hm.at(x, y),
+                        &bottom,
+                        &sb,
+                        safe_r,
+                        &oi,
+                    )
+                    .map_err(err)?;
+                    if budget::over() {
+                        break;
+                    }
+                    b.rapid3(None, None, Some(safe_r));
+                    b.rapid3(None, Some(0.0), None);
+                    b.x = b.p3.map(|p| p[0]);
+                    b.r = Some(safe_r);
+                    let tail = b.moves.split_off(indexed_from);
+                    b.moves.extend(general_moves(tail, indexed_start, index));
+                }
+            }
             (op3, shape) if is_three_axis(op3) => {
                 let sb = stock_box.as_ref().expect("set above");
                 let index = op3.index_a().unwrap_or(0.0);
@@ -1921,11 +2073,50 @@ pub fn gouge_check(
             max_depth: 0.0,
             at: None,
         };
+        // (Mar's impeller) indexed 3+1 roughing on the 4th axis: its moves checked too, the
+        // part turned to each angle and dropped on from above
+        let indexed: Vec<u32> = prog
+            .operations
+            .iter()
+            .filter(|o| matches!(o, Operation::Rough3d(r) if !r.indexes.is_empty() || r.index_count > 0))
+            .map(Operation::tool)
+            .collect();
+        let mut turned: Vec<(f64, strategy::three_axis::DropCutter3)> = Vec::new();
+        let mut itool: Option<(u32, Cutter)> = None;
         let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0);
         let mut tool: Option<u32> = None;
         for m in &tp.moves {
+            if let Move::Pose { tip, axis, .. } = *m {
+                if let (Some((_, c)), Ok(na)) = (itool, kinematics::solve_a(axis, a)) {
+                    a = na;
+                    let key = (na * 1000.0).round() / 1000.0;
+                    if !turned.iter().any(|(k, _)| *k == key) {
+                        turned.push((
+                            key,
+                            strategy::three_axis::DropCutter3::new(&surface.rotated_x(key), c),
+                        ));
+                    }
+                    let dc = &turned.iter().find(|(k, _)| *k == key).expect("made").1;
+                    let q = kinematics::to_machine(tip, na);
+                    rep.moves_checked += 1;
+                    let deficit = dc.z_at(q[0], q[1], f64::NEG_INFINITY) - q[2];
+                    if deficit > rep.max_depth {
+                        rep.max_depth = deficit;
+                        rep.at = Some((q[0], na));
+                    }
+                }
+                continue;
+            }
             match *m {
                 Move::ToolChange { tool: t, .. } => {
+                    itool = indexed
+                        .contains(&t)
+                        .then(|| {
+                            job.tool(t)
+                                .and_then(|d| cutter_for(t, d.shape).ok())
+                                .map(|c| (t, c))
+                        })
+                        .flatten();
                     tool = checked.contains(&t).then_some(t);
                     if let (Some(t), Some(def)) = (tool, job.tool(t)) {
                         if let (Ok(c), std::collections::hash_map::Entry::Vacant(e)) =

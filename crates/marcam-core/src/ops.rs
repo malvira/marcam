@@ -618,6 +618,10 @@ fn types() -> Vec<OperationType> {
                 // before the feeds
                 let at = ps.iter().position(|p| p.name == "feed").unwrap_or(ps.len());
                 ps.insert(at, p("rest", "boolean", "", "Rest roughing (vise): cut only where the operations before it in the setup left material, e.g. a smaller tool after a larger one.").opt(json!(false)));
+                // (Mar's impeller) on the 4th axis: several angles in turn, indexed 3+1
+                let at = ps.iter().position(|p| p.name == "feed").unwrap_or(ps.len());
+                ps.insert(at, p("indexes", "numbers", "deg", "4th axis: rough at each of these A angles in turn (indexed 3+1: the tool upright, Y used), adaptive, from the stock the angles before left; empty: one angle (index_a).").opt(json!([])));
+                ps.insert(at + 1, p("index_count", "integer", "", "4th axis, no indexes given: that many angles equally apart, the first where the part is lowest (between its blades); 0: none.").opt(json!(0)).min(0.0));
                 ps
             },
             tool_shapes: &["flat", "ball", "tapered_ball"],

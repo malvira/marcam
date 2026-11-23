@@ -1200,6 +1200,14 @@ pub struct Raster3d {
     /// down along the pass at the ramp angle, instead of plunging onto it; 0: plunge.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub lead_in: f64,
+    /// (Mar's impeller) On the 4th axis: rough at each of these A angles in turn (indexed
+    /// 3+1, the tool upright, Y used), adaptive, from the stock the angles before it left.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub indexes: Vec<f64>,
+    /// On the 4th axis: that many angles, equally apart, the first where the part is lowest
+    /// (between blades); used when `indexes` is empty.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub index_count: u32,
     pub feed: f64,
     pub plunge_feed: f64,
     /// Descents gentler than this (degrees below the horizontal, along the path) run at
