@@ -165,6 +165,14 @@ pub fn distance(g: &Grid, src: &[bool]) -> Vec<f64> {
     d
 }
 
+/// The search buffers [`Level::way`] reuses (as large as the grid).
+struct Scratch {
+    back: Vec<usize>,
+    dist: Vec<f64>,
+    /// the cells the last search reached
+    seen: Vec<usize>,
+}
+
 /// One level's clearing state.
 struct Level<'a> {
     g: Grid,
@@ -179,11 +187,26 @@ struct Level<'a> {
     cut: Vec<bool>,
     /// material cells cut so far
     removed: usize,
+    /// the cells (columns i0..=i1, rows j0..=j1) where material has gone since the free cells
+    /// were last brought up to date ([`Level::refresh`])
+    gone: Option<[usize; 4]>,
+    /// material cells left ([`Level::remaining`])
+    left: usize,
 }
 
 impl Level<'_> {
     fn remaining(&self, c: usize) -> bool {
         self.material[c] && !self.cut[c]
+    }
+
+    /// Cell `c`'s material has gone (cut, or given up as crumbs).
+    fn taken(&mut self, c: usize) {
+        self.left -= 1;
+        let (i, j) = (c % self.g.nx, c / self.g.nx);
+        self.gone = Some(match self.gone {
+            None => [i, i, j, j],
+            Some([i0, i1, j0, j1]) => [i0.min(i), i1.max(i), j0.min(j), j1.max(j)],
+        });
     }
 
     /// Cells of material still there under the tool at `p`.
@@ -208,6 +231,7 @@ impl Level<'_> {
                 self.cut[c] = true;
                 if self.material[c] {
                     n += 1;
+                    self.taken(c);
                 }
             }
         }
@@ -363,38 +387,134 @@ impl Level<'_> {
         (0..n).map(|c| self.allowed[c] && d[c] > self.p.r).collect()
     }
 
+    /// `free` ([`Level::free`] without `down`) and `front` ([`Level::frontier`]) brought up
+    /// to date where material has gone since: only cells within the tool's radius of it can
+    /// change, and only material within the radius of those decides them, so the distances
+    /// are worked out (as [`distance`] does, in the same order) over that much round it only:
+    /// the same cells as working them all out again.
+    fn refresh(&mut self, free: &mut [bool], front: &mut [bool], fronts: &mut usize) {
+        let Some([i0, i1, j0, j1]) = self.gone.take() else {
+            return;
+        };
+        let (nx, ny) = (self.g.nx, self.g.ny);
+        let k = (self.p.r / self.g.h).ceil() as usize + 2;
+        let grow = |[a, b, c, d]: [usize; 4], k: usize| {
+            [
+                a.saturating_sub(k),
+                (b + k).min(nx - 1),
+                c.saturating_sub(k),
+                (d + k).min(ny - 1),
+            ]
+        };
+        // the cells that may change, and the window their distances are found in
+        let out = grow([i0, i1, j0, j1], k);
+        let [wi0, wi1, wj0, wj1] = grow(out, k);
+        let (w, hgt) = (wi1 - wi0 + 1, wj1 - wj0 + 1);
+        let mut d: Vec<f64> = (0..w * hgt)
+            .map(|q| {
+                if self.remaining((wj0 + q / w) * nx + wi0 + q % w) {
+                    0.0
+                } else {
+                    f64::INFINITY
+                }
+            })
+            .collect();
+        let (a, b) = (self.g.h, self.g.h * std::f64::consts::SQRT_2);
+        for j in 0..hgt {
+            for i in 0..w {
+                let k = j * w + i;
+                let mut v = d[k];
+                if i > 0 {
+                    v = v.min(d[k - 1] + a);
+                }
+                if j > 0 {
+                    v = v.min(d[k - w] + a);
+                    if i > 0 {
+                        v = v.min(d[k - w - 1] + b);
+                    }
+                    if i + 1 < w {
+                        v = v.min(d[k - w + 1] + b);
+                    }
+                }
+                d[k] = v;
+            }
+        }
+        for j in (0..hgt).rev() {
+            for i in (0..w).rev() {
+                let k = j * w + i;
+                let mut v = d[k];
+                if i + 1 < w {
+                    v = v.min(d[k + 1] + a);
+                }
+                if j + 1 < hgt {
+                    v = v.min(d[k + w] + a);
+                    if i + 1 < w {
+                        v = v.min(d[k + w + 1] + b);
+                    }
+                    if i > 0 {
+                        v = v.min(d[k + w - 1] + b);
+                    }
+                }
+                d[k] = v;
+            }
+        }
+        let [oi0, oi1, oj0, oj1] = out;
+        for j in oj0..=oj1 {
+            for i in oi0..=oi1 {
+                let c = j * nx + i;
+                free[c] = self.allowed[c] && d[(j - wj0) * w + (i - wi0)] > self.p.r;
+            }
+        }
+        // (a cell's frontier: it and its neighbours free or not)
+        let [fi0, fi1, fj0, fj1] = grow(out, 1);
+        for j in fj0..=fj1 {
+            for i in fi0..=fi1 {
+                let f = self.front_at(free, j * nx + i);
+                if f != front[j * nx + i] {
+                    if f {
+                        *fronts += 1;
+                    } else {
+                        *fronts -= 1;
+                    }
+                    front[j * nx + i] = f;
+                }
+            }
+        }
+    }
+
+    /// Whether cell `c` is on the frontier (see [`Level::frontier`]).
+    fn front_at(&self, free: &[bool], c: usize) -> bool {
+        let (nx, ny) = (self.g.nx, self.g.ny);
+        if !free[c] {
+            return false;
+        }
+        let (i, j) = (c % nx, c / nx);
+        for (di, dj) in [
+            (-1, 0),
+            (1, 0),
+            (0, -1),
+            (0, 1),
+            (-1, -1),
+            (1, 1),
+            (-1, 1),
+            (1, -1),
+        ] {
+            let (a, b) = (i as isize + di, j as isize + dj);
+            if a < 0 || b < 0 || a >= nx as isize || b >= ny as isize {
+                continue;
+            }
+            let q = b as usize * nx + a as usize;
+            if self.allowed[q] && !free[q] {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Free cells next to one where the tool may stand but is not free (it steps from there
     /// into material).
     fn frontier(&self, free: &[bool]) -> Vec<bool> {
-        let (nx, ny) = (self.g.nx, self.g.ny);
-        (0..self.g.len())
-            .map(|c| {
-                if !free[c] {
-                    return false;
-                }
-                let (i, j) = (c % nx, c / nx);
-                for (di, dj) in [
-                    (-1, 0),
-                    (1, 0),
-                    (0, -1),
-                    (0, 1),
-                    (-1, -1),
-                    (1, 1),
-                    (-1, 1),
-                    (1, -1),
-                ] {
-                    let (a, b) = (i as isize + di, j as isize + dj);
-                    if a < 0 || b < 0 || a >= nx as isize || b >= ny as isize {
-                        continue;
-                    }
-                    let q = b as usize * nx + a as usize;
-                    if self.allowed[q] && !free[q] {
-                        return true;
-                    }
-                }
-                false
-            })
-            .collect()
+        (0..self.g.len()).map(|c| self.front_at(free, c)).collect()
     }
 
     /// The heading a run starting at `p` takes: along the material's edge, the material on
@@ -425,11 +545,23 @@ impl Level<'_> {
     /// The way at depth (cells, free all along but the first) from `from` to a frontier
     /// cell: of the nearest few, the one with the longest run ahead of it (a run that hits a
     /// wall at once is a bite and a retreat).
-    fn way(&self, from: usize, free: &[bool], front: &[bool]) -> Option<Vec<usize>> {
+    fn way(
+        &self,
+        from: usize,
+        free: &[bool],
+        front: &[bool],
+        sc: &mut Scratch,
+    ) -> Option<Vec<usize>> {
         let (nx, ny) = (self.g.nx, self.g.ny);
-        let mut back = vec![usize::MAX; self.g.len()];
-        let mut dist = vec![0.0f64; self.g.len()];
+        // (the buffers as the last search left them, put back: only the cells it reached)
+        for &c in &sc.seen {
+            sc.back[c] = usize::MAX;
+            sc.dist[c] = 0.0;
+        }
+        sc.seen.clear();
+        let Scratch { back, dist, seen } = sc;
         back[from] = from;
+        seen.push(from);
         let mut queue = std::collections::VecDeque::from([from]);
         let mut found: Vec<usize> = Vec::new();
         let want = 4.0 * self.p.r;
@@ -466,6 +598,7 @@ impl Level<'_> {
                 let q = b as usize * nx + a as usize;
                 if free[q] && back[q] == usize::MAX {
                     back[q] = c;
+                    seen.push(q);
                     let diag = if di != 0 && dj != 0 {
                         std::f64::consts::SQRT_2
                     } else {
@@ -481,11 +614,16 @@ impl Level<'_> {
             .iter()
             .enumerate()
             .filter(|&(k, _)| k % 4 == 0 || k + 1 == found.len())
-            .map(|(_, &c)| c)
-            .max_by(|&a, &b| {
-                let score = |c: usize| self.room_ahead(self.g.point(c), want) - 0.25 * dist[c];
-                score(a).total_cmp(&score(b))
-            })?;
+            .map(|(_, &c)| (c, self.room_ahead(self.g.point(c), want) - 0.25 * dist[c]))
+            // (each scored once; of equals, the last, as max_by takes it)
+            .reduce(|x, y| {
+                if x.1.total_cmp(&y.1) == std::cmp::Ordering::Greater {
+                    x
+                } else {
+                    y
+                }
+            })
+            .map(|(c, _)| c)?;
         let mut path = vec![best];
         let mut k = best;
         while k != from {
@@ -576,7 +714,10 @@ pub fn clear_level(
         open: &*open,
         cut: vec![false; n],
         removed: 0,
+        gone: None,
+        left: 0,
     };
+    lv.left = (0..n).filter(|&c| lv.remaining(c)).count();
     if !lv.material.iter().any(|&m| m) {
         return out;
     }
@@ -585,7 +726,19 @@ pub fn clear_level(
     let side = if p.climb { 1.0 } else { -1.0 };
     let mut runs = 0usize;
     let mut bad = vec![false; n];
+    // (how many are set)
+    let mut bads = 0usize;
     let max_runs = 20_000;
+    // (the free cells and the frontier: worked out once, then kept up to date where material
+    // goes)
+    let mut free = lv.free(false);
+    let mut front0 = lv.frontier(&free);
+    let mut fronts = front0.iter().filter(|&&f| f).count();
+    let mut sc = Scratch {
+        back: vec![usize::MAX; n],
+        dist: vec![0.0; n],
+        seen: Vec::new(),
+    };
     while steps_left > 0 && runs < max_runs {
         if crate::budget::over() {
             break;
@@ -593,23 +746,39 @@ pub fn clear_level(
         runs += 1;
         // the next place to start from: along the cleared floor, else from above where it is
         // open, else down a helix (or a plunge)
-        let free = lv.free(false);
-        let mut front = lv.frontier(&free);
-        // (starts that led nowhere but into a slot: tried last)
-        let forced = front.iter().any(|&f| f) && !front.iter().zip(&bad).any(|(&f, &b)| f && !b);
-        if !forced {
-            for (f, &b) in front.iter_mut().zip(&bad) {
-                *f &= !b;
+        lv.refresh(&mut free, &mut front0, &mut fronts);
+        debug_assert!(free == lv.free(false) && front0 == lv.frontier(&free));
+        debug_assert_eq!(fronts, front0.iter().filter(|&&f| f).count());
+        debug_assert_eq!(lv.left, (0..n).filter(|&c| lv.remaining(c)).count());
+        // (starts that led nowhere but into a slot: tried last; with none such, the
+        // frontier as it is)
+        let masked;
+        let (front, forced): (&[bool], bool) = if bads == 0 {
+            (&front0, false)
+        } else {
+            let mut f = front0.clone();
+            let forced = fronts > 0 && !f.iter().zip(&bad).any(|(&f, &b)| f && !b);
+            if !forced {
+                for (f, &b) in f.iter_mut().zip(&bad) {
+                    *f &= !b;
+                }
             }
-        }
-        if !front.iter().any(|&f| f) && !lv.material.iter().zip(&lv.cut).any(|(&m, &c)| m && !c) {
+            masked = f;
+            (&masked, forced)
+        };
+        let any_front = if bads == 0 {
+            fronts > 0
+        } else {
+            front.iter().any(|&f| f)
+        };
+        if !any_front && lv.left == 0 {
             break;
         }
         let mut start: Option<[f64; 2]> = None;
         // the way to the start (only if a run follows)
         let mut pre: Option<Step> = None;
         if let Some(c) = here.and_then(|q| g.cell(q)) {
-            if let Some(path) = lv.way(c, &free, &front) {
+            if let Some(path) = lv.way(c, &free, front, &mut sc) {
                 let pts = lv.straighten(&path, &free);
                 let mut link = vec![here.unwrap()];
                 link.extend(pts.into_iter().skip(1));
@@ -679,7 +848,10 @@ pub fn clear_level(
         if pts.len() < 2 && slot {
             // a slot from here: another start first
             if let Some(c) = g.cell(pos) {
-                bad[c] = true;
+                if !bad[c] {
+                    bad[c] = true;
+                    bads += 1;
+                }
             }
             continue;
         }
@@ -701,6 +873,7 @@ pub fn clear_level(
                         let q = b as usize * g.nx + a as usize;
                         if lv.remaining(q) {
                             lv.material[q] = false;
+                            lv.taken(q);
                             out.left += 1;
                         }
                     }
@@ -710,7 +883,10 @@ pub fn clear_level(
             continue;
         }
         here = pts.last().copied();
-        bad.iter_mut().for_each(|b| *b = false);
+        if bads > 0 {
+            bad.iter_mut().for_each(|b| *b = false);
+            bads = 0;
+        }
         out.steps.push(Step::Cut(pts));
     }
     out.left += (0..n).filter(|&c| lv.remaining(c)).count();

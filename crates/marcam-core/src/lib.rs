@@ -462,20 +462,24 @@ fn material_in_way(
     Ok(top)
 }
 
-/// What the moves before leave of the stock, at `cell` mm cells (for a tool of `radius`;
-/// `what` for the error).
-/// (Mar's impeller) The bar as the moves before left it, seen from above with the part turned
-/// to A `index` (indexed 3+1): each column's top and bottom over the block `sb` at `cell` mm.
-fn indexed_stock(
-    job: &Job,
-    prior: &[Vec<Move>],
-    before: &[Move],
-    sb: &job::StockBox,
-    cell: f64,
-    index: f64,
-) -> Result<(sim3::Heightmap3, Vec<f64>), String> {
+/// (Mar's impeller) The bar as the programs before left it (the carried bar, or the job's),
+/// for [`indexed_stock`] to go on cutting with this program's moves.
+fn indexed_bar(job: &Job, prior: &[Vec<Move>]) -> sim::RadialMap {
     let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
-    let tp = |moves: &[Move]| Toolpath {
+    let mut map = sim::RadialMap::of_job(carry::bar_grid(&job.stock), job);
+    if let Some(carry::Carried::Bar(c)) = job.carried.as_deref() {
+        map = c.clone();
+    }
+    let tps: Vec<Toolpath> = prior.iter().map(|m| bar_toolpath(job, m)).collect();
+    for seg in sim::segments(&tps) {
+        let cut = seg.tool.and_then(cutter_of);
+        sim::apply_segment(&mut map, &seg, cut.as_ref(), 0.2);
+    }
+    map
+}
+
+fn bar_toolpath(job: &Job, moves: &[Move]) -> Toolpath {
+    Toolpath {
         name: String::new(),
         title: String::new(),
         tool: None,
@@ -487,18 +491,33 @@ fn indexed_stock(
         plunge_limit: None,
         ramp_angle: None,
         post: None,
-    };
-    let tps: Vec<Toolpath> = prior.iter().map(|m| tp(m)).chain([tp(before)]).collect();
-    let grid = carry::bar_grid(&job.stock);
-    let mut map = sim::RadialMap::of_job(grid, job);
-    if let Some(carry::Carried::Bar(c)) = job.carried.as_deref() {
-        map = c.clone();
     }
-    for seg in sim::segments(&tps) {
+}
+
+/// (Mar's impeller) The bar as the moves before left it, seen from above with the part turned
+/// to A `index` (indexed 3+1): each column's top and bottom over the block `sb` at `cell` mm.
+/// `map` is the bar with this program's moves up to `applied` cut from it: the rest of
+/// `before` is cut now (in order, as a simulation of them all from the start would), and
+/// `applied` moved on.
+fn indexed_stock(
+    job: &Job,
+    map: &mut sim::RadialMap,
+    applied: &mut usize,
+    before: &[Move],
+    sb: &job::StockBox,
+    cell: f64,
+    index: f64,
+) -> Result<(sim3::Heightmap3, Vec<f64>), String> {
+    let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
+    for seg in sim::segments(&[bar_toolpath(job, before)]) {
+        if seg.move_index < *applied {
+            continue;
+        }
         let cut = seg.tool.and_then(cutter_of);
-        sim::apply_segment(&mut map, &seg, cut.as_ref(), 0.2);
+        sim::apply_segment(map, &seg, cut.as_ref(), 0.2);
     }
-    let m = carry_mesh::bar_mesh(&map).rotated_x(index);
+    *applied = before.len();
+    let m = carry_mesh::bar_mesh(map).rotated_x(index);
     let (x0, y0, nx, ny, top, bot) = carry_mesh::sample_block(&m, cell);
     let block = carry::Carried::Block {
         x0,
@@ -531,7 +550,30 @@ fn gap_angles(mesh: &Mesh, c: Cutter, n: u32, x0: f64, x1: f64) -> Vec<f64> {
     let mut at = |a: f64| -> f64 {
         let k = (a.rem_euclid(360.0) * 10.0).round() as i64;
         *depth.entry(k).or_insert_with(|| {
-            let dc = strategy::three_axis::DropCutter3::new(&mesh.rotated_x(k as f64 / 10.0), c);
+            // (only the triangles the tool can touch along its line: the strip it travels, as
+            // wide as the tool; the depths are the same, the drop cutter far quicker to make)
+            let (sn, cs) = (k as f64 / 10.0).to_radians().dsin_cos();
+            let r = c.radius() + 1e-6;
+            let strip = Mesh {
+                triangles: mesh
+                    .triangles
+                    .iter()
+                    .filter_map(|t| {
+                        let q = t.map(|p| [p[0], cs * p[1] - sn * p[2], sn * p[1] + cs * p[2]]);
+                        let (xa, xb) = (
+                            q[0][0].min(q[1][0]).min(q[2][0]),
+                            q[0][0].max(q[1][0]).max(q[2][0]),
+                        );
+                        let (ya, yb) = (
+                            q[0][1].min(q[1][1]).min(q[2][1]),
+                            q[0][1].max(q[1][1]).max(q[2][1]),
+                        );
+                        (xb >= x0 - r && xa <= x1 + r && yb >= -r && ya <= r).then_some(q)
+                    })
+                    .collect(),
+                faces: Vec::new(),
+            };
+            let dc = strategy::three_axis::DropCutter3::new(&strip, c);
             xs.iter()
                 .map(|&x| dc.z_at(x, 0.0, -1e9).max(-1e3))
                 .sum::<f64>()
@@ -553,6 +595,8 @@ fn gap_angles(mesh: &Mesh, c: Cutter, n: u32, x0: f64, x1: f64) -> Vec<f64> {
     (0..n).map(|k| best.1 + k as f64 * step).collect()
 }
 
+/// What the moves before leave of the stock, at `cell` mm cells (for a tool of `radius`;
+/// `what` for the error).
 fn cut_heightmap(
     job: &Job,
     prior: &[Vec<Move>],
@@ -1378,6 +1422,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         o.leave_xy
                     ))
                 })?;
+                // (the bar as cut so far: the programs before simulated once, then each
+                // angle's moves on top as they come)
+                let mut bar = indexed_bar(job, &ctx.prior);
+                let mut applied = 0;
                 for index in angles {
                     // (each angle its own share of the work: one is a 3-axis roughing)
                     budget::start(budget::OP_LIMIT);
@@ -1385,7 +1433,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     let dc = strategy::three_axis::DropCutter3::new(&turned, cg);
                     let cell = (c.radius() / 4.0).clamp(0.1, 0.5);
                     let (hm, bots) =
-                        indexed_stock(job, &ctx.prior, &b.moves, &sb, cell, index).map_err(err)?;
+                        indexed_stock(job, &mut bar, &mut applied, &b.moves, &sb, cell, index)
+                            .map_err(err)?;
                     let bottom = |x: f64, y: f64| {
                         let i = (((x - hm.x0) / hm.cell).max(0.0) as usize).min(hm.nx - 1);
                         let j = (((y - hm.y0) / hm.cell).max(0.0) as usize).min(hm.ny - 1);
