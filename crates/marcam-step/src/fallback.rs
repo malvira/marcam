@@ -495,10 +495,9 @@ struct Patch {
 impl Patch {
     fn wrap(&self, uv: Uv) -> Uv {
         let mut q = uv;
-        for k in 0..2 {
-            if let Some(per) = self.period[k] {
-                let lo = self.range[k][0];
-                q[k] = lo + (q[k] - lo).rem_euclid(per);
+        for ((x, per), r) in q.iter_mut().zip(self.period).zip(self.range) {
+            if let Some(per) = per {
+                *x = r[0] + (*x - r[0]).rem_euclid(per);
             }
         }
         q
@@ -588,9 +587,9 @@ impl Patch {
                 d[k] = d[k].clamp(-0.1 * span[k], 0.1 * span[k]);
             }
             let mut next = [uv[0] + d[0], uv[1] + d[1]];
-            for k in 0..2 {
-                if self.period[k].is_none() {
-                    next[k] = next[k].clamp(self.range[k][0], self.range[k][1]);
+            for ((x, per), r) in next.iter_mut().zip(self.period).zip(self.range) {
+                if per.is_none() {
+                    *x = x.clamp(r[0], r[1]);
                 }
             }
             let moved = (next[0] - uv[0]).abs() / span[0] + (next[1] - uv[1]).abs() / span[1];
