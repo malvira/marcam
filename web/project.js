@@ -937,9 +937,31 @@ export function setupProject(ctx) {
     if (cfg.setupName) s.name = cfg.setupName;
     if (cfg.post && Object.keys(cfg.post).length) s.post = cfg.post;
     else if (cfg.post) delete s.post;
+    const held = s.holding;
     s.holding = { kind: kind === "vise" ? "vise" : "rotary_chuck", tailstock: kind !== "vise" && !!cfg.tailstock };
     const model = ownModel(doc, s);
-    if (cfg.carry) {
+    let warn = "";
+    if (cfg.keep && s.stock && s.stock.shape !== "from_previous" && model && tris) {
+      // (Mar: "importing a model shouldn't change the stock") the stock and how it is held
+      // stay as they are; the part goes in it, placed as Center/Top flush would place it
+      const st = s.stock;
+      const at0 = { kind, axis: cfg.axis, up: cfg.axis, along: held?.along, stock: { ...stockSpecOf(st), mode: "given" }, rotate: cfg.rotate };
+      let place = placePart(tris, at0);
+      // (a block only just taller than the part: its top flush rather than through the bottom)
+      if (st.shape === "box" && place.size[2] + 0.5 > st.max[2] - st.min[2]) place = placePart(tris, { ...at0, origin: Math.max(0, st.max[2] - st.min[2] - place.size[2]) });
+      model.axis = place.axis;
+      if (cfg.rotate?.some((v) => v)) model.rotate = cfg.rotate.map((v) => Math.round(v * 1e4) / 1e4);
+      else delete model.rotate;
+      // (a block where it is: the placement was against one at the origin)
+      const at = st.shape === "box" ? [st.min[0], st.min[1], st.max[2]] : [0, 0, 0];
+      model.translate = place.translate.map((v, k) => r3(v + at[k]));
+      if (held && (held.kind === "vise") === (kind === "vise")) s.holding = { ...held, tailstock: s.holding.tailstock };
+      const sz = place.size;
+      const big = st.shape === "box"
+        ? sz[0] > st.max[0] - st.min[0] + 1e-6 || sz[1] > st.max[1] - st.min[1] + 1e-6 || sz[2] > st.max[2] - st.min[2] + 1e-6
+        : (st.length != null && sz[0] > st.length + 1e-6) || Math.max(sz[1], sz[2]) / 2 > stockRadius(st) + 1e-6;
+      if (big) warn = `the part (${sz.map((v) => +v.toFixed(2)).join(" x ")} mm) is bigger than the stock (${describeStock(st)}): Fit to part in its Stock makes the stock fit it`;
+    } else if (cfg.carry) {
       // what the setup before left: the engine turns the part and the stock together
       s.stock = { shape: "from_previous" };
       // (another setup than the one just before: named; the one just before is the default)
@@ -1008,7 +1030,7 @@ export function setupProject(ctx) {
     for (const o of s.outputs) o.operations = o.operations.filter((id) => ids.has(id));
     s.outputs = s.outputs.filter((o) => o.operations.length);
     const added = s.operations.length || !settings.starters ? [] : await addStarters(doc, s);
-    return { removed, added, recomputed };
+    return { removed, added, recomputed, ...(warn ? { warn } : {}) };
   }
 
   /** The parsed STL of the dialog's file, in mm, or (no file) the project's mesh. */
@@ -1029,8 +1051,11 @@ export function setupProject(ctx) {
       doc = { schema_version: "0.2", name: "untitled", models: [], tools: [], setups: [] };
     }
     if (doc.schema_version !== "0.2") doc = (await engine("checkProject", doc)).result.project;
-    const fresh = !doc.setups?.length || !doc.setups.some((s) => s.operations.length);
-    if (state.mesh && meshFileOf(doc) && !fresh && !window.confirm(`Replace the part with ${cfg.file.name}? (OK: replace it; Cancel: add ${cfg.file.name} to the part)`)) {
+    // (Mar: "importing a model shouldn't change the stock") a project with a setup keeps it,
+    // its stock as it is; only one without a setup is made round the part
+    const fresh = !doc.setups?.length;
+    const noOps = !doc.setups?.some((s) => s.operations.length);
+    if (state.mesh && meshFileOf(doc) && !noOps && !window.confirm(`Replace the part with ${cfg.file.name}? (OK: replace it; Cancel: add ${cfg.file.name} to the part)`)) {
       const old = parseStl(state.mesh).tris;
       const both = new Float32Array(old.length + tris.length);
       both.set(old);
@@ -1064,10 +1089,13 @@ export function setupProject(ctx) {
         doc.models = doc.models.filter((m) => m.kind !== "profile").concat({ id: "part", name: cfg.file.name, kind: "mesh", file: meshFile, axis: "x", translate: [0, 0, 0] });
         for (const s of doc.setups) s.part = ["part"];
       }
+      if (!doc.name || doc.name === "untitled") doc.name = p.name = cfg.name && cfg.name !== "untitled" ? cfg.name : slug(cfg.file.name);
       const active = doc.setups.find((s) => s.id === state.tree?.setup) ?? doc.setups[0];
-      report = await applySetup(doc, active, cfg, tris);
+      report = await applySetup(doc, active, { ...cfg, keep: true }, tris);
       for (const s of doc.setups.filter((x) => x !== active)) {
-        await applySetup(doc, s, { kind: kindOf(s), machine: s.machine, axis: kindOf(s) === "vise" ? "z" : "x", tailstock: s.holding?.tailstock }, tris);
+        const carry = s.stock?.shape === "from_previous" ? { carry: { from: s.stock.from, turn: s.stock.turn, offset: s.stock.offset, rotate: s.stock.rotate } } : {};
+        const r = await applySetup(doc, s, { kind: kindOf(s), machine: s.machine, axis: kindOf(s) === "vise" ? "z" : "x", tailstock: s.holding?.tailstock, keep: true, ...carry }, tris);
+        if (r.warn && !report.warn) report.warn = `${s.name || s.id}: ${r.warn}`;
       }
     }
     // an import is a request for toolpaths: planned once
@@ -1085,6 +1113,7 @@ export function setupProject(ctx) {
     const notes = [];
     if (report?.removed?.length) notes.push(`removed (they do not fit this setup): ${report.removed.join(", ")}`);
     if (report?.added?.length) notes.push(`added: ${report.added.join(", ")}`);
+    if (report?.warn) notes.push(report.warn);
     if (planNow && doc.setups.some((s) => s.operations.some((o) => o.enabled !== false))) {
       clearResults("");
       await refreshAll();
@@ -1208,7 +1237,7 @@ export function setupProject(ctx) {
       doc.models = doc.models.filter((x) => used.has(x.id) || !was.includes(x.id));
       setMesh(bytes, `${file.name} (${partSummary(part)})`, part.step ? { name, bytes: part.step.bytes } : null);
       // (its machine as it is: the one chosen, when the setup names none)
-      const report = await applySetup(doc, here, { kind, axis: kind === "vise" ? "z" : "x", tailstock: here.holding?.tailstock, rotate: [0, 0, 0], machine: here.machine || engineMachine() || undefined }, part.tris);
+      const report = await applySetup(doc, here, { kind, axis: kind === "vise" ? "z" : "x", tailstock: here.holding?.tailstock, rotate: [0, 0, 0], machine: here.machine || engineMachine() || undefined, keep: true }, part.tris);
       await commitSetupChange(doc, report, { label: `Setup "${here.name || here.id}": its part is ${file.name}${was.length ? " (was its revolved profile)" : ""}.`, job: before });
       setStatus(`Replaced the model with ${file.name}.`, "done");
       return { project: doc, operations: [] };
@@ -1469,7 +1498,6 @@ export function setupProject(ctx) {
   });
   $("projectSave").addEventListener("click", () => save(false));
   $("projectSaveAs").addEventListener("click", () => save(true));
-  $("importStl").addEventListener("click", () => $("importStlFile").click());
   $("importStlFile").addEventListener("change", async () => {
     const f = $("importStlFile").files[0];
     $("importStlFile").value = "";

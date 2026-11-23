@@ -245,6 +245,8 @@ try {
   check("Add setup with nothing loaded: a setup at once (a plate)", /block|plate/i.test(await read("document.querySelector('#tree .tree-setup.active')?.textContent || ''")), await read("document.querySelector('#tree .tree-setup.active')?.textContent.trim().slice(0, 80) || ''"));
   await click("#tree .tree-setup.active [data-act=part]");
   await sleep(800);
+  const stockShown = () => read("document.querySelector('#tree .tree-setup.active [data-act=stock]')?.textContent.trim() || ''");
+  const plate = await stockShown();
   // the knob's STL through the Part line's file chooser
   const chooser = new Promise((resolve) => {
     const t0 = events.length;
@@ -263,6 +265,8 @@ try {
   await sleep(1500);
   await clean("Import model (the Part line)");
   await waitFor(() => read("/knob/.test(document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || '')"), "the knob as the setup's part", 60000);
+  // (Mar: "importing a model shouldn't change the stock") the plate as it was, the knob in it
+  check("importing a model leaves the stock as it was", (await stockShown()) === plate && /\d/.test(plate), `${plate} -> ${await stockShown()}`);
   // the setup selected: switched to a 3-axis vise in its details
   await click("#tree .tree-setup [data-act=setup]");
   await sleep(800);
