@@ -601,14 +601,88 @@ pub mod api {
             Err(e) => return err(e),
         };
         let max = opts["max_triangles"].as_u64().unwrap_or(200_000).max(1) as usize;
-        let stride = m.triangles.len().div_ceil(max).max(1);
-        let tri: Vec<f32> = m
-            .triangles
+        let thinned = thin_for_display(&m.triangles, max);
+        let tri: Vec<f32> = thinned
+            .as_deref()
+            .unwrap_or(&m.triangles)
             .iter()
-            .step_by(stride)
             .flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32)))
             .collect();
-        json!({ "triangles": tri, "total": m.triangles.len(), "thinned": stride > 1, "bounds": m.bounds() })
+        json!({ "triangles": tri, "total": m.triangles.len(), "thinned": thinned.is_some(), "bounds": m.bounds() })
+    }
+
+    /// A mesh of more than `max` triangles made coarser for display: its vertices merged
+    /// within the cells of a grid (each cell's vertices at their mean), the cell grown until at
+    /// most `max` triangles are left. The surface stays whole: keeping every n-th triangle
+    /// instead striped a fine mesh with holes (a STEP part at its 0.01 mm chord: 440 000
+    /// slivers, drawn a third of them). `None` when it has no more than `max` already.
+    fn thin_for_display(tris: &[[[f64; 3]; 3]], max: usize) -> Option<Vec<[[f64; 3]; 3]>> {
+        use std::collections::{HashMap, HashSet};
+        if tris.len() <= max {
+            return None;
+        }
+        let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let area: f64 = tris
+            .iter()
+            .map(|[a, b, c]| {
+                let (u, v) = (sub(*b, *a), sub(*c, *a));
+                let n = [
+                    u[1] * v[2] - u[2] * v[1],
+                    u[2] * v[0] - u[0] * v[2],
+                    u[0] * v[1] - u[1] * v[0],
+                ];
+                0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt()
+            })
+            .sum();
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for p in tris.iter().flatten() {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let diag = (0..3)
+            .map(|k| (hi[k] - lo[k]).powi(2))
+            .sum::<f64>()
+            .sqrt()
+            .max(1e-9);
+        // about two triangles a cell of the surface to start with
+        let mut cell = (2.0 * area / max as f64).sqrt().max(diag * 1e-6);
+        for _ in 0..64 {
+            let mut ids: HashMap<[i64; 3], usize> = HashMap::new();
+            let mut sums: Vec<([f64; 3], f64)> = Vec::new();
+            let mut kept: Vec<[usize; 3]> = Vec::new();
+            let mut seen = HashSet::new();
+            for t in tris {
+                let c = t.map(|p| {
+                    let key = [0, 1, 2].map(|k| ((p[k] - lo[k]) / cell).floor() as i64);
+                    let id = *ids.entry(key).or_insert_with(|| {
+                        sums.push(([0.0; 3], 0.0));
+                        sums.len() - 1
+                    });
+                    let s = &mut sums[id];
+                    for k in 0..3 {
+                        s.0[k] += p[k];
+                    }
+                    s.1 += 1.0;
+                    id
+                });
+                if c[0] == c[1] || c[1] == c[2] || c[0] == c[2] {
+                    continue;
+                }
+                let mut key = c;
+                key.sort_unstable();
+                if seen.insert(key) {
+                    kept.push(c);
+                }
+            }
+            if kept.len() <= max {
+                let at: Vec<[f64; 3]> = sums.iter().map(|(s, n)| s.map(|x| x / n)).collect();
+                return Some(kept.iter().map(|c| c.map(|i| at[i])).collect());
+            }
+            cell *= 1.25;
+        }
+        None
     }
 
     // ------------------------------------------------------------ playback sessions
@@ -2158,6 +2232,7 @@ mod tests {
         let tri = api::mesh_triangles(&job, r#"{"max_triangles": 1000}"#, &stl);
         assert_eq!(tri["total"], 10080);
         assert!(tri["triangles"].as_array().unwrap().len() <= 1000 * 9);
+        assert_eq!(tri["thinned"], true);
         // profile-only job simulates fine at a coarse grid
         let s = api::simulate(api::EXAMPLE_JOB, r#"{"dx": 0.2, "na": 90}"#, &[]);
         assert!(s.get("error").is_none(), "{}", s["error"]);

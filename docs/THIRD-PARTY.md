@@ -21,6 +21,7 @@ repository. It is built:
 | --- | --- | --- |
 | solidcraft-kernel, solidcraft-geom, solidcraft-profile, solidcraft-smlib | SolidCraft | MIT OR Apache-2.0 |
 | solidcore, solidcore-record, solidcore-ops, solidcore-tess, solidcore-step, solidcore-convert | SolidCore (in SolidCraft's repository) | Apache-2.0 |
+| spade (faces the kernel leaves out, triangulated by marcam-step itself; already in the kernel's tree) | Stefan Altmayer | MIT OR Apache-2.0 |
 
 marcam uses only SolidCraft's open geometry code. SolidCraft's look and feel (its UI kit, icons,
 theme) are under its separate brand licence (`LICENSE-BRAND` in its repository); marcam uses none

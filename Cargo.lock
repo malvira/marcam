@@ -777,8 +777,10 @@ dependencies = [
  "marcam-cli",
  "marcam-core",
  "serde_json",
+ "solidcore-step",
  "solidcore-tess",
  "solidcraft-kernel",
+ "spade",
 ]
 
 [[package]]

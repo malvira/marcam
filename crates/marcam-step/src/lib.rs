@@ -13,6 +13,8 @@
 
 use marcam::Mesh;
 
+mod fallback;
+
 /// The default chord tolerance (mm): the farthest a facet stands off the surface.
 pub const DEFAULT_CHORD: f64 = 0.01;
 
@@ -51,30 +53,85 @@ pub fn import(bytes: &[u8], chord: f64) -> Result<StepPart, String> {
         DEFAULT_CHORD
     };
     let tol = solidcore_tess::MeshTolerance::chord(chord);
+    // each body as the kernel meshes it; a body it cannot mesh is meshed from the file
+    let mut tris: Vec<Vec<[[f64; 3]; 3]>> = Vec::with_capacity(imp.bodies.len());
+    let mut tri_faces: Vec<Vec<u32>> = Vec::with_capacity(imp.bodies.len());
+    let mut failed: Vec<Option<String>> = Vec::with_capacity(imp.bodies.len());
+    for b in &imp.bodies {
+        match b.body.mesh(&tol) {
+            Ok(m) => {
+                tris.push(
+                    m.triangles
+                        .iter()
+                        .map(|t| {
+                            t.map(|i| {
+                                let v = m.positions[i as usize];
+                                [v.x, v.y, v.z]
+                            })
+                        })
+                        .collect(),
+                );
+                tri_faces.push(m.tri_face);
+                failed.push(None);
+            }
+            Err(e) => {
+                tris.push(Vec::new());
+                tri_faces.push(Vec::new());
+                failed.push(Some(e.to_string()));
+            }
+        }
+    }
+    // faces the kernel left out (it could not trim them), meshed from the file instead
+    let whole: Vec<bool> = failed.iter().map(Option::is_some).collect();
+    let (extra, notes) = fallback::left_out(&text, &imp, &tris, &whole, chord);
+    let meshed: std::collections::HashSet<u64> = extra.iter().flatten().map(|f| f.face).collect();
+    let mut warnings: Vec<String> = imp
+        .warnings
+        .iter()
+        .filter(|w| !names_only(w, &meshed))
+        .cloned()
+        .collect();
     let mut mesh = Mesh::default();
-    let mut warnings = imp.warnings.clone();
     let mut names = Vec::new();
     let mut next_face = 0u32;
-    for b in &imp.bodies {
-        let m = b
-            .body
-            .mesh(&tol)
-            .map_err(|e| format!("STEP: body {:?}: {e}", b.name))?;
+    for (bi, (b, (t, more))) in imp.bodies.iter().zip(tris.iter().zip(&extra)).enumerate() {
+        let tri_face = &tri_faces[bi];
+        if let Some(e) = &failed[bi] {
+            if more.is_empty() {
+                return Err(format!("STEP: body {:?}: {e}", b.name));
+            }
+            warnings.push(format!(
+                "{}: meshed from the file (the STEP kernel could not mesh it: {e})",
+                b.name
+            ));
+        }
         if let Some(why) = &b.refused {
-            warnings.push(format!("{}: read as surfaces ({why})", b.name));
+            if !names_only(why, &meshed) {
+                warnings.push(format!("{}: read as surfaces ({why})", b.name));
+            }
         }
         let base = next_face;
-        for (t, f) in m.triangles.iter().zip(&m.tri_face) {
-            let p = |i: u32| {
-                let v = m.positions[i as usize];
-                [v.x, v.y, v.z]
-            };
-            mesh.triangles.push([p(t[0]), p(t[1]), p(t[2])]);
+        for (t, f) in t.iter().zip(tri_face) {
+            mesh.triangles.push(*t);
             mesh.faces.push(base + f + 1);
         }
-        next_face = base + m.tri_face.iter().copied().max().map_or(0, |f| f + 1);
+        next_face = base + tri_face.iter().copied().max().map_or(0, |f| f + 1);
+        for f in more {
+            next_face += 1;
+            for t in &f.triangles {
+                mesh.triangles.push(*t);
+                mesh.faces.push(next_face);
+            }
+            if failed[bi].is_none() {
+                warnings.push(format!(
+                    "{}: face #{} meshed from the file (the STEP kernel could not trim it)",
+                    b.name, f.face
+                ));
+            }
+        }
         names.push(b.name.clone());
     }
+    warnings.extend(notes);
     Ok(StepPart {
         bodies: imp.bodies.len(),
         faces: next_face as usize,
@@ -82,6 +139,24 @@ pub fn import(bytes: &[u8], chord: f64) -> Result<StepPart, String> {
         warnings,
         mesh,
     })
+}
+
+/// Whether a warning is about faces in `meshed` only (each face it names is one of them).
+fn names_only(w: &str, meshed: &std::collections::HashSet<u64>) -> bool {
+    let mut any = false;
+    let mut rest = w;
+    while let Some(at) = rest.find("face #") {
+        let tail = &rest[at + 6..];
+        let n = tail
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(tail.len());
+        match tail[..n].parse::<u64>() {
+            Ok(id) if meshed.contains(&id) => any = true,
+            _ => return false,
+        }
+        rest = &tail[n..];
+    }
+    any
 }
 
 /// [`import`] as binary STL, each facet's attribute word its face (see
