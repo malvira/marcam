@@ -453,6 +453,53 @@ try {
   };
   if (await read("JSON.parse(document.getElementById('job').value).setups[0].kind === 'vise'")) await presets3("setup 1", true);
   else check("setup 1 is a vise setup (for its presets)", false);
+  // ---------------------------------------------------------------- the rotate rings
+  // (Mar: "Bambu Studio-style") the part's Z ring dragged with the pointer on its ticks' band:
+  // 5° at a time, released at exactly 40.00; then dragged inside the ring: free, an angle no
+  // multiple of 5; both stay after the plan settles, and the part turns on the screen
+  const ringAt = (ang, rf) => read(`JSON.stringify(window.__marcam.handles.screenOf('rotate', 'Z', ${ang}, ${rf}))`).then((s) => (s ? JSON.parse(s) : null));
+  const rotZ = () => read("(() => { const d = JSON.parse(document.getElementById('job').value); const s = d.setups.find((x) => x.id === window.__marcam.state.tree.setup); const m = d.models.find((x) => s.part.includes(x.id) && x.kind === 'mesh'); return m?.rotate?.[2] ?? 0; })()");
+  const turnRing = async (a0, a1, rf, name) => {
+    const p0 = await ringAt(a0, 1);
+    if (!p0) return { ok: false, why: "no Z ring" };
+    const before = await shot(`${name}_before`);
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p0[0], y: p0[1] });
+    await sleep(60);
+    await S("Input.dispatchMouseEvent", { type: "mousePressed", x: p0[0], y: p0[1], button: "left", clickCount: 1 });
+    let seen = "";
+    for (let i = 1; i <= 16; i++) {
+      const q = await ringAt(a0 + ((a1 - a0) * i) / 16, 1 + (rf - 1) * Math.min(1, (2 * i) / 16));
+      await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: q[0], y: q[1], button: "left", buttons: 1 });
+      await sleep(20);
+    }
+    seen = await read("(() => { const e = document.getElementById('handleReadout'); return e && !e.classList.contains('hidden') ? e.textContent : ''; })()");
+    const q = await ringAt(a1, rf);
+    await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: q[0], y: q[1], button: "left", clickCount: 1 });
+    await settled();
+    const after = await shot(`${name}_after`);
+    const vr = await viewRect();
+    let px = 0;
+    for (let y = vr[1]; y < vr[1] + vr[3]; y += 2)
+      for (let x = vr[0]; x < vr[0] + vr[2]; x += 2) {
+        const a = before.at(x, y), b = after.at(x, y);
+        if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 60) px++;
+      }
+    return { seen, px };
+  };
+  {
+    await click("#tree .tree-setup.active [data-act=part]");
+    await settled();
+    const z0 = await rotZ();
+    const band = await turnRing(120, 160, 1.12, "ring_band");
+    const z1 = await rotZ();
+    check("the Z ring on its band: 5° at a time, released at exactly 40.00 (said while turning); the part turns on the screen", Math.abs(z1 - z0 - 40) < 1e-9 && /Z: 40\.00/.test(band.seen || "") && band.px > 150, `${z0} -> ${z1}; "${band.seen}"; ${band.px} px`);
+    const free = await turnRing(120, 157.3, 0.55, "ring_inside");
+    const z2 = await rotZ();
+    const d = z2 - z1;
+    check("inside the ring: free (an angle no multiple of 5), kept after the plan settles", Math.abs(d) > 1 && Math.abs(d / 5 - Math.round(d / 5)) > 0.01 && free.px > 150, `${z1} -> ${z2}; "${free.seen}"; ${free.px} px`);
+    await clean("the rings turned");
+  }
+
   // ---------------------------------------------------------------- the cut result carried
   await click("#treeAddSetup");
   await sleep(2500);
@@ -771,6 +818,9 @@ try {
   await openMore("partPane");
   const t3 = await tOf();
   check("Flush to front puts its front at X0 (as it came); Center along stock moves it along X", Math.abs(t4[0] - t0[0]) < 0.3 && Math.abs(t3[0] - t4[0]) > 1, `X ${t0[0]} -> ${t4[0]} -> ${t3[0]}`);
+  // (back flush to the front: halfway along, its roughing runs down to the axis, long)
+  await click(".part-presets button", "^Flush to front$");
+  await settled();
   // ---------------------------------------------------------------- vise, then the 4th axis
   // (Mar: "carry over the cut stock from a vise setup to a 4th axis isn't really working")
   // a square bar stood in the vise (its top a Ø25 step and a Ø15 boss), sized 30 x 30 by

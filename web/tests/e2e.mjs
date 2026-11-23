@@ -3321,7 +3321,8 @@ try {
         await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1] });
         await sleep(60);
         a0 = ang;
-        if (mode !== "rotate" || (await js(`window.__marcam.handles.state.tc.axis == null && window.__marcam.handles.state.rc.axis === '${axis}'`))) break;
+        // (the rings take the press before the arrows do)
+        break;
       }
       await S("Input.dispatchMouseEvent", { type: "mousePressed", x: p[0], y: p[1], button: "left", clickCount: 1 });
       for (let i = 1; i <= 12; i++) {
@@ -3370,9 +3371,9 @@ try {
     await settle();
     const undone = (await job()).models.find((m) => m.id === "dome");
     const dx = t1.translate[0] - (t0.translate?.[0] ?? 0);
-    check("the Stock item: its type and sizes (the plate 70 wide); the part moved by its X arrow (snapped to 0.1 mm) and turned by its Z ring (quarter turns), each drag one edit, planned again",
+    check("the Stock item: its type and sizes (the plate 70 wide); the part moved by its X arrow (snapped to 0.1 mm) and turned by its Z ring (5° steps on the ring), each drag one edit, planned again",
       pane.types === "block,round,square,hex,rect" && pane.x === "60" && !pane.setupShown && inPlayback.views === 1 && inPlayback.inScene && sized.max[0] - sized.min[0] === 70 && typed.y === 45 && typed.focus === "stY" && dx > 0.5 && Math.abs(dx * 10 - Math.round(dx * 10)) < 1e-6 && /X \+/.test(moved) &&
-      t2.rotate?.[0] === 0 && t2.rotate?.[1] === 0 && t2.rotate[2] % 90 === 0 && t2.rotate[2] !== 0 && /Z [+-]\d+°/.test(turned) && planned && JSON.stringify(undone.translate) === JSON.stringify(t1.translate) && !undone.rotate,
+      t2.rotate?.[0] === 0 && t2.rotate?.[1] === 0 && t2.rotate[2] % 5 === 0 && t2.rotate[2] !== 0 && /Z: -?\d+\.\d\d/.test(turned) && planned && JSON.stringify(undone.translate) === JSON.stringify(t1.translate) && !undone.rotate,
       `pane ${JSON.stringify(pane)}; playback ${JSON.stringify(inPlayback)}; stock ${JSON.stringify(sized)}; typed ${JSON.stringify(typed)}; moved ${JSON.stringify(t0.translate)} -> ${JSON.stringify(t1.translate)} "${moved}"; turned ${JSON.stringify(t2.rotate)} "${turned}"; planned ${planned}; undone ${JSON.stringify(undone)}`);
     // a round bar standing up in the vise: the block round it is its length tall
     await js("document.querySelector('#tree [data-act=stock]').click(); true");

@@ -7,6 +7,7 @@
 
 import { kindOf, rotation } from "./project.js";
 import { carriedFrom, meshModelOf, rangesFollow } from "./stockpane.js";
+import { makeProtractor } from "./protractor.js";
 
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const DEG = Math.PI / 180;
@@ -200,23 +201,40 @@ export function setupHandles({ state, edit }) {
       return c;
     };
     h.tc = mk("translate");
-    h.rc = mk("rotate");
-    // (one at a time: an arrow under the pointer takes the press, not a ring there too)
-    h.tc.addEventListener("axis-changed", (e) => {
-      if (!h.rc.dragging) h.rc.enabled = e.value == null && h.tc.visible;
-    });
-    h.rc.setSize(1.25);
     h.readout = document.createElement("div");
     h.readout.className = "handle-readout hidden";
     h.readout.id = "handleReadout";
     document.getElementById("view3d").appendChild(h.readout);
-    const snaps = () => {
-      h.tc.setTranslationSnap(h.shift ? 0.01 : 0.1);
-      h.rc.setRotationSnap(h.shift ? DEG : Math.PI / 2);
+    // (Mar: Bambu Studio's rotate handle) the rings: on the ticks' band 5° at a time, inside
+    // the ring free; one edit on release
+    h.rc = makeProtractor(v, {
+      readout: h.readout,
+      busy: () => h.tc.axis != null || h.tc.dragging,
+      begin: () => {
+        if (h.start || h.tc.dragging) return false;
+        begin({ mode: "rotate" });
+        return !!h.start;
+      },
+      change: (k, deg) => {
+        if (!h.start) return;
+        h.custom = { k, deg };
+        const ax = new THREE.Vector3(...[0, 1, 2].map((i) => (i === k ? 1 : 0)));
+        h.proxy.quaternion.copy(h.start.quat).premultiply(new THREE.Quaternion().setFromAxisAngle(ax, deg * DEG));
+        during();
+      },
+      end: async () => {
+        await end();
+        h.custom = null;
+      },
+    });
+    v.groups.handles.add(h.rc.root);
+    // (kept on what it turns, every frame)
+    const tick = () => {
+      h.rc.sync(h.proxy.position);
+      requestAnimationFrame(tick);
     };
-    snaps();
-    window.addEventListener("keydown", (e) => e.key === "Shift" && !h.shift && ((h.shift = true), snaps()));
-    window.addEventListener("keyup", (e) => e.key === "Shift" && ((h.shift = false), snaps()));
+    requestAnimationFrame(tick);
+    h.tc.setTranslationSnap(0.1);
   }
 
   function begin(c) {
@@ -251,6 +269,8 @@ export function setupHandles({ state, edit }) {
       if (st.tg.rotary && st.tg.kind === "stock") (d[1] = 0), (d[2] = 0);
       return { d, k: null, deg: 0 };
     }
+    // (the rings: their own angle, snapped or free as the pointer was)
+    if (h.custom) return { d: [0, 0, 0], k: h.custom.k, deg: h.custom.deg };
     const q = st.quat.clone().invert().premultiply(h.proxy.quaternion);
     const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
     const a = [e.x, e.y, e.z].map((r) => r / DEG);
@@ -268,6 +288,8 @@ export function setupHandles({ state, edit }) {
     const v = state.three;
     const p = h.proxy.position.clone().project(v.camera);
     const r = v.renderer.domElement.getBoundingClientRect();
+    // (the rings write their own: at the pointer, "Y: 35.00")
+    if (h.custom) return void window.__marcam.kickView?.();
     h.readout.style.left = `${((p.x + 1) / 2) * r.width + 14}px`;
     h.readout.style.top = `${((1 - p.y) / 2) * r.height - 28}px`;
     h.readout.textContent = dl.k == null ? `X ${fmt(dl.d[0])}  Y ${fmt(dl.d[1])}  Z ${fmt(dl.d[2])} mm` : `${"XYZ"[dl.k]} ${fmt(dl.deg)}°`;
@@ -333,15 +355,17 @@ export function setupHandles({ state, edit }) {
     // on the rotary axis: the slide along X and the turn about X only
     h.tc.showY = h.tc.showZ = !tg.rotary || tg.kind !== "stock";
     h.rc.showY = h.rc.showZ = !tg.rotary;
-    h.rc.showE = false;
+    h.rc.showX = true;
     window.__marcam.kickView?.();
   }
 
   /** (tests) Where a handle is on the screen: `mode` translate | rotate, `axis` X | Y | Z
    *  (a ring: the point `ang` degrees round it). */
-  function screenOf(mode, axis, ang = 45) {
+  function screenOf(mode, axis, ang = 45, rf = 1) {
     const v = state.three;
-    const c = mode === "translate" ? h.tc : h.rc;
+    // (the rings: a point `ang` degrees round, `rf` times its radius out)
+    if (mode === "rotate") return h.rc?.visible ? h.rc.screenAt("XYZ".indexOf(axis), ang, rf) : null;
+    const c = h.tc;
     if (!c?.visible) return null;
     c.updateMatrixWorld(true);
     const THREE = v.THREE;
