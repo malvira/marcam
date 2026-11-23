@@ -3312,7 +3312,8 @@ try {
   // and a carried piece in the vise, with handles in the 3D view (snapped; one edit a drag)
   {
     const job = () => js("document.getElementById('job').value").then(JSON.parse);
-    const drag = async (mode, axis, dx, dy) => {
+    // (a ring: turned `turn` degrees round it, on its band: 5° steps)
+    const drag = async (mode, axis, dx, dy, turn = 120) => {
       // (a ring: from a point round it that no arrow covers)
       let p = null, a0 = 45;
       for (const ang of mode === "rotate" ? [45, 60, 30, 75, 15, 120, 150] : [45]) {
@@ -3327,7 +3328,7 @@ try {
       await S("Input.dispatchMouseEvent", { type: "mousePressed", x: p[0], y: p[1], button: "left", clickCount: 1 });
       for (let i = 1; i <= 12; i++) {
         // (a ring: round it, a quarter turn and a bit; an arrow: straight)
-        const q = mode === "rotate" ? JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('rotate', '${axis}', ${a0 + (dx > 0 ? 1 : -1) * 10 * i}))`)) : [p[0] + (dx * i) / 12, p[1] + (dy * i) / 12];
+        const q = mode === "rotate" ? JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('rotate', '${axis}', ${a0 + ((dx > 0 ? 1 : -1) * turn * i) / 12}))`)) : [p[0] + (dx * i) / 12, p[1] + (dy * i) / 12];
         await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: q[0], y: q[1], button: "left", buttons: 1 });
       }
       const readout = await js("document.getElementById('handleReadout')?.textContent || ''");
@@ -3401,7 +3402,7 @@ try {
     await settle();
     await js("document.querySelector('#tree [data-act=stock]').click(); true");
     await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible && window.__marcam.handles.target()?.kind === 'carried'"), "the carried piece's handles", 60000);
-    const stood = await drag("rotate", "Y", -220, 160);
+    const stood = await drag("rotate", "Y", -220, 160, 90);
     const ks = (await job()).setups[1];
     const kframe = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${ks.id}' }).then((r) => r.result.stock_box)`);
     await shot("42c_knob_stood");

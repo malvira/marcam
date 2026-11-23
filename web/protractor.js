@@ -164,8 +164,13 @@ export function makeProtractor(v, { begin, change, end, readout, busy = () => fa
       root.updateMatrixWorld(true);
       const hits = rayAt(ev).intersectObjects(rings.filter((r) => r.g.visible).map((r) => r.pick), false);
       if (!hits.length) return;
-      const k = hits[0].object.userData.axis;
-      const at = inPlane(ev, k);
+      // (where two rings cross on the screen: the one whose line the pointer is nearest)
+      let k = null, at = null;
+      for (const hit of hits) {
+        const kk = hit.object.userData.axis;
+        const a = inPlane(ev, kk);
+        if (a && (at == null || Math.abs(a[1] - 1) < Math.abs(at[1] - 1))) (k = kk), (at = a);
+      }
       if (!at) return;
       // (an arrow under the pointer takes the press: an arrow and a ring can cross)
       if (busy()) return;
