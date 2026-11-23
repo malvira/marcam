@@ -464,8 +464,9 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
    */
   function open(mode, preset = {}, opts = {}) {
     cur?.resolve(null);
-    // (Mar) a setup's settings in the details below the tree: the same form, in `opts.host`,
-    // not modal; anywhere else (New, Import, Add setup, Edit setup...) a modal dialog
+    // (Mar) a setup's settings in the details below the tree: the form, in `opts.host`;
+    // anywhere else (New, Import, Add setup) never shown: its defaults taken at once (Mar: no
+    // setup dialogs)
     const host = opts.host || null;
     if (host) {
       if (dlg.parentElement !== host) host.appendChild(dlg);
@@ -575,7 +576,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       layout(false);
       // (Mar: no modal) `opts.auto`: the form's own defaults (and `opts.auto()`'s changes)
       // taken at once, never shown; what it refuses comes back as { error }
-      if (opts.auto) {
+      if (opts.auto || !host) {
         if (typeof opts.auto === "function") opts.auto();
         finish(true);
         if (cur) {
@@ -585,10 +586,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
         }
         return;
       }
-      if (!dlg.open) {
-        if (host) dlg.show();
-        else dlg.showModal();
-      }
+      if (!dlg.open && host) dlg.show();
     });
   }
 
@@ -816,5 +814,5 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     finish(false);
   });
 
-  return { open, close: () => finish(false), preview, embeddedFor, reattach, park, get mode() { return cur?.mode ?? null; }, get modal() { return !!cur && !cur.embedded; } };
+  return { open, close: () => finish(false), preview, embeddedFor, reattach, park, get mode() { return cur?.mode ?? null; } };
 }

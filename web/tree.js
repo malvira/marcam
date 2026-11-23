@@ -303,7 +303,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         ${t.setupNotes?.[s.id] ? `<div class="small setup-note" id="setupNote">${esc(t.setupNotes[s.id])}</div>` : ""}
         ${sourcePick(s)}
         ${stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore })}
-        <div class="row small">${window.__marcam.project?.settings?.dialogs ? '<button type="button" id="treeEditSetup" title="The older setup dialog (tests)">Edit setup...</button> <button type="button" id="treeReplace">Replace model...</button> ' : ""}${kindOfSetup(s) === "vise" ? "" : '<button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model\'s faces">Knurl wizard</button>'}
+        <div class="row small">${kindOfSetup(s) === "vise" ? "" : '<button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model\'s faces">Knurl wizard</button>'}
         ${s.stock?.shape === "from_previous" ? `<button type="button" id="treeStockStl" title="The stock this setup starts with (what the setup before left, turned as here) as an STL">Incoming stock STL</button>` : ""}</div>
         <div id="setupHost" class="setup-host"></div>`;
     }
@@ -1379,10 +1379,6 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       }
       return;
     }
-    if (el.id === "treeEditSetup") {
-      await window.__marcam.project.editSetup(t.setup);
-      return;
-    }
     if (el.dataset?.preset && el.closest?.(".part-presets")) {
       await placePreset(el.dataset.preset, el.textContent.trim(), el.dataset);
       return;
@@ -1494,10 +1490,6 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       } finally {
         el.disabled = false;
       }
-      return;
-    }
-    if (el.id === "treeReplace") {
-      $("replaceModelFile").click();
       return;
     }
     if (el.id === "opCalcFeeds") {

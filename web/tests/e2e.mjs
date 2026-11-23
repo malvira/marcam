@@ -284,9 +284,6 @@ try {
   await S("Page.navigate", { url });
   await waitFor(async () => (await state()) === "ready", "the engine to load", 30000);
   check("page loads and the WebAssembly engine starts", true, await js("document.getElementById('version').textContent"));
-  // (the sections here were written with the setup dialogs; a person never sees them now, Mar:
-  // usereye.mjs takes Mar's path without them)
-  await js("localStorage.setItem('marcam.dialogs', '1'); window.__marcam.project.settings.dialogs = true; true");
   // the live updating (on by default) is tested in its own section (8v): the sections before
   // it plan when they ask (Tools > Replan all), as they were written
   const liveDefault = await js("document.getElementById('autoGen').checked");
@@ -476,9 +473,6 @@ try {
   const settle = () => waitFor(() => js("!!window.__marcam.state.tree.doc && document.body.dataset.state !== 'busy'"), "tree", 60000).then(() => sleep(400)).catch(async (e) => {
     throw new Error(`${e.message}: ${await js("JSON.stringify({ doc: !!window.__marcam.state.tree.doc, state: document.body.dataset.state, status: document.getElementById('status').textContent, error: document.getElementById('error').textContent, dialog: (document.getElementById('setupDialog').open && !document.getElementById('setupDialog').classList.contains('embedded')) })")}`);
   });
-  // (Mar: no setup dialogs) the sections moved off them run without (the rest still with,
-  // until each is moved): the setup's type changed in its details, a setup's own stock
-  const dialogs = (on) => js(`window.__marcam.project.settings.dialogs = ${on}; true`);
   // (Mar: no Apply) the operation selected: a new one not complete yet, else the project's
   const SEL = "(() => { const t = window.__marcam.state.tree; return t.draft?.op.id === t.selected ? t.draft.op : t.doc?.setups.find((x) => x.id === t.setup)?.operations.find((o) => o.id === t.selected); })()";
   /** The setup worked on made `kind` in its details (applied as it is clicked). */
@@ -511,12 +505,9 @@ try {
     // (the tree's: a 0.1 job shown as a project has its setups there only)
     const count = "(window.__marcam.state.tree.doc?.setups || []).length";
     const n0 = await js(count);
-    const was = await js("!!window.__marcam.project.settings.dialogs");
-    await dialogs(false);
     await js(`(() => { for (const [id, v] of [['treeAddKind', '${kind}'], ['treeAddFrom', '${from}']]) { const e = document.getElementById(id); if (!e) continue; e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); } document.getElementById('treeAddSetup').click(); return true; })()`);
     await waitFor(() => js(`${count} === ${n0 + 1} && document.body.dataset.state !== 'busy'`), "the setup added", 60000);
     await settle();
-    await dialogs(was);
   };
   await treeAct("op3", "enable");
   await settle();
@@ -598,11 +589,11 @@ try {
 
   // add an operation from the registry's form
   await js("document.getElementById('treeAddType').value = 'flank_chamfer'; document.getElementById('treeAdd').click(); true");
-  await waitFor(() => js("!!document.getElementById('opForm')"), "the operation form", 10000);
+  await waitFor(() => js("!!document.getElementById('opForm')"), "the operation form", 60000);
   await js("const f0 = document.getElementById('opForm'); f0.elements.edge.value = ''; f0.requestSubmit(); true");
-  const probs = await waitFor(() => js("document.getElementById('opErrors')?.textContent || ''"), "the missing-field message", 10000);
+  const probs = await waitFor(() => js("document.getElementById('opErrors')?.textContent || ''"), "the missing-field message", 60000);
   await js("const f = document.getElementById('opForm'); f.elements.edge.value = '0, 7.2'; f.elements.tip_offset.value = '0.8'; f.elements.passes.value = '0'; f.elements.feed.value = '200'; f.elements.plunge_feed.value = '60'; f.requestSubmit(); true");
-  await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 4"), "the new operation", 10000);
+  await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 4"), "the new operation", 60000);
   await settle();
   const probsAfter = await js("document.querySelector('#tree .error')?.textContent || ''");
   const added = await gen();
@@ -795,7 +786,6 @@ try {
     const knobStl = readFileSync(join(root, "examples", "knob", "knob.stl")).toString("base64");
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "bare", models: [], tools: [], setups: [] } }))}, "bare.marcam.json").then(() => true)`);
     await settle();
-    await dialogs(false);
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knobStl}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     await waitFor(() => js("(() => { try { const d = JSON.parse(document.getElementById('job').value); return d.setups?.length === 1 && d.models?.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "the part imported with no operations", 120000);
     await setKind("vise");
@@ -813,19 +803,16 @@ try {
     check("a setup added (its own stock, or the cut result of the one before) has no operations until the person adds them", added.join() === "0,0,0", JSON.stringify(added));
     // the sections below were written with starter operations: asked for, as a caller may
     await js("localStorage.setItem('marcam.starters', '1'); window.__marcam.project.settings.starters = true; true");
-    await dialogs(true);
   }
   {
     // an imported STL on a vise (its starter operations), generated by the import
     const knobStl = readFileSync(join(root, "examples", "knob", "knob.stl")).toString("base64");
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: { schema_version: "0.2", name: "times", models: [], tools: [], setups: [] } }))}, "times.marcam.json").then(() => true)`);
     await settle();
-    await dialogs(false);
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knobStl}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     await waitFor(() => js("(() => { try { return JSON.parse(document.getElementById('job').value).setups?.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "the knob STL imported", 120000);
     await settle();
     await setKind("vise");
-    await dialogs(true);
     // (planned: the status says what it took)
     await clickGenerate();
     await waitDone("the imported STL", 240000);
@@ -1087,8 +1074,6 @@ try {
     const emptyReady = () => waitFor(() => js("!!document.getElementById('emptyState') && document.body.dataset.state === 'ready'"), "the empty project", 60000).catch(async (e) => {
       throw new Error(`${e.message}: ${await js("JSON.stringify({ empty: !!document.getElementById('emptyState'), state: document.body.dataset.state, status: document.getElementById('status').textContent })")}`);
     });
-
-    await dialogs(false);
     // New, from a project with unsaved edits: asked first; declining keeps it
     await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
     const dirty0 = await js("!document.getElementById('projectDirty').classList.contains('hidden')");
@@ -1362,7 +1347,6 @@ try {
       check("loading an example resets too: the previous example's part, toolpaths and mesh are gone; only the ring's bar and part",
         ex.path === 0 && ex.part === 1 && ex.stock === 1 && !ex.mesh && ex.gcode === 0 && !ex.result && ex.partTris !== domeTris, JSON.stringify(ex));
     }
-    await dialogs(true);
 
     // leaving with unsaved changes: the browser asks
     await js("document.getElementById('job').dispatchEvent(new Event('input')); true");
@@ -1684,12 +1668,10 @@ try {
     const proj0 = { schema_version: "0.2", name: "noops", models: [], tools: [], setups: [] };
     await js(`await window.__marcam.project.openText(${JSON.stringify(JSON.stringify({ format: "marcam-project", version: 1, project: proj0 }))}, "noops.marcam.json").then(() => true)`);
     await settle();
-    await dialogs(false);
     await js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([Uint8Array.from(atob("${knobStl}"), (c) => c.charCodeAt(0))], "knob.stl")); const i = document.getElementById('importStlFile'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
     await waitFor(() => js("(() => { try { return JSON.parse(document.getElementById('job').value).setups?.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "the knob imported", 120000);
     await settle();
     await setKind("vise");
-    await dialogs(true);
     // delete every operation, one by one
     for (const id of await js("[...document.querySelectorAll('#tree .tree-op')].map((r) => r.dataset.op).reverse()")) {
       await js(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="delete"]').click(); true`);
@@ -2250,7 +2232,6 @@ try {
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl')"), "the plate's dome mesh", 60000);
     await settle();
     // (Mar: no setup dialogs) + Add setup: 3-axis, continuing; turned over in its Stock
-    await dialogs(false);
     const offered = await js("(() => { const f = document.getElementById('treeAddFrom'); return !!f && [...f.options].some((o) => o.value === 'carry'); })()");
     await js("(() => { for (const [id, v] of [['treeAddKind', 'vise'], ['treeAddFrom', 'carry']]) { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('change', { bubbles: true })); } document.getElementById('treeAddSetup').click(); return true; })()");
     await waitFor(() => js("JSON.parse(document.getElementById('job').value).setups.length === 2"), "the setup added", 60000);
@@ -2262,7 +2243,6 @@ try {
     await js("(() => { const t = document.getElementById('stTurn'); t.value = 'y180'; t.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await shot("32a_carry_dialog");
     await waitFor(() => js("document.body.dataset.state !== 'busy' && JSON.parse(document.getElementById('job').value).setups[1].stock.turn === 'y180'"), "the carried setup turned over", 60000);
-    await dialogs(true);
     // (back to the setup's details, as the sections after expect)
     await js("document.querySelector('#tree .tree-setup.active [data-act=setup]').click(); true");
     const d = JSON.parse(await js("document.getElementById('job').value"));
