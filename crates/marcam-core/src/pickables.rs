@@ -593,6 +593,9 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
         // ... and, whatever its kind (a wall, a slope, a textured surface), whether the
         // material across rises above the face, and its region
         let mut rises: HashMap<Key, (bool, Option<usize>)> = HashMap::new();
+        // (an up face) the bottom of the material falling away across each boundary edge: a
+        // contour picked on its outline cuts down the wall to there, not to the face
+        let mut falls_to: HashMap<Key, f64> = HashMap::new();
         for &i in &r.tris {
             let t = &tris[i];
             for e in 0..3 {
@@ -610,6 +613,9 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                             .map(|p| p[2])
                             .fold(f64::NEG_INFINITY, f64::max);
                         rises.insert(a, (tz > z + 1e-3, Some(wr)));
+                        if up && tz <= z + 1e-3 && regions[wr].z[0] < z - 1e-3 {
+                            falls_to.insert(a, regions[wr].z[0]);
+                        }
                         if !(is_wall(&regions[wr]) && tz > z + 1e-3) {
                             walls_up = false;
                         } else {
@@ -761,6 +767,16 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
             let outer = n == 0;
             let side = if outer { "outside" } else { "inside" };
             let len = length(l);
+            // (an up face) where the wall falling from this loop ends: all the way round it
+            // (the highest of its bottoms: a contour cuts down to it and no further)
+            let wall_bottom = up
+                .then(|| {
+                    let ks = &key_loops[order[n]];
+                    let b: Vec<f64> = ks.iter().filter_map(|k| falls_to.get(k).copied()).collect();
+                    (b.len() == ks.len() && !b.is_empty())
+                        .then(|| b.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+                })
+                .flatten();
             out.push(Pickable {
                 id: format!("edge_loop:{id}:{n}"),
                 kind: "edge_loop".into(),
@@ -770,7 +786,7 @@ fn xyz(mesh: &Mesh, infos: Vec<FaceRegion>, of: &[usize]) -> Vec<Pickable> {
                 ),
                 faces: vec![id.clone()],
                 similar: format!("edge_loop:{}:{}:{}", r2(z), side, r2(len)),
-                data: json!({"z": z, "path": close(l), "side": side, "length": len, "up": up}),
+                data: json!({"z": z, "path": close(l), "side": side, "length": len, "up": up, "wall_bottom": wall_bottom}),
                 signature: Value::Null,
             });
         }
@@ -1244,10 +1260,13 @@ pub fn apply(
                 notes.push("a contour follows one loop: the first one picked".into());
             }
             let top = cx.stock_top.unwrap_or(f(p, "z"));
+            // (Mar's boss: its outline picked, the contour cut 0.5 deep, the stock's margin)
+            // down the wall that falls from the loop, to its foot; else to the loop
+            let floor = p.data["wall_bottom"].as_f64().unwrap_or(f(p, "z"));
             v.insert("path".into(), p.data["path"].clone());
             v.insert("side".into(), p.data["side"].clone());
             v.insert("top".into(), json!(round_um(top)));
-            v.insert("depth".into(), json!(round_um((top - f(p, "z")).max(0.01))));
+            v.insert("depth".into(), json!(round_um((top - floor).max(0.01))));
         }
         "face" => {
             let p = picks[0];

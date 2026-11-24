@@ -822,6 +822,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       <label>Name <input name="__name" value="${esc(op.name || "")}"></label>`;
     // (the rarely changed settings folded away under More)
     let more = "";
+    // (Mar: "typing in manual coordinates for paths should be an advanced option that's
+    // hidden away") the geometry typed as numbers folded away under Advanced: the form shows
+    // how the geometry is chosen, picked on the model or the part's defaults
+    let adv = "";
+    let svg = "";
     const field = (p) => {
       const v = op[p.name];
       // rotary_finish uses one stepover or the other, depending on the pattern
@@ -853,9 +858,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       } else if (p.kind === "paths") {
         const n = Array.isArray(v) ? v.length : 0;
         const text = Array.isArray(v) ? v.map(pointsText).join(" | ") : "";
-        html += `<label title="${esc(p.help)}">${label} <span class="muted">${n} path${n === 1 ? "" : "s"}; x y; x y | ...</span><textarea name="${p.name}" rows="2" spellcheck="false">${esc(text)}</textarea></label>
-          <div class="row small"><label class="filebtn">Load SVG into ${p.name.replace(/_/g, " ")}<input type="file" accept=".svg,image/svg+xml" data-svg="${p.name}" hidden></label>
+        // (the SVG loader stays in the form: a file, not typed numbers; the numbers under
+        // Advanced)
+        svg += `<div class="row small"><label class="filebtn">Load SVG into ${p.name.replace(/_/g, " ")}<input type="file" accept=".svg,image/svg+xml" data-svg="${p.name}" hidden></label>
           <label>height (mm) <input name="__svg_height" value="20" size="4"></label></div>`;
+        html += `<label title="${esc(p.help)}">${label} <span class="muted">${n} path${n === 1 ? "" : "s"}; x y; x y | ...</span><textarea name="${p.name}" rows="2" spellcheck="false">${esc(text)}</textarea></label>`;
       } else if (p.kind === "points") {
         html += `<label title="${esc(p.help)}">${label} <span class="muted">x y; x y; ...</span><input name="${p.name}" value="${esc(Array.isArray(v) ? pointsText(v) : "")}" placeholder="required"></label>`;
       } else if (p.kind === "points3") {
@@ -869,11 +876,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     for (const p of ty.params) {
       const at = html.length;
       field(p);
-      if (p.advanced) {
+      if (TYPED_GEOMETRY.has(p.name)) {
+        adv += html.slice(at);
+        html = html.slice(0, at);
+      } else if (p.advanced) {
         more += html.slice(at);
         html = html.slice(0, at);
       }
     }
+    html += svg;
     if (more) html += `<details class="op-more" id="opMore" ${t.moreOpen ? "open" : ""}><summary>More</summary>${more}</details>`;
     const faces = op.geometry?.find((g) => g.kind === "faces");
     const ax = op.geometry?.find((g) => g.kind === "axial_range");
@@ -892,6 +903,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         ${pk && pk.sel.size && !mode.single ? '<button type="button" id="pickSimilar" title="Add every feature like the ones picked">Select all similar</button>' : ""}
         <span id="pickInfo">${esc(pickInfoText(op, mode))}</span>
         ${mode.faces && faces ? '<button type="button" id="clearFaces">Clear</button>' : ""}</div>`;
+      // nothing picked: said in one line (what to pick, or what it uses meanwhile)
+      if (!pk && !op.picks?.length && !faces) html += `<div class="small muted" id="pickNone">${esc(nothingPicked(op, ty, mode))}</div>`;
       // what it uses (when not picking): a row per pick, × to remove it, hover to see it
       if (!pk && op.picks?.length) {
         const missing = (label) => op.error && op.error.includes(label);
@@ -910,7 +923,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       }
     }
     // face and axial selections bound rotary operations (X/A) and the 3D raster
-    if (mode?.legacy) html += `<label>axial range (mm)<input name="__axial" value="${ax ? ax.x.join(", ") : ""}" placeholder="all"></label>`;
+    if (mode?.legacy) adv += `<label>axial range (mm)<input name="__axial" value="${ax ? ax.x.join(", ") : ""}" placeholder="all"></label>`;
+    if (adv) html += `<details class="op-advanced" id="opAdvanced" ${t.advOpen ? "open" : ""}><summary>Advanced: coordinates typed by hand</summary>${adv}</details>`;
     const feedy = ty.params.some((p) => ["feed", "rough_feed", "finish_feed", "plunge_feed"].includes(p.name));
     html += `<div id="opErrors" class="error small hidden"></div>${feedy ? '<div id="opFeedsNotes" class="small muted" aria-live="polite"></div>' : ""}<div class="row">${feedy ? '<button type="button" id="opCalcFeeds" title="Calculate the feeds for this tool, its stepover and depth in the setup\'s material at the setup\'s spindle speed (chip load, chip thinning), within the machine\'s cap">Calculate feeds</button>' : ""}</div></form>`;
     const cur = kept?.el || ed;
@@ -995,6 +1009,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // engine fills from the picks (drill points and depth, a pocket's outline, ...).
   const FACE_TYPES = ["raster3d", "rough3d", "waterline", "rotary_finish"];
   const SINGLE = ["helical_knurl", "flank_chamfer", "engrave", "vcarve"];
+  /** The parameters that are geometry typed as numbers (paths, points, corners, ranges, the
+   *  body's ends, an edge, a cut's place, tabs' places): under Advanced, not in the form. */
+  const TYPED_GEOMETRY = new Set(["paths", "points", "holes", "rect", "path", "x_range", "y_range", "a_range", "body_back", "body_front", "edge", "x", "tab_at"]);
+
   function pickModeOf(ty) {
     if (!ty) return null;
     // before picking existed per type: rotary operations (and the raster) were bounded by faces
@@ -1003,6 +1021,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const kinds = own.length ? own : legacy ? ["cylindrical_band", "revolved_band", "surface"] : [];
     if (!kinds.length) return null;
     return { kinds, faces: FACE_TYPES.includes(ty.kind) || !own.length, single: SINGLE.includes(ty.kind), legacy };
+  }
+
+  /** An operation with nothing picked, in one line: what to pick on the part, and what it
+   *  uses meanwhile (the coordinates typed under Advanced, the part's own defaults). */
+  function nothingPicked(op, ty, mode) {
+    const names = { flat_face: "a flat face", side_face: "a side face", pocket: "a pocket", hole: "a hole", outline: "an outline", edge_loop: "an edge loop", surface: "a surface", cylindrical_band: "a turned diameter", revolved_band: "a turned profile", circular_edge: "a round edge" };
+    const list = [...new Set(mode.kinds.map((k) => names[k] || k.replace(/_/g, " ")))];
+    const what = list.length > 1 ? `${list.slice(0, -1).join(", ")} or ${list[list.length - 1]}` : list[0];
+    const typed = ty.params.some((p) => TYPED_GEOMETRY.has(p.name) && (Array.isArray(op[p.name]) ? op[p.name].length : op[p.name] != null));
+    const meanwhile = typed ? " (meanwhile: the coordinates under Advanced)" : mode.faces || mode.legacy ? " (meanwhile: the whole part)" : "";
+    return `Nothing picked. Pick ${what} on the part${meanwhile}.`;
   }
 
   function pickInfoText(op, mode) {
@@ -1173,6 +1202,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       try {
         const { result } = await engine("applyPicks", t.doc, { type: op.type, ids: [...pk.sel], setup: t.setup, model: t.regions.model, tool: op.tool, index_a: op.index_a ?? 0, op }, state.mesh);
         Object.assign(op, result.params);
+        // (the picked feature's numbers, not what was typed in those fields before: kept as
+        // an edit not yet applied, a field cleared stayed blank under the pick and the form
+        // said it was missing)
+        const f = $("opForm");
+        if (f) for (const k of Object.keys(result.params)) for (const e of f.querySelectorAll(`[name="${CSS.escape(k)}"]`)) if ("defaultValue" in e) e.value = e.defaultValue;
         // a rectangle no longer applies once the outline is picked
         if (op.type === "pocket" && result.params.paths) delete op.rect;
         pk.notes = result.notes;
@@ -2027,6 +2061,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // (the operation form's More: kept open or shut as the person left it)
   $("tree").addEventListener("toggle", (ev) => {
     if (ev.target.id === "opMore") t.moreOpen = ev.target.open;
+    if (ev.target.id === "opAdvanced") t.advOpen = ev.target.open;
     if (ev.target.id === "stMore") t.stMore = ev.target.open;
     if (ev.target.id === "ptMore") t.ptMore = ev.target.open;
   }, true);

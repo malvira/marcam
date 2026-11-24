@@ -1846,7 +1846,46 @@ pub mod api {
             op: (!o["op"].is_null()).then(|| o["op"].clone()),
         };
         match pickables::apply(kind, &picks, &cx) {
-            Ok((params, notes)) => json!({"params": params, "notes": notes}),
+            Ok((mut params, mut notes)) => {
+                // (Mar's carried part: the OD picked to knurl ran into the chuck's jaws) a
+                // knurl's body kept clear of them, as its defaults are
+                if kind == "helical_knurl" {
+                    let job = p
+                        .setups
+                        .iter()
+                        .find(|s| s.id == setup)
+                        .and_then(|s| p.setup_job(s, &libs).ok());
+                    if let (Some(job), Some(back), Some(front)) = (
+                        job,
+                        params["body_back"].as_array().cloned(),
+                        params["body_front"].as_array().cloned(),
+                    ) {
+                        let clear = marcam::ops::chuck_clear(&job);
+                        let (x0, r0) = (
+                            back[0].as_f64().unwrap_or(0.0),
+                            back[1].as_f64().unwrap_or(0.0),
+                        );
+                        let (x1, r1) = (
+                            front[0].as_f64().unwrap_or(0.0),
+                            front[1].as_f64().unwrap_or(0.0),
+                        );
+                        if x0 < clear && x1 - clear >= 1.0 {
+                            let r = r0 + (r1 - r0) * (clear - x0) / (x1 - x0);
+                            let um = |v: f64| (v * 1000.0).round() / 1000.0;
+                            params["body_back"] = json!([um(clear), um(r)]);
+                            notes.push(format!(
+                                "the knurl starts at X{clear:.2}, 2 mm clear of the chuck's jaws"
+                            ));
+                        } else if x1 - clear < 1.0 {
+                            notes.push(
+                                "the band picked is in the chuck's jaws: nothing of it to knurl"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
+                json!({"params": params, "notes": notes})
+            }
             Err(e) => err(e),
         }
     }

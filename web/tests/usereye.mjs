@@ -24,6 +24,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import { findBrowser, freePort, httpGet, sleep, waitFor } from "./harness.mjs";
+import { finishedPartStl } from "./finished_part.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const shots = join(root, "web", "tests", "screenshots", "usereye");
@@ -1269,7 +1270,38 @@ try {
     await settled();
     const bar = await read("document.querySelector('#tree .tree-setup.active [data-act=stock]')?.textContent || ''");
     check("carry-through: a round bar standing in the vise (its Stock: Round bar, Axis Z)", /bar/.test(bar) && (await read("document.getElementById('stAlong').value")) === "z", bar.trim());
-    // a square boss (a 2D contour outside a square), a pocket inside it, the OD (contours)
+    // (Mar: "no human will ever do that [type path coordinates] ... you shouldn't use it for
+    // your testing") the finished part imported, its features picked on it in the 3D view
+    const fin = join(mkdtempSync(join(tmpdir(), "marcam-finished-")), "finished_part.stl");
+    writeFileSync(fin, finishedPartStl());
+    await click("#tree .tree-setup.active [data-act=part]");
+    await sleep(800);
+    const chooser = new Promise((resolve) => {
+      const t0 = events.length;
+      const tick = setInterval(() => {
+        const e = events.slice(t0).find((x) => x.method === "Page.fileChooserOpened");
+        if (e) {
+          clearInterval(tick);
+          resolve(e.params);
+        }
+      }, 50);
+    });
+    await click("#ptReplace", "Import model");
+    const fcp = await Promise.race([chooser, sleep(10000).then(() => null)]);
+    if (!fcp) throw new Error("carry-through: no file chooser from Import model");
+    await S("DOM.setFileInputFiles", { files: [fin], backendNodeId: fcp.backendNodeId });
+    await waitFor(() => read("/finished_part/.test(document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || '')"), "the finished part in the vise", 60000);
+    await settled();
+    // the bar fitted to it, no margin round it (a Ø20 bar)
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    // (the margin is under the Stock's More)
+    await openMore("stockPane");
+    await typeInto("#stMargin", "0");
+    await click("#stFit", "Fit to part");
+    await settled();
+    const fitted = await read("document.querySelector('#tree .tree-setup.active [data-act=stock]')?.textContent || ''");
+    check("carry-through: the finished part imported, the bar fitted to it (Ø20)", /Ø20 /.test(fitted), fitted.trim());
     const addOp = async (type, lib) => {
       await pick("treeAddType", type);
       await click("#treeAdd");
@@ -1280,20 +1312,48 @@ try {
       await waitFor(() => read("!!document.getElementById('opForm')"), `the ${type} form`, 60000);
       await settled();
     };
+    // a feature picked as a person does: Pick on the model, a click on it in the 3D view
+    // (turned to the iso view first if it cannot be seen), Done picking
+    const faceAt = (pred) => `(() => { const t = window.__marcam.state.tree, v = window.__marcam.state.three; const target = t.pick?.list.find(${pred}); if (!target) return null; const want = new Set(target.faces); const tri = t.regions.tri; const el = v.renderer.domElement, rc = el.getBoundingClientRect(); const ray = new v.THREE.Raycaster(); for (let k = 0; k < t.regions.of.length; k++) { if (!want.has(t.regions.list[t.regions.of[k]].id)) continue; for (const w of [[1/3, 1/3, 1/3], [0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]) { const c = new v.THREE.Vector3(...[0, 1, 2].map((d) => w[0] * tri[9*k+d] + w[1] * tri[9*k+3+d] + w[2] * tri[9*k+6+d])); const p = c.clone().project(v.camera); if (Math.abs(p.x) > 0.9 || Math.abs(p.y) > 0.9) continue; ray.setFromCamera(new v.THREE.Vector2(p.x, p.y), v.camera); const hit = ray.intersectObject(t.pickMesh)[0]; if (hit && hit.point.distanceTo(c) < 0.05) return [rc.left + ((p.x + 1) / 2) * rc.width, rc.top + ((1 - p.y) / 2) * rc.height]; } } return null; })()`;
+    const pickOn = async (pred, what) => {
+      await click("#pickFaces");
+      await waitFor(() => read("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick?.list?.length"), `${what}: picking`, 60000);
+      await sleep(600);
+      let at = await read(faceAt(pred));
+      if (!at) {
+        await read("window.__marcam.setView('iso', {})");
+        await sleep(600);
+        at = await read(faceAt(pred));
+      }
+      if (at) {
+        await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1] });
+        await S("Input.dispatchMouseEvent", { type: "mousePressed", x: at[0], y: at[1], button: "left", clickCount: 1 });
+        await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: at[0], y: at[1], button: "left", clickCount: 1 });
+        await sleep(1000);
+      }
+      const picked = await read("(() => { const t = window.__marcam.state.tree; return [...(t.pick?.sel || [])].map((id) => t.pick.list.find((x) => x.id === id)?.label).join(' | '); })()");
+      await shot(`carry_pick_${what.replace(/\W+/g, "_")}`);
+      await click("#pickFaces");
+      await waitFor(() => read("!window.__marcam.state.tree.pickMesh"), `${what}: done picking`, 60000).catch(() => {});
+      await settled();
+      return picked;
+    };
+    const val = (name) => read(`document.getElementById('opForm')?.elements['${name}']?.value ?? null`);
+    // the boss: its outline (the edge round its top), cut down its walls
     await addOp("contour", "3\\.175 x 12");
-    await typeInto("#opForm [name=path]", "4 4; 16 4; 16 16; 4 16");
-    await typeInto("#opForm [name=depth]", "6");
-    await settled();
+    const bossPick = await pickOn("(x) => x.kind === 'edge_loop' && x.data.side === 'outside' && Math.abs(x.data.length - 48) < 0.5", "the boss");
+    const bossDepth = +(await val("depth"));
+    // the pocket in it
     await addOp("pocket");
-    await typeInto("#opForm [name=rect]", "7, 7, 13, 13");
-    await typeInto("#opForm [name=depth]", "3");
-    await settled();
+    const pocketPick = await pickOn("(x) => x.kind === 'pocket'", "the pocket");
+    const pocketDepth = +(await val("depth"));
+    // the turned OD (Ø18): the edge round its top, down its wall to the step
     await addOp("contour");
-    const circle = Array.from({ length: 12 }, (_, i) => `${(10 + 9 * Math.cos((i * Math.PI) / 6)).toFixed(2)} ${(10 + 9 * Math.sin((i * Math.PI) / 6)).toFixed(2)}`).join("; ");
-    await typeInto("#opForm [name=path]", circle);
-    await typeInto("#opForm [name=top]", "-6");
-    await typeInto("#opForm [name=depth]", "10");
-    await settled();
+    const odPick = await pickOn("(x) => x.kind === 'edge_loop' && x.data.side === 'outside' && Math.abs(x.data.length - Math.PI * 18) < 1", "the turned OD");
+    const odDepth = +(await val("depth"));
+    check("carry-through: the boss, the pocket and the turned OD picked on the part (no coordinates typed)",
+      /outline, 48\.0/.test(bossPick) && /Pocket 6\.00 x 6\.00/.test(pocketPick) && /outline, 56\.5/.test(odPick) && Math.abs(bossDepth - 6.5) < 0.05 && Math.abs(pocketDepth - 3) < 0.05 && Math.abs(odDepth - 16.5) < 0.05,
+      JSON.stringify({ bossPick, bossDepth, pocketPick, pocketDepth, odPick, odDepth }));
     const s1 = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return { tab: t?.textContent || '', ops: [...document.querySelectorAll('#tree .tree-setup.active .tree-op .tree-label')].map((e) => e.textContent.trim().split(' ')[0]), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
     check("carry-through, setup 1: the boss's contour, the pocket, the OD's contour, planned clean", /OK/.test(s1.tab) && s1.ops.length === 3 && !s1.error, JSON.stringify(s1));
     await shot("carry_setup1");
@@ -1312,16 +1372,17 @@ try {
       }
     const s2 = await read(`(() => { const vis = ${VISIBLE}; return { error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '', stock: document.querySelector('#tree .tree-setup.active [data-act=stock]')?.textContent.trim() || '', tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).length }; })()`);
     const frame = await read("window.__marcam.engine('setupFrame', window.__marcam.state.tree.doc, { setup: window.__marcam.state.tree.setup }).then((r) => r.result.stock)");
-    check("carry-through, setup 2 (4th axis, continuing): the cut piece on the screen, lying along A (60 long), no error, nothing of setup 1 drawn over it",
-      !s2.error && /left/.test(s2.stock) && s2.tabs === 0 && px > 2000 && Math.abs(frame.length - 60) < 0.5, `${JSON.stringify(s2)}; ${JSON.stringify(frame)}; ${px} px`);
-    // the knurl on its OD (the library for a V-bit)
+    check("carry-through, setup 2 (4th axis, continuing): the cut piece on the screen, lying along A, no error, nothing of setup 1 drawn over it",
+      !s2.error && /left/.test(s2.stock) && s2.tabs === 0 && px > 2000 && frame.length > 59, `${JSON.stringify(s2)}; ${JSON.stringify(frame)}; ${px} px`);
+    // the knurl on the OD, picked on the part (the library for a V-bit)
     await addOp("helical_knurl", "90 deg V-bit");
-    const body = await read("[document.querySelector('#opForm [name=body_back]')?.value, document.querySelector('#opForm [name=body_front]')?.value]");
+    const odBand = await pickOn("(x) => x.kind === 'cylindrical_band' && Math.abs(x.data.r[1] - 10) < 0.05", "the OD to knurl");
+    const body = [await val("body_back"), await val("body_front")];
     const [back, front] = body.map((t) => (t || "").split(",").map(Number));
     await settled();
     const k = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return { tab: t?.textContent || '', error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
-    check("carry-through: the knurl's body on the piece's OD (radius 10, clear of the chuck, behind the turned-down part), planned",
-      back && front && Math.abs(back[1] - 10) < 0.3 && Math.abs(front[1] - 10) < 0.3 && back[0] > -60 && front[0] <= -15 && /OK/.test(k.tab) && !k.error, `${JSON.stringify(body)} ${JSON.stringify(k)}`);
+    check("carry-through: the knurl on the OD picked on the part (radius 10, clear of the chuck, behind the turned-down part), planned",
+      /Cylinder 20\.00/.test(odBand) && back && front && Math.abs(back[1] - 10) < 0.3 && Math.abs(front[1] - 10) < 0.3 && back[0] > -frame.length + 1.9 && front[0] <= -15 && /OK/.test(k.tab) && !k.error, `${odBand}; ${JSON.stringify(body)} ${JSON.stringify(k)}`);
     // its playback starts from the piece setup 1 left: the boss end narrower than the bar
     await click("#vtPlay");
     await waitFor(() => read("!!window.__marcam.state.machining?.r && window.__marcam.state.machining.open"), "the playback", 120000).catch(() => {});

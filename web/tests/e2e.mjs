@@ -608,9 +608,24 @@ try {
   // add an operation from the registry's form
   await js("document.getElementById('treeAddType').value = 'flank_chamfer'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js("!!document.getElementById('opForm')"), "the operation form", 60000);
+  // (the Advanced section: its typed edge cleared, the form says it is missing)
+  await js("document.querySelector('#opAdvanced > summary').click(); true");
   await js("const f0 = document.getElementById('opForm'); f0.elements.edge.value = ''; f0.requestSubmit(); true");
   const probs = await waitFor(() => js("document.getElementById('opErrors')?.textContent || ''"), "the missing-field message", 60000);
-  await js("const f = document.getElementById('opForm'); f.elements.edge.value = '0, 7.2'; f.elements.tip_offset.value = '0.8'; f.elements.passes.value = '0'; f.elements.feed.value = '200'; f.elements.plunge_feed.value = '60'; f.requestSubmit(); true");
+  // (Mar: no typed coordinates) then the edge picked on the part, as a person does: a click
+  // in the 3D view on the chamfer just behind the front edge (X0, Ø14.4)
+  await js("document.getElementById('pickFaces').click(); true");
+  await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking the edge", 60000);
+  await js("window.__marcam.setView('iso', {})");
+  await sleep(300);
+  const edgeAt = await js("(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(-0.1, -7.3, 0).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()");
+  const edgeHit = await js(`await window.__marcam.tree.pickAt(${edgeAt[0]}, ${edgeAt[1]}).then((r) => r?.pickable?.label || 'nothing')`);
+  await sleep(300);
+  await js("document.getElementById('pickFaces').click(); true");
+  await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), "done picking the edge", 60000);
+  const edgePicked = await js("document.getElementById('opForm').elements.edge.value");
+  check("a round edge picked on the part fills the chamfer's edge (over the one typed blank)", /X0\.00/.test(edgeHit) && edgePicked === "0, 7.2", `${edgeHit}; edge ${edgePicked}`);
+  await js("const f = document.getElementById('opForm'); f.elements.tip_offset.value = '0.8'; f.elements.passes.value = '0'; f.elements.feed.value = '200'; f.elements.plunge_feed.value = '60'; f.requestSubmit(); true");
   await waitFor(() => js("document.querySelectorAll('#tree .tree-op').length === 4"), "the new operation", 60000);
   await settle();
   const probsAfter = await js("document.querySelector('#tree .error')?.textContent || ''");
@@ -716,6 +731,11 @@ try {
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js(`${SEL}?.type === 'drill' && !!document.getElementById('opForm')`), "the drill form", 60000);
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
+  // (Mar: typed coordinates are an advanced option, hidden away) the drill's points not in
+  // the form until Advanced is opened; the form says what to pick instead
+  const folded = await js("(() => { const e = document.getElementById('opForm').elements.points; const r = e.getBoundingClientRect(); return { hidden: !(r.width && r.height), inAdvanced: !!e.closest('#opAdvanced'), open: !!document.getElementById('opAdvanced')?.open, none: document.getElementById('pickNone')?.textContent || '' }; })()");
+  check("Advanced: the drill's typed points folded away under Advanced, the form saying what to pick", folded.hidden && folded.inAdvanced && !folded.open && /Pick a hole on the part/.test(folded.none), JSON.stringify(folded));
+  await js("document.querySelector('#opAdvanced > summary').click(); true");
   await js("const f = document.getElementById('opForm'); f.elements.points.value = '30 20; 33 20'; f.elements.points.dispatchEvent(new Event('input', { bubbles: true })); f.requestSubmit(); true");
   await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${plateOps + 1}`), "the drill to be added", 60000);
   // (the project text written after the tree: waited for; the drill in whichever setup is
@@ -724,7 +744,7 @@ try {
   await waitFor(() => js(`${drillOf} !== undefined`), "the drill in the project", 30000).catch(() => {});
   const drillPts = await js(drillOf);
   const drillsSeen = await js("(() => { try { const j = JSON.parse(document.getElementById('job').value); return JSON.stringify((j.setups || [j]).flatMap((s) => (s.operations || []).filter((o) => o.type === 'drill').map((o) => s.id + ':' + JSON.stringify(o.points)))); } catch (e) { return 'unreadable: ' + e.message; } })()");
-  check("3-axis form: fully filled, and points are typed as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}; drills in the project ${drillsSeen}`);
+  check("Advanced: the 3-axis form fully filled, and points typed there as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}; drills in the project ${drillsSeen}`);
   // a V-carve whose outline comes from an SVG file, through the form's file input
   const vOps = await js("document.querySelectorAll('#tree .tree-op').length");
   await js("document.getElementById('treeAddType').value = 'vcarve'; document.getElementById('treeAdd').click(); true");

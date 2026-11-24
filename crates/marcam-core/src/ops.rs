@@ -973,6 +973,17 @@ pub fn apply_cutting(
         set("leave_axial", nice(l, 0.001));
     }
 }
+/// The lowest X a cut on a bar in the 4th axis's chuck may reach: 2 mm off the jaws' face
+/// (the bar's back end plus what the jaws grip, whatever their size). Below it: the jaws.
+pub fn chuck_clear(job: &crate::job::Job) -> f64 {
+    let grip = job
+        .fixture
+        .as_ref()
+        .and_then(|f| f.grip)
+        .unwrap_or(0.0)
+        .max(0.0);
+    -job.stock.length + grip + 2.0
+}
 
 /// A complete, valid operation of `kind` with every parameter filled in from the context:
 /// tool size (depths, stepovers), spindle speed and the machine's feed cap (feeds), and the
@@ -1130,20 +1141,22 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                         .iter()
                         .map(|r| r.x[1])
                         .fold(f64::NEG_INFINITY, f64::max);
-                    (body.x[0], body.x[1], r0, r1, front)
+                    // (clear of the chuck's jaws too: Mar's carried part, its body the bar the
+                    // chuck holds)
+                    let clear = chuck_clear(job);
+                    let (x0, x1) = (body.x[0], body.x[1]);
+                    if x0 < clear && x1 - clear >= 1.0 {
+                        let r = r0 + (r1 - r0) * (clear - x0) / (x1 - x0);
+                        (clear, x1, r, r1, front)
+                    } else {
+                        (x0, x1, r0, r1, front)
+                    }
                 }
                 None => {
                     let (mut a, b, r) = carried_body(job)
                         .ok_or("helical_knurl defaults need the part's faces (or a round piece carried in)")?;
                     // (clear of the chuck's jaws, where the piece is held: 2 mm off their face)
-                    // (the jaws' face: the bar's back end plus what they grip, whatever their size)
-                    let grip = job
-                        .fixture
-                        .as_ref()
-                        .and_then(|f| f.grip)
-                        .unwrap_or(0.0)
-                        .max(0.0);
-                    a = a.max(-job.stock.length + grip + 2.0);
+                    a = a.max(chuck_clear(job));
                     if b - a < 1.0 {
                         return Err(
                             "the piece carried in has no round stretch clear of the chuck to knurl"
