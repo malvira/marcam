@@ -305,6 +305,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const m = meshModelOf(t.doc, s);
       html += `<div class="tree-outname">${esc(s.name || s.id)} <span class="muted">setup</span></div>
         <div class="muted small setup-summary" id="setupSummary">${esc(setupSummary(s))}</div>
+        ${typeRow(s)}
         ${t.setupNotes?.[s.id] ? `<div class="small setup-note" id="setupNote">${esc(t.setupNotes[s.id])}</div>` : ""}
         ${sourcePick(s)}
         ${stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore })}
@@ -426,6 +427,19 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     // been) the setup's X ranges go along with the part
     rangesFollow(s, r(d[0]));
     await commit({ label: `Setup "${s.name || s.id}": the part ${label.toLowerCase()}.` });
+  }
+
+  /** (Mar: "need a way to edit the type of setup after it's been added") its type at the top
+   *  of its details, as buttons: the setup's own type buttons (further down, in its
+   *  settings) chosen by them, so a change keeps what fits and turns the stock as there. */
+  function typeRow(x) {
+    const k = kindOfSetup(x) || (isBox(x) ? "vise" : "rotary");
+    const KINDS = [
+      ["vise", "3-axis vise"],
+      ["rotary", "4th axis"],
+      ["indexed", "Indexed 3+1"],
+    ];
+    return `<div class="row small setup-type" id="setupType" role="group" aria-label="Setup type"><span class="muted">Type</span>${KINDS.map(([v, label]) => `<button type="button" data-setkind="${v}" aria-pressed="${v === k}" class="${v === k ? "on" : ""}">${label}</button>`).join("")}</div>`;
   }
 
   /** (Mar) Where setup `x` starts (setup 2 and after): continuing from the setup before (its
@@ -1489,6 +1503,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       window.__marcam.handles?.refresh?.();
       return;
     }
+    // the setup's type, from the row at the top of its details: its own type button chosen
+    if (el.dataset?.setkind) {
+      const radio = document.querySelector(`#setupDialog.embedded input[name="sdKind"][value="${el.dataset.setkind}"]`);
+      if (!radio) return;
+      if (radio.disabled) return showError(radio.closest(".sd-kind")?.title || "This setup can't be that type: a vise holds a part's mesh, a block or the stock a setup before left.");
+      if (!radio.checked) radio.click();
+      return;
+    }
     if (el.id === "stFit") {
       const s = setup();
       const m = meshModelOf(t.doc, s);
@@ -2053,7 +2075,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       // a colour is for the eye only: saved, but the toolpaths stay as they are
       op.color = el.value;
       if (pend) pend.color = el.value;
-      return commit({ display: true, label: `Changed the colour of ${op.id}.` });
+      await commit({ display: true, label: `Changed the colour of ${op.id}.` });
+      // (Mar: "the toolpaths don't always update"; a colour drew only after a hide and show)
+      // the paths drawn again in it, in the still view and the playback
+      return window.__marcam.opColorsChanged?.();
     }
     await commit({ label: el.dataset.act === "enable" ? `${el.checked ? "Enabled" : "Disabled"} ${op.id}.` : `Edited ${op.id}.` });
   });

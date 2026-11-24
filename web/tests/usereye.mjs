@@ -1445,6 +1445,145 @@ try {
     await click("#vtPlay").catch(() => {});
     await clean("the cut piece carried on");
   }
+  // ---------------------------------------------------------------- the view's paths and setups
+  // (Mar: "toolpath color glitch": every path drawn in op1's blue while picking; "the toolpaths
+  // don't always update when something changes ... hide and unhide"; "the carried over stock
+  // looks weird ... should be solid"; "need a way to edit the type of setup after it's been
+  // added")
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    await read("window.__marcam.setView('top', {})");
+    await sleep(1500);
+    // each operation's swatch colour, at points along its own path (projected to the screen)
+    const opsAt = `(() => { const st = window.__marcam.state, v = st.three; const p = st.result.programs[st.tab]; const pts = p.toolpath.points, n = pts.length / 4; const starts = (p.toolpath.ops || []).filter((o) => o.id && o.start != null).sort((a, b) => a.start - b.start); const setup = st.tree.doc.setups.find((s) => s.id === st.tree.setup); const PAL = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"]; const r = v.renderer.domElement.getBoundingClientRect(); return starts.map((o, k) => { const end = k + 1 < starts.length ? starts[k + 1].start : n; const i0 = setup.operations.findIndex((x) => x.id === o.id); const hex = setup.operations[i0]?.color || PAL[i0 % PAL.length]; const at = []; for (let i = o.start + 1; i < end && at.length < 40; i += Math.max(1, Math.floor((end - o.start) / 40))) { if (!(pts[4 * i + 3] % 2)) continue; const q = new v.THREE.Vector3(pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]).project(v.camera); if (Math.abs(q.x) < 0.95 && Math.abs(q.y) < 0.95) at.push([r.left + (q.x + 1) / 2 * r.width, r.top + (1 - q.y) / 2 * r.height]); } return { id: o.id, hex, at }; }); })()`;
+    const near = (img, hex, at) => {
+      const c = [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+      let hit = 0;
+      for (const [x, y] of at) {
+        let ok = false;
+        for (let dy = -3; dy <= 3 && !ok; dy++)
+          for (let dx = -3; dx <= 3 && !ok; dx++) {
+            const q = img.at(Math.round(x + dx), Math.round(y + dy));
+            // the swatch's hue: the same channels lead (dimmed or not)
+            if (q && Math.abs(q[0] - c[0]) + Math.abs(q[1] - c[1]) + Math.abs(q[2] - c[2]) < 120) ok = true;
+          }
+        if (ok) hit++;
+      }
+      return at.length ? hit / at.length : 0;
+    };
+    const coloursSeen = async (tag) => {
+      const ops = await read(opsAt);
+      const img = await shot(`paths_colours_${tag}`);
+      return ops.map((o) => ({ id: o.id, hex: o.hex, at: o.at.length, seen: +near(img, o.hex, o.at).toFixed(2) }));
+    };
+    const normal = await coloursSeen("normal");
+    check("the view: each operation's path drawn in its own swatch colour, where its path is", normal.length >= 3 && normal.filter((o) => o.at >= 3).every((o) => o.seen >= 0.5), JSON.stringify(normal));
+    // picking for the pocket: the same colours (were all op1's blue)
+    await click('#tree .tree-op[data-op="op2"] [data-act="select"]');
+    await settled();
+    await click("#pickFaces");
+    await waitFor(() => read("!!window.__marcam.state.tree.picking"), "picking", 30000).catch(() => {});
+    await read("window.__marcam.setView('top', {})");
+    await sleep(1500);
+    const picking = await coloursSeen("picking");
+    check("the view while picking: each operation's path still in its own swatch colour (not all op1's)", picking.filter((o) => o.at >= 3).every((o) => o.seen >= 0.5) && picking.length === normal.length, JSON.stringify(picking));
+    await click("#pickFaces");
+    await settled();
+    // the pocket's step-down and its colour changed: both on the screen, nothing toggled
+    await read("window.__marcam.setView('iso', {})");
+    await sleep(1200);
+    const segs = () => read("(() => { const st = window.__marcam.state; const p = st.result.programs[st.tab]; return p.toolpath.points.length / 4; })()");
+    const s0 = await segs();
+    await openMore("opEditor");
+    await typeInto("#opForm [name=step_down]", "0.5");
+    await settled();
+    const s1 = await segs();
+    const drawn = await read("(() => { const v = window.__marcam.state.three, m = window.__marcam.state.machining; return { still: v.cutLines?.geometry.getAttribute('position')?.count || 0, playback: (m.paths?.cut || []).reduce((a, l) => a + l.geometry.getAttribute('position').count, 0) }; })()");
+    const sw = await read("(() => { const r = document.querySelector('#tree .tree-op[data-op=\"op2\"] input[type=color]').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()");
+    await read("(() => { const i = document.querySelector('#tree .tree-op[data-op=\"op2\"] input[type=color]'); i.value = '#ff00ff'; i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await settled();
+    await sleep(800);
+    const after = await coloursSeen("recoloured");
+    const pocket = after.find((o) => o.id === "op2");
+    check("the view: the pocket's step-down changed: its new path drawn (no hide/show); its colour changed: drawn in it at once",
+      s1 > s0 && (drawn.still >= 2 * (s1 - 2) * 0.5 || drawn.playback > 0) && pocket?.hex === "#ff00ff" && pocket.seen >= 0.5, JSON.stringify({ s0, s1, drawn, pocket, sw }));
+    await clean("the paths in their colours");
+    // the carried piece: a solid (as the setup before's simulation), no stripes of edges
+    await read("(() => { for (const [id, v] of [['treeAddKind', 'vise'], ['treeAddFrom', 'carry']]) { const s = document.getElementById(id); s.value = v; s.dispatchEvent(new Event('change', { bubbles: true })); } return true; })()");
+    await click("#treeAddSetup");
+    await waitFor(() => read("window.__marcam.state.three.groups.stock.children.some((o) => o.userData.carried)"), "the carried piece", 120000 * SLACK).catch(() => {});
+    await settled();
+    await read("window.__marcam.setView('iso', {})");
+    await sleep(1500);
+    const box = await read("(() => { const v = window.__marcam.state.three; const g = v.groups.stock; const b = new v.THREE.Box3().setFromObject(g); const r = v.renderer.domElement.getBoundingClientRect(); let lo = [1e9, 1e9], hi = [-1e9, -1e9]; for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) { const q = new v.THREE.Vector3(x, y, z).project(v.camera); const sx = r.left + (q.x + 1) / 2 * r.width, sy = r.top + (1 - q.y) / 2 * r.height; lo = [Math.min(lo[0], sx), Math.min(lo[1], sy)]; hi = [Math.max(hi[0], sx), Math.max(hi[1], sy)]; } return { lo, hi, edges: g.children.some((o) => o.children.some((c) => c.isLineSegments)), opaque: g.children.every((o) => o.children.every((c) => !c.material?.transparent)) }; })()");
+    const pimg = await shot("carried_piece_solid");
+    // the middle of its outline: covered (not the background), and few sharp light/dark
+    // alternations along rows (stripes of edge lines)
+    const [x0, y0] = [box.lo[0] + (box.hi[0] - box.lo[0]) * 0.3, box.lo[1] + (box.hi[1] - box.lo[1]) * 0.3];
+    const [x1, y1] = [box.lo[0] + (box.hi[0] - box.lo[0]) * 0.7, box.lo[1] + (box.hi[1] - box.lo[1]) * 0.7];
+    let covered = 0, n = 0, flips = 0, steps = 0;
+    for (let y = Math.round(y0); y < y1; y += 3) {
+      let prev = null;
+      for (let x = Math.round(x0); x < x1; x += 1) {
+        const q = pimg.at(x, y);
+        if (!q) continue;
+        const l = q[0] + q[1] + q[2];
+        n++;
+        if (l > 120) covered++;
+        if (prev != null) {
+          steps++;
+          if (Math.abs(l - prev) > 90) flips++;
+        }
+        prev = l;
+      }
+    }
+    check("the carried piece: drawn solid (opaque, no edge lines), no stripes across it", !box.edges && box.opaque && covered > n * 0.9 && flips < steps * 0.05, JSON.stringify({ edges: box.edges, opaque: box.opaque, covered, n, flips, steps }));
+    // the setup's type, from the row at the top of its details: for the carried setup, the
+    // plate's first (a part, operations), and a setup with no part
+    const typeSwitch = async (label, from, to) => {
+      await click("#tree .tree-setup.active [data-act=setup]");
+      await settled();
+      const vr = await viewRect();
+      const img0 = await shot(`type_${label}_before`);
+      const before = await read("(() => { const st = window.__marcam.state; const s = st.tree.doc.setups.find((x) => x.id === st.tree.setup); return { kind: s.kind || '', holding: s.holding?.kind, stock: s.stock?.shape, jaws: st.three.groups.jaws?.children.length || 0, row: (r => Math.round(r.top))(document.getElementById('setupType').getBoundingClientRect()) }; })()");
+      await click(`#setupType [data-setkind=${to}]`);
+      await waitFor(() => read(`(() => { const st = window.__marcam.state; return st.tree.doc.setups.find((x) => x.id === st.tree.setup)?.kind === '${to}'; })()`), `${label}: the type changed`, 30000).catch(() => {});
+      await settled();
+      await sleep(1000);
+      const now = await read("(() => { const st = window.__marcam.state; const s = st.tree.doc.setups.find((x) => x.id === st.tree.setup); return { kind: s.kind || '', holding: s.holding?.kind, stock: s.stock?.shape, jaws: st.three.groups.jaws?.children.length || 0 }; })()");
+      const img1 = await shot(`type_${label}_after`);
+      let diff = 0, m = 0;
+      for (let y = vr[1]; y < vr[1] + vr[3]; y += 4)
+        for (let x = vr[0]; x < vr[0] + vr[2]; x += 4) {
+          const p = img0.at(x, y), q = img1.at(x, y);
+          m++;
+          if (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]) > 60) diff++;
+        }
+      check(`the setup's type (${label}): its Type row at the top of its details; ${from} -> ${to} switches it, the stock and the fixture change on the screen`,
+        before.row < 600 && now.kind === to && now.holding !== before.holding && (to === "vise" ? now.jaws > 0 : now.jaws === 0) && diff > m * 0.02, JSON.stringify({ before, now, diff, m }));
+    };
+    await typeSwitch("carried", "3-axis vise", "rotary");
+    // the plate's first setup: a part and operations
+    await click("#tree .tree-setup:first-child [data-act=setup]");
+    await settled();
+    await typeSwitch("a part, operations", "3-axis vise", "rotary");
+    await typeSwitch("back", "4th axis", "vise");
+    // a setup with no part (a new project)
+    await click("#menuFile > summary");
+    await sleep(200);
+    await click("#projectNew");
+    await settled();
+    await read("(() => { const s = document.getElementById('treeAddKind'); s.value = 'rotary'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAddSetup");
+    await settled();
+    await typeSwitch("no part", "4th axis", "vise");
+    await clean("the setup's type");
+  }
   // ---------------------------------------------------------------- playback: one clock
   // (Mar: "the simulation sliders [are] not very consistent. changing the speed ... causes
   // visual bugs and the wrong playback speed"; chunky when fast) the knob playing with its

@@ -323,3 +323,7 @@ details.menu[open] > summary { border-color: var(--accent); }
 
 /* (Mar) what holds the stock is the Fixture's: not in the setup's details */
 #setupDialog.embedded #sdTailRow, #setupDialog.embedded #sdJawsRow { display: none; }
+
+/* the setup's type, at the top of its details */
+.setup-type { gap: 4px; align-items: center; margin: 4px 0 6px; }
+.setup-type button.on { border-color: var(--accent); background: var(--accent); color: #fff; }

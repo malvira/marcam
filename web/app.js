@@ -1512,6 +1512,12 @@ onColorsChange(async () => {
 });
 applyBackground();
 window.__marcam.colors = { color, setColor, resetColors, open: openColors };
+/** An operation's colour changed (its swatch): its paths drawn again in it, in the still view
+ *  (its key holds the colours) and the playback. */
+window.__marcam.opColorsChanged = async () => {
+  if (state.result) await updateView();
+  await window.__marcam.machining?.recolor?.();
+};
 
 // ---------------------------------------------------------------- the draft's live preview
 // An operation being set up (added, not applied yet) is planned in the background as it is
@@ -1731,10 +1737,10 @@ async function drawModel() {
         if (v.modelKey !== key) return;
         v.carriedError = r?.triangles?.length ? null : "no triangles";
         if (r?.triangles?.length) {
-          const g = new THREE.BufferGeometry();
-          g.setAttribute("position", new THREE.Float32BufferAttribute(r.triangles, 3));
-          g.computeVertexNormals();
-          const o = stockObject(THREE, g);
+          // (Mar: "the carried over stock looks weird ... should be solid render") the cut
+          // piece as the setup before's simulation drew it: solid, smooth, no edge lines (a
+          // fine mesh's edges were hundreds of stripes through a see-through tint)
+          const o = carriedSolid(THREE, r.triangles);
           o.userData.carried = true;
           clear(groups.stock);
           groups.stock.add(o);
@@ -1802,6 +1808,50 @@ async function drawModel() {
   v.renderer.render(v.scene, v.camera);
 }
 
+/** The tree's colours for operations (its swatches), the same everywhere they are drawn. */
+const OP_PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"];
+/** The operations of the setup shown, and each one's colour (`op.color`, else the palette's by
+ *  its place in the setup, as the tree's swatch). */
+function setupOpColors() {
+  const ops = state.tree?.doc?.setups?.find((x) => x.id === state.tree?.setup)?.operations || [];
+  return new Map(ops.map((o, k) => [o.id, o.color || OP_PALETTE[k % OP_PALETTE.length]]));
+}
+/** A drawn toolpath's identity: rebuilt whenever any of it changes (the plan's result, the
+ *  setup, the program, what is hidden, the operations' colours), never on a toggle alone.
+ *  (Mar: "the toolpaths don't always update when something changes ... have to hide and
+ *  unhide"; the key was the program's line count) */
+let resultGen = 0;
+const resultIds = new WeakMap();
+function resultId(res) {
+  if (!resultIds.has(res)) resultIds.set(res, ++resultGen);
+  return resultIds.get(res);
+}
+
+/** A carried cut piece (triangles, x y z each) as a solid: its vertices shared, so it shades
+ *  smoothly, in the colour of uncut stock, opaque, as a simulated stock is drawn. */
+function carriedSolid(THREE, tris) {
+  const at = new Map();
+  const pos = [];
+  const idx = new Uint32Array(tris.length / 3);
+  for (let i = 0; i < tris.length; i += 3) {
+    const k = `${Math.round(tris[i] * 1e4)},${Math.round(tris[i + 1] * 1e4)},${Math.round(tris[i + 2] * 1e4)}`;
+    let j = at.get(k);
+    if (j === undefined) {
+      j = pos.length / 3;
+      at.set(k, j);
+      pos.push(tris[i], tris[i + 1], tris[i + 2]);
+    }
+    idx[i / 3] = j;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.computeVertexNormals();
+  const grp = new THREE.Group();
+  grp.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: new THREE.Color(...colorRgb("uncut")), roughness: 0.7 })));
+  return grp;
+}
+
 async function updateView() {
   const v = await getThree();
   if (!v || v.failed || !state.result) return;
@@ -1820,7 +1870,8 @@ async function updateView() {
     legacyLayers();
     return;
   }
-  const key = `${state.tab}:${res.programs.length}:${p.lines}:${[...state.hidden].join(",")}`;
+  const opColors = setupOpColors();
+  const key = `${resultId(res)}:${state.tree?.setup ?? ""}:${state.tab}:${res.programs.length}:${p.lines}:${[...state.hidden].join(",")}:${[...opColors].join(",")}:${colorsGen}`;
   const hide = hiddenMask(p);
 
   if (v.key !== key) {
@@ -1829,9 +1880,21 @@ async function updateView() {
     clear(groups.path);
     const pts = p.toolpath.points;
     const n = pts.length / 4;
-    const cut = [], rap = [];
+    const cut = [], rap = [], cutCol = [];
     const cutUpTo = new Uint32Array(n + 1), rapUpTo = new Uint32Array(n + 1);
+    // (Mar: every path blue when an operation was picked for) each cut in its operation's
+    // colour, as the tree's swatch and the playback show it; the colour set for cuts where
+    // the program says no operation (a 0.1 job)
+    const starts = (p.toolpath.ops || []).filter((o) => o.start != null).sort((a, b) => a.start - b.start);
+    const rgbOf = (hex) => {
+      const c = new THREE.Color(hex);
+      return [c.r, c.g, c.b];
+    };
+    const fallback = rgbOf(colorNum("cut"));
+    const opRgb = starts.map((o) => (o.id && opColors.has(o.id) ? rgbOf(opColors.get(o.id)) : fallback));
+    let at = -1;
     for (let i = 1; i < n; i++) {
+      while (at + 1 < starts.length && starts[at + 1].start <= i) at++;
       if (hide && hide[i]) {
         cutUpTo[i + 1] = cut.length / 6;
         rapUpTo[i + 1] = rap.length / 6;
@@ -1839,16 +1902,21 @@ async function updateView() {
       }
       const a = pointXYZ(pts, i - 1);
       const b = pointXYZ(pts, i);
-      (pts[4 * i + 3] % 2 ? cut : rap).push(...a, ...b);
+      if (pts[4 * i + 3] % 2) {
+        cut.push(...a, ...b);
+        const c = at >= 0 ? opRgb[at] : fallback;
+        cutCol.push(...c, ...c);
+      } else rap.push(...a, ...b);
       cutUpTo[i + 1] = cut.length / 6;
       rapUpTo[i + 1] = rap.length / 6;
     }
-    const lines = (arr, color, opacity) => {
+    const lines = (arr, color, opacity, colors) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
-      return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
+      if (colors) g.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      return new THREE.LineSegments(g, new THREE.LineBasicMaterial(colors ? { vertexColors: true, transparent: true, opacity } : { color, transparent: true, opacity }));
     };
-    v.cutLines = lines(cut, colorNum("cut"), 0.85);
+    v.cutLines = lines(cut, colorNum("cut"), 0.85, cutCol);
     v.rapLines = lines(rap, colorNum("rapid"), 0.5);
     v.cutUpTo = cutUpTo;
     v.rapUpTo = rapUpTo;

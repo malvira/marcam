@@ -293,7 +293,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.session.ops.forEach((o, i) => {
       if (proj) o.project_id = proj.ids[i];
       const k = o.project_id != null ? setupOps.findIndex((x) => x.id === o.project_id) : -1;
-      const hex = (proj && proj.colors[i]) || saved[opKey(o)] || PALETTE[(k >= 0 ? k : i) % PALETTE.length];
+      // (the tree's swatch: the project's colour, else the palette's by its place in the
+      // setup; colours saved in this browser only for a 0.1 job, with no project's to follow)
+      const own = k >= 0 ? setupOps[k].color : null;
+      const hex = own || (proj && proj.colors[i]) || (proj ? null : saved[opKey(o)]) || PALETTE[(k >= 0 ? k : i) % PALETTE.length];
       m.colors[o.tag] = hexToRgb(hex);
       const row = document.createElement("label");
       row.className = "oprow";
@@ -1349,6 +1352,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   async function recolor() {
     if (!m.open || !m.session) return;
     m.toolNumber = null;
+    // (the colours as the project has them now: an operation's swatch changed)
+    renderLegend();
     await buildScene();
   }
 

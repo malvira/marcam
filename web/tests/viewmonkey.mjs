@@ -85,6 +85,35 @@ const INSTALL = `(() => {
     if (c.mach && (c.legacy.part || c.legacy.sim || c.legacy.path || c.legacy.tool)) out.push('the playback and the view without it drawn together');
     if (c.legacy.draft && !editing) out.push('a draft preview left drawn with no draft');
     if (c.strays) out.push('objects drawn outside the view groups');
+    // (Mar: the toolpaths drawn as the plan is, each operation in its colour) the still view's
+    // paths: as many as the program's cut moves (nothing hidden), each operation's colour in them
+    if (!c.mach && c.legacy.path && M.state.result && !M.state.hidden?.size && !editing) {
+      const p = M.state.result.programs[M.state.tab];
+      const pts = p?.toolpath?.points;
+      if (pts) {
+        let want = 0;
+        for (let i = 1; i < pts.length / 4; i++) if (pts[4 * i + 3] % 2) want++;
+        const got = (v.cutLines.geometry.getAttribute('position')?.count || 0) / 2;
+        if (got !== want) out.push("the paths drawn are not the plan's (" + got + " cut moves drawn, " + want + " planned)");
+        const col = v.cutLines.geometry.getAttribute('color')?.array;
+        const ops = M.state.tree?.doc?.setups?.find((x) => x.id === M.state.tree?.setup)?.operations || [];
+        const PAL = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#a855f7', '#14b8a6', '#e11d48', '#84cc16'];
+        if (col) {
+          const have = new Set();
+          for (let i = 0; i < col.length; i += 3) have.add([col[i], col[i + 1], col[i + 2]].map((x) => x.toFixed(3)).join());
+          const starts = (p.toolpath.ops || []).filter((o) => o.id && o.start != null).sort((a, b) => a.start - b.start);
+          starts.forEach((o, k) => {
+            const end = k + 1 < starts.length ? starts[k + 1].start : pts.length / 4;
+            let cuts = 0;
+            for (let i = Math.max(1, o.start); i < end; i++) if (pts[4 * i + 3] % 2) cuts++;
+            const i0 = ops.findIndex((x) => x.id === o.id);
+            if (!cuts || i0 < 0) return;
+            const cc = new v.THREE.Color(ops[i0].color || PAL[i0 % PAL.length]);
+            if (!have.has([cc.r, cc.g, cc.b].map((x) => x.toFixed(3)).join())) out.push(o.id + "'s path not in its colour");
+          });
+        }
+      }
+    }
     if (c.part && c.stock) out.push('the part and the simulated stock drawn together (they z-fight)');
     // (Mar's scrub glitch) one 3D view; a vise's work never turned by A; its stock no taller
     // than its block
