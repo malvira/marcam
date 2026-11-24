@@ -2235,7 +2235,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   const STATE_BADGES = {
     planned: ["✓", "Planned: the toolpath and time shown are this operation's as it is"],
     pending: ["•", "Changed: it is planned again in a moment"],
-    planning: ["◐", "Being planned"],
+    planning: ["", "Being planned"],
     error: ["⚠", "Not planned: see the message"],
   };
   function renderStates() {
@@ -2243,15 +2243,30 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const s = setup();
     const of = window.__marcam?.opState;
     if (!s || !of) return;
+    // (Mar: "a real progress wheel") being planned: a ring filled as far as the plan has got
+    // (operation i of n, and angle k of m in indexed roughing); turning where that is unknown
+    const pr = window.__marcam?.planProgress;
     for (const el of document.querySelectorAll("#tree .op-state")) {
       const st = of(s.id, el.dataset.stateFor);
       const [mark, title] = STATE_BADGES[st] || ["", ""];
+      if (st === "planning") {
+        const known = pr && pr.f != null;
+        el.classList.toggle("spin", !known);
+        el.style.setProperty("--p", known ? pr.f.toFixed(3) : "0.25");
+        const label = known ? `${title}: ${Math.round(pr.f * 100)}%` : title;
+        if (el.title !== label) {
+          el.title = label;
+          el.setAttribute("aria-label", label);
+        }
+      }
       if (el.dataset.state === st) continue;
       el.dataset.state = st;
-      el.className = `op-state ${st}`;
+      el.className = `op-state ${st}${st === "planning" && !(pr && pr.f != null) ? " spin" : ""}`;
       el.textContent = mark;
-      el.title = title;
-      el.setAttribute("aria-label", title);
+      if (st !== "planning") {
+        el.title = title;
+        el.setAttribute("aria-label", title);
+      }
     }
   }
 

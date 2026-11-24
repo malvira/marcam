@@ -45,6 +45,15 @@ function startWorker(which = "main") {
     if (ev.data.phase) {
       p.phase = ev.data.phase;
       p.phaseT = performance.now();
+      // (Mar: "a real progress wheel") how far a plan has got: operation i of n, and angle k
+      // of m in indexed roughing; one operation with nothing within it: not known
+      const m = p.cmd === "planAndPost" && /\[op (\d+)\/(\d+)\](?: \[angle (\d+)\/(\d+)\])?/.exec(ev.data.phase);
+      if (m) {
+        const [i, n, k, a] = [+m[1], +m[2], +m[3] || 0, +m[4] || 0];
+        const f = n > 1 || a ? (i - 1 + (a ? (k - 1) / a : 0)) / n : null;
+        window.__marcam.planProgress = { f, phase: ev.data.phase };
+        window.__marcam.tree?.renderStates?.();
+      }
       return;
     }
     // (a test's knob, ?testSimDelayMs=N: a simulation answered N ms late, its ring up
@@ -641,13 +650,16 @@ const POOL = Math.max(0, Math.min(6, (navigator.hardwareConcurrency || 1) - 1));
 /** The angles indexed 3D roughing finds for itself (index count, no indexes), by what they
  *  depend on: found again only when one of those changes. */
 const gapCache = new Map();
+/** Part files smaller than this (about 20,000 triangles as binary STL): no pool. */
+const POOL_MIN_BYTES = 84 + 50 * 20000;
 
 /** `job` (0.2) with the angles of its indexed 3D roughing (an index count, no indexes) found
  *  across the pool and written in as its indexes: the planner then takes them as given, the
  *  same angles it would find (the same toolpaths), without searching for them on its one
  *  worker. `job` itself is left as it is. `stale()`: a newer run asked for meanwhile. */
 async function withGapAngles(job, setupId, stale) {
-  if (!POOL || job.schema_version !== "0.2") return job;
+  // (a small part: the search is quicker than starting the workers; the planner does it)
+  if (!POOL || job.schema_version !== "0.2" || !(state.mesh?.length > POOL_MIN_BYTES)) return job;
   const todo = [];
   for (const s of job.setups || []) {
     if (setupId && s.id !== setupId) continue;
@@ -722,6 +734,8 @@ async function generate(opts = {}) {
   const hadSim = !!state.sim;
   state.planning = job;
   state.planError = null;
+  // (its progress wheel: from nothing; filled as the engine says how far it has got)
+  window.__marcam.planProgress = null;
   window.__marcam.tree?.renderStates?.();
   try {
     const setupId = state.tree?.setup;
@@ -767,7 +781,10 @@ async function generate(opts = {}) {
       setStatus("Failed", "error");
     }
   } finally {
-    if (run === state.genRun) state.planning = null;
+    if (run === state.genRun) {
+      state.planning = null;
+      window.__marcam.planProgress = null;
+    }
     $("generate").disabled = $("simulate").disabled = false;
     window.__marcam.tree?.renderStates?.();
     checkSettled();

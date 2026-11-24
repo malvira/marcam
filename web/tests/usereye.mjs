@@ -133,11 +133,14 @@ async function start() {
   return { S, read, events, url };
 }
 
-/** A part like an impeller (a hub along X, three blades out to radius 18), as binary STL. */
+/** A part like an impeller (a hub along X, three blades out to radius 18), as binary STL
+ *  (about 24,000 triangles). */
 function bladesStl() {
   const tris = [];
   const quad = (a, b, c, d) => tris.push([a, b, c], [a, c, d]);
-  const n = 48;
+  // (a hub of 4000 sides: over 20,000 triangles, as big a file as the page shares the angle
+  // search out for)
+  const n = 4000;
   const rp = (k, r, x) => {
     const t = (k / n) * 2 * Math.PI;
     return [x, r * Math.cos(t), r * Math.sin(t)];
@@ -1159,8 +1162,20 @@ try {
     await waitFor(() => where("dialog[open] .tp-row", "flat 3\\.175"), `${what}: the library`, 30000);
     const t0 = Date.now();
     await click("dialog[open] .tp-row", "flat 3\\.175");
-    const tab = await waitFor(() => read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return t && /OK|issue/.test(t.textContent) ? t.textContent : null; })()`), `${what}: the toolpath`, 180000).catch(() => null);
+    // (Mar: "a real progress wheel") the operation's ring, as it plans: on the screen, filling
+    const fills = [];
+    let tab = null;
+    while (Date.now() - t0 < 180000) {
+      const r = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); const e = document.querySelector('#tree .op-state.planning'); return { tab: t && /OK|issue/.test(t.textContent) && !document.querySelector('#tree .op-state.planning') ? t.textContent : null, ring: e && vis(e) ? (e.classList.contains('spin') ? 'spin' : +getComputedStyle(e).getPropertyValue('--p')) : null }; })()`);
+      if (r.ring != null && fills[fills.length - 1] !== r.ring) fills.push(r.ring);
+      if (r.tab) {
+        tab = r.tab;
+        break;
+      }
+      await sleep(200);
+    }
     const ms = Date.now() - t0;
+    const ringAfter = await read(`(${VISIBLE})(document.querySelector('#tree .op-state.planning'))`);
     const gap = await read("(cancelAnimationFrame(window.__eyeRaf), window.__eyeGap)");
     await settled();
     const vr = await viewRect();
@@ -1173,11 +1188,15 @@ try {
       }
     const status = await read("document.getElementById('status').textContent");
     const gcode = await read("(async () => { const t = document.getElementById('gcode').value; const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(b)].slice(0, 8).map((x) => x.toString(16).padStart(2, '0')).join('') + ' ' + t.length; })()");
-    return { tab, ms, gap: Math.round(gap), px, status, gcode };
+    return { tab, ms, gap: Math.round(gap), px, status, gcode, fills, ringAfter };
   };
   const many = await indexedRun("workers");
   check("Indexed roughing (3+1) on a bladed part: its cuts on the screen within 60 s (the angles found across the workers)", !!many.tab && many.px > 400 && many.ms < 60000 * SLACK, JSON.stringify(many));
   check("the page answers while it plans (no frame held over 1 s)", many.gap < 1000 * SLACK, `${many.gap} ms`);
+  const nums = many.fills.filter((f) => typeof f === "number");
+  check("while it plans, the operation's progress wheel is on the screen and fills (angle by angle), gone when its toolpath shows",
+    nums.length >= 3 && nums.every((f, i) => i === 0 || f > nums[i - 1]) && nums[nums.length - 1] > nums[0] && !many.ringAfter,
+    `${JSON.stringify(many.fills)}; after ${many.ringAfter}`);
   await clean("indexed roughing across the workers");
   // a browser with one core: no workers; the planner finds the angles itself
   await S("Emulation.setHardwareConcurrencyOverride", { hardwareConcurrency: 1 });

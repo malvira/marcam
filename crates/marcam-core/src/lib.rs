@@ -556,10 +556,14 @@ fn gap_angles(mesh: &Mesh, c: Cutter, n: u32, x0: f64, x1: f64) -> Vec<f64> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rayon::prelude::*;
-            keys.par_iter().map(|&k| gap_depth(mesh, c, x0, x1, k)).collect()
+            keys.par_iter()
+                .map(|&k| gap_depth(mesh, c, x0, x1, k))
+                .collect()
         }
         #[cfg(target_arch = "wasm32")]
-        keys.iter().map(|&k| gap_depth(mesh, c, x0, x1, k)).collect()
+        keys.iter()
+            .map(|&k| gap_depth(mesh, c, x0, x1, k))
+            .collect()
     };
     let keys = gap_keys(n);
     let mut at: std::collections::HashMap<i64, f64> =
@@ -625,7 +629,11 @@ fn keys_of(angles: impl Iterator<Item = f64>) -> Vec<i64> {
 /// The turns (keys: tenths of a degree) whose depths the coarse search needs for `n` angles,
 /// each once, in the order they are first wanted.
 pub fn gap_keys(n: u32) -> Vec<i64> {
-    keys_of(gap_candidates(n, GAP_COARSE).into_iter().flat_map(|(_, t)| t))
+    keys_of(
+        gap_candidates(n, GAP_COARSE)
+            .into_iter()
+            .flat_map(|(_, t)| t),
+    )
 }
 
 /// The turns the fine search needs, given the coarse ones' depths (`depth` of a key).
@@ -633,7 +641,11 @@ pub fn gap_fine_keys(n: u32, depth: impl Fn(i64) -> f64) -> Vec<i64> {
     if n == 0 {
         return Vec::new();
     }
-    keys_of(gap_fine(n, &depth).into_iter().flat_map(|a0| gap_turns(n, a0)))
+    keys_of(
+        gap_fine(n, &depth)
+            .into_iter()
+            .flat_map(|a0| gap_turns(n, a0)),
+    )
 }
 
 /// How deep the upright tool `c` drops on `mesh` turned to `key` (tenths of a degree): the sum
@@ -677,7 +689,10 @@ pub fn gap_pick(n: u32, depth: impl Fn(i64) -> f64) -> Vec<f64> {
         return Vec::new();
     }
     let step = 360.0 / n as f64;
-    let mut cands: Vec<f64> = gap_candidates(n, GAP_COARSE).into_iter().map(|c| c.0).collect();
+    let mut cands: Vec<f64> = gap_candidates(n, GAP_COARSE)
+        .into_iter()
+        .map(|c| c.0)
+        .collect();
     cands.extend(gap_fine(n, &depth));
     cands.sort_by(f64::total_cmp);
     cands.dedup();
@@ -701,7 +716,9 @@ pub fn indexed_gap_depths(
     tool: u32,
     keys: &[i64],
 ) -> Result<Vec<f64>, Error> {
-    let t = job.tool(tool).ok_or_else(|| Error::Invalid(format!("no tool T{tool}")))?;
+    let t = job
+        .tool(tool)
+        .ok_or_else(|| Error::Invalid(format!("no tool T{tool}")))?;
     let c = cutter_for(tool, t.shape)?;
     let revolved;
     let m = match mesh {
@@ -1121,7 +1138,14 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
     let mut first_tool = None;
     for op in &prog.operations {
         // the work it may take (see budget): counted until the end of this iteration
-        phase(&format!("planning {} ({})", op_name(op), prog.name));
+        // (Mar: "a real progress wheel") with where it is: operation i of n
+        let op_at = *next_op + 1;
+        let op_total: usize = job.programs.iter().map(|p| p.operations.len()).sum();
+        phase(&format!(
+            "planning {} ({}) [op {op_at}/{op_total}]",
+            op_name(op),
+            prog.name
+        ));
         let _budget = budget::Guard::start(budget::OP_LIMIT);
         b.ramp_tan = op
             .ramp_angle()
@@ -1559,7 +1583,15 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 // angle's moves on top as they come)
                 let mut bar = indexed_bar(job, &ctx.prior);
                 let mut applied = 0;
-                for index in angles {
+                let n_angles = angles.len();
+                for (k_angle, index) in angles.into_iter().enumerate() {
+                    // (and within it, angle k of m)
+                    phase(&format!(
+                        "planning {} ({}) [op {op_at}/{op_total}] [angle {}/{n_angles}]",
+                        op_name(op),
+                        prog.name,
+                        k_angle + 1
+                    ));
                     // (each angle its own share of the work: one is a 3-axis roughing)
                     budget::start(budget::OP_LIMIT);
                     let turned = mesh.rotated_x(index);

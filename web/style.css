@@ -270,9 +270,13 @@ details.menu[open] > summary { border-color: var(--accent); }
 .op-state { display: inline-block; width: 1em; text-align: center; font-size: 11px; color: var(--muted); }
 .op-state.planned { color: var(--ok); }
 .op-state.pending { color: #d97706; }
-.op-state.planning { color: var(--accent); animation: op-state-pulse 1s ease-in-out infinite; }
+/* (Mar: "a real progress wheel") being planned: a ring filling with the plan's progress, in
+   the badge's place and size; turning only where no fraction is known */
+.op-state.planning { width: 1em; height: 1em; vertical-align: -0.15em; border-radius: 50%;
+  background: conic-gradient(var(--accent, #4a9eff) calc(var(--p, 0) * 360deg), rgba(127, 127, 127, 0.35) 0);
+  -webkit-mask: radial-gradient(circle, transparent 0.28em, #000 0.33em); mask: radial-gradient(circle, transparent 0.28em, #000 0.33em); }
+.op-state.planning.spin { animation: sim-ring-spin 1s linear infinite; }
 .op-state.error { color: var(--bad); }
-@keyframes op-state-pulse { 50% { opacity: 0.3; } }
 .menu-check { display: flex; gap: 6px; align-items: center; font-size: 13px; padding: 2px 4px; }
 
 /* the setup dialog's stock: a shape picker, the sizes for that shape, an end view */
