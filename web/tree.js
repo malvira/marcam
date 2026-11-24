@@ -1015,6 +1015,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
    *  body's ends, an edge, a cut's place, tabs' places): under Advanced, not in the form. */
   const TYPED_GEOMETRY = new Set(["paths", "points", "holes", "rect", "path", "x_range", "y_range", "a_range", "body_back", "body_front", "edge", "x", "tab_at"]);
 
+  /** (the part imported into a stock it didn't fit) the red "bigger than the stock" said
+   *  then: gone once the stock is changed (Fit to part, a size typed); the next plan says
+   *  what is wrong if anything still is. (With nothing planned before a pick it stayed up,
+   *  over the form's buttons.) */
+  function staleFitWarning() {
+    const el = $("error");
+    if (el && /is bigger than the stock/.test(el.textContent)) showError("");
+  }
+
   /** The types whose geometry is a placeholder until something is picked (a contour round
    *  the whole bar, a pocket's rectangle): a new one is not planned before a pick. */
   const NEEDS_PICK = new Set(["contour", "pocket", "drill", "chamfer", "thread_mill", "bore"]);
@@ -1487,7 +1496,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (!bytes) return;
       const { parseStl } = await import("./project.js");
       const label = fitStock(t.doc, s, parseStl(bytes).tris, t.stMargin ?? (s.kind === "vise" || s.holding?.kind === "vise" ? 2 : 0.5));
-      if (label) await commit({ label });
+      if (label) {
+        staleFitWarning();
+        await commit({ label });
+      }
       return;
     }
     if (el.dataset?.act === "tool") {
@@ -1969,6 +1981,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         } catch {}
       }
       const label = el.closest("#stockPane") ? applyStockField(t.doc, s, el.id, el.value, box) : applyPartField(t.doc, s, el.id, el.value);
+      if (label && el.closest("#stockPane")) staleFitWarning();
       if (label) await commit({ label });
       return;
     }

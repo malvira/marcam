@@ -311,6 +311,8 @@ const A = {
     await sleep(300);
     // a new operation: until it is in the project or refused (its check can wait in the
     // engine behind a live update)
+    // (Mar's picking rule) a new one that needs a pick, with none: not applied, nothing to wait for
+    if (what.startsWith("new ") && (await js("!!document.getElementById('pickNone') && !window.__marcam.state.tree.picking"))) return `apply ${what} (it waits for a pick)`;
     if (what.startsWith("new ")) {
       const id = what.slice(4);
       await waitFor(() => js(`(() => { const e = document.getElementById('opErrors'); if (e && !e.classList.contains('hidden') && e.textContent) return true; try { return JSON.parse(document.getElementById('job').value).setups.some((s) => s.operations.some((o) => o.id === '${id}')); } catch { return false; } })()`), `${id} applied`, 60000).catch(() => {});
