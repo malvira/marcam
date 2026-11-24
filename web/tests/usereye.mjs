@@ -17,7 +17,7 @@
 //
 // Screenshots go to web/tests/screenshots/usereye/ (kept on a failure for CI).
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1602,6 +1602,80 @@ try {
     await settled();
     await typeSwitch("no part", "4th axis", "vise");
     await clean("the setup's type");
+  }
+  // ---------------------------------------------------------------- a custom toolpath
+  // (Mar: "full custom toolpaths ... user generated gcode via python or similar") the plate:
+  // Custom toolpath (G-code) added, a .nc made by a small Python script chosen in its form,
+  // its lines read (what it can't read listed), its path on the screen, then simulated
+  {
+    const nc = join(mkdtempSync(join(tmpdir(), "marcam-custom-")), "custom_slot.nc");
+    const py = spawnSync(process.env.PYTHON || "python", [join(dirname(fileURLToPath(import.meta.url)), "fixtures", "custom_slot.py"), nc], { encoding: "utf8" });
+    if (py.status !== 0) throw new Error(`the custom toolpath's Python fixture: ${py.stderr || py.error}`);
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    const offered = await read("[...document.getElementById('treeAddType').options].some((o) => o.value === 'custom' && /Custom toolpath/.test(o.textContent))");
+    check("a custom toolpath: the operation picker offers \"Custom toolpath (G-code)\"", offered);
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'custom'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    const tabs0 = await read("JSON.stringify([...document.querySelectorAll('#tabs button')].map((b) => b.textContent))");
+    await click("#treeAdd");
+    const lib = await waitFor(() => where("dialog[open] .tp-row", "3\\.175"), "the library", 15000).catch(() => null);
+    if (lib) await click("dialog[open] .tp-row", "3\\.175");
+    await waitFor(() => where("#opForm [name=gcode]"), "the custom toolpath's form", 60000);
+    await settled();
+    // the program chosen as a file, as a person does (its file button)
+    const chooser = new Promise((resolve) => {
+      const t0 = events.length;
+      const tick = setInterval(() => {
+        const e = events.slice(t0).find((x) => x.method === "Page.fileChooserOpened");
+        if (e) {
+          clearInterval(tick);
+          resolve(e.params);
+        }
+      }, 50);
+    });
+    await click("#opForm label.filebtn", "G-code file");
+    const fc = await Promise.race([chooser, sleep(10000).then(() => null)]);
+    if (!fc) throw new Error("a custom toolpath: no file chooser from its G-code file button");
+    await S("DOM.setFileInputFiles", { files: [nc], backendNodeId: fc.backendNodeId });
+    await waitFor(() => read("/feed moves read/.test(document.getElementById('gcodeLines')?.textContent || '')"), "the program read", 60000).catch(() => {});
+    await settled();
+    const lines = await read("document.getElementById('gcodeLines')?.textContent || ''");
+    const prog = await read(`(() => { const vis = ${VISIBLE}; const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'custom'); return { op: !!op, lines: (op?.gcode || '').split('\\n').length, tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    check("a custom toolpath: the .nc from a Python script chosen in its form: read (its feed moves counted, nothing it couldn't read), in the project, planned",
+      /\d+ feed moves read/.test(lines) && /0 errors/.test(lines) && prog.op && prog.lines > 20 && prog.tabs.some((t) => /OK|issue/.test(t)) && !prog.error, `${lines.slice(0, 160)} | ${JSON.stringify(prog)} | before ${tabs0}`);
+    // its path on the screen: the blue of its cuts where the slot and the pocket are
+    await read("window.__marcam.setView('top', {})");
+    await sleep(1200);
+    const vr = await viewRect();
+    const img = await shot("custom_toolpath_path");
+    const at = (x, y) => read(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(${x}, ${y}, -0.5).project(v.camera); const r = v.renderer.domElement.getBoundingClientRect(); return [r.left + (p.x + 1) / 2 * r.width, r.top + (1 - p.y) / 2 * r.height]; })()`);
+    const blueNear = async (x, y) => {
+      const [px, py2] = await at(x, y);
+      let n = 0;
+      for (let dy = -6; dy <= 6; dy++)
+        for (let dx = -6; dx <= 6; dx++) {
+          const q = img.at(Math.round(px + dx), Math.round(py2 + dy));
+          if (q && q[2] > 120 && q[2] > q[0] + 40) n++;
+        }
+      return n;
+    };
+    const onSlot = await blueNear(20, 8), inPocket = await blueNear(44, 24);
+    check("a custom toolpath: its path on the screen (its cuts drawn at the slot and in the pocket)", onSlot > 3 && inPocket > 3, JSON.stringify({ onSlot, inPocket, view: vr }));
+    // simulated: the stock as the program leaves it, on the screen (the view's Simulated stock
+    // toggle on, as a person does)
+    const simToggle = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return b.getAttribute('aria-pressed') === 'true' ? null : [r.left + r.width / 2, r.top + r.height / 2]; })()");
+    if (simToggle) await drag(simToggle, simToggle, 1);
+    await waitFor(() => read("/Simulated stock/.test(document.getElementById('summary').textContent)"), "the simulation", 180000 * SLACK).catch(() => {});
+    await settled();
+    const sim = await read(`(() => { const vis = ${VISIBLE}; return { status: document.getElementById('status').textContent.slice(0, 80), summary: [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent).find((t) => /Simulated stock/.test(t))?.slice(0, 120) || '' }; })()`);
+    await shot("custom_toolpath_simulated");
+    check("a custom toolpath: simulated, the stock it leaves on the screen", /Simulated stock/.test(sim.summary), JSON.stringify(sim));
+    if (simToggle) await drag(simToggle, simToggle, 1);
+    await clean("a custom toolpath");
   }
   // ---------------------------------------------------------------- playback: one clock
   // (Mar: "the simulation sliders [are] not very consistent. changing the speed ... causes

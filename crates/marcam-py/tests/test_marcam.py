@@ -107,9 +107,28 @@ def test_replace_model():
     assert res["operations"][0]["ok"] is True and "error" not in res["project"]["setups"][0]["operations"][0]
 
 
+def test_custom_toolpath():
+    # G-code from a Python script (the use the custom toolpath is for): a slot on the vise,
+    # added to a project, planned and posted like marcam's own operations
+    import json
+    fx = ROOT / "tests" / "fixtures" / "picking"
+    project = json.loads((fx / "oval_grip.project.json").read_text())
+    lines = ["G21 G90", "G0 X5 Y5 Z5", "G1 Z-0.5 F50"]
+    lines += [f"G1 X{5 + k} Y5 F300" for k in range(1, 11)]
+    lines += ["G0 Z5"]
+    res = marcam.add_custom_toolpath(project, project["setups"][0]["id"], "\n".join(lines), name="script slot")
+    assert res["read"]["errors"] == [] and res["read"]["feed_moves"] == 11, res["read"]
+    op = next(o for o in res["project"]["setups"][0]["operations"] if o["id"] == res["operation"])
+    assert op["type"] == "custom" and op["name"] == "script slot"
+    # off the 4th axis frame's rules: a vise takes no A
+    bad = marcam.add_custom_toolpath(project, project["setups"][0]["id"], "G0 X0 Y0 Z5 A90\nG1 Z-1 F50")
+    assert "no rotary axis" in bad["read"]["errors"][0]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
             fn()
             print("ok", name)
     print("python OK", marcam.version())
+

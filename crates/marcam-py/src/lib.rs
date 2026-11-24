@@ -197,6 +197,34 @@ fn replace_model(
     to_py(py, v)
 }
 
+/// Add a custom toolpath (G-code written elsewhere: a script, another CAM) to a setup:
+/// `{"project": ..., "operation": id, "read": {feed_moves, tools, warnings, errors}}`. Its
+/// frame is the setup's: a vise X Y Z (the tool tip), the 4th axis X along the bar, Z the
+/// radius, A degrees. `moves` (JSON: [{rapid?, x?, y?, z?, a?, f?}]) instead of `gcode`.
+#[pyfunction]
+#[pyo3(signature = (project, setup, gcode = None, tool = None, verbatim = false, name = None, moves = None))]
+#[allow(clippy::too_many_arguments)]
+fn add_custom_toolpath(
+    py: Python<'_>,
+    project: &Bound<'_, PyAny>,
+    setup: &str,
+    gcode: Option<&str>,
+    tool: Option<u32>,
+    verbatim: bool,
+    name: Option<&str>,
+    moves: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Py<PyAny>> {
+    let doc = json_text(py, project)?;
+    let moves: serde_json::Value = match moves {
+        Some(m) => serde_json::from_str(&json_text(py, m)?)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        None => serde_json::Value::Null,
+    };
+    let req = serde_json::json!({"setup": setup, "gcode": gcode, "tool": tool, "verbatim": verbatim, "name": name, "moves": moves}).to_string();
+    let v = py.detach(|| api::add_custom(&doc, &req));
+    to_py(py, v)
+}
+
 /// The parameters picked features (`ids` from [`pickables`]) set on an operation of type
 /// `op_type`: `{"params": {...}, "notes": [...]}`.
 #[pyfunction]
@@ -259,6 +287,7 @@ fn marcam(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(body_project, m)?)?;
     m.add_function(wrap_pyfunction!(pickables, m)?)?;
     m.add_function(wrap_pyfunction!(apply_picks, m)?)?;
+    m.add_function(wrap_pyfunction!(add_custom_toolpath, m)?)?;
     m.add_function(wrap_pyfunction!(replace_model, m)?)?;
     m.add_function(wrap_pyfunction!(to_toml, m)?)?;
     Ok(())

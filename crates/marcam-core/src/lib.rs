@@ -14,6 +14,7 @@ pub mod dropcutter;
 pub mod engrave;
 pub mod estimate;
 pub mod feeds;
+pub mod gcode_in;
 pub mod geom;
 pub mod geometry;
 pub mod gpu_input;
@@ -131,6 +132,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::Engrave(_) => "engrave",
         Operation::Vcarve(_) => "vcarve",
         Operation::Parting(_) => "parting",
+        Operation::Custom(_) => "custom",
     }
 }
 
@@ -1024,7 +1026,10 @@ fn general_moves(moves: Vec<Move>, start: [f64; 3], a_deg: f64) -> Vec<Move> {
 
 /// Operations that work on either setup: flat on a vise, wrapped on a rotary setup.
 pub fn is_surface_op(op: &Operation) -> bool {
-    matches!(op, Operation::Engrave(_) | Operation::Vcarve(_))
+    matches!(
+        op,
+        Operation::Engrave(_) | Operation::Vcarve(_) | Operation::Custom(_)
+    )
 }
 
 /// Keep refusal `e` of the operation with cache key `key`: the same inputs are refused again
@@ -1199,6 +1204,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 ToolShape::Flat { .. },
             ) => None,
             (Operation::Engrave(_), _) => None,
+            (Operation::Custom(_), _) => None,
             (Operation::Vcarve(_), ToolShape::Vbit { .. }) => None,
             (Operation::Chamfer(_), ToolShape::Vbit { .. }) => None,
             (Operation::Chamfer(_), _) => return Err(wrong("vbit")),
@@ -1634,6 +1640,25 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     b.moves.extend(general_moves(tail, indexed_start, index));
                 }
             }
+            (Operation::Custom(o), _) => {
+                let err = |e: String| Error::Invalid(format!("program {}: {e}", prog.name));
+                let own = strategy::custom::plan(&mut b, o, three, safe_r).map_err(err)?;
+                // (verbatim: its own lines posted for its moves; see post)
+                if let Some(lines) = own {
+                    if let Some(Move::Operation { verbatim, .. }) = b.moves[..op_start]
+                        .iter_mut()
+                        .rev()
+                        .find(|m| matches!(m, Move::Operation { .. }))
+                    {
+                        *verbatim = Some(Box::new(lines));
+                    }
+                }
+                if three {
+                    b.x = None;
+                } else {
+                    b.p3 = None;
+                }
+            }
             (op3, shape) if is_three_axis(op3) => {
                 let sb = stock_box.as_ref().expect("set above");
                 let index = op3.index_a().unwrap_or(0.0);
@@ -2044,6 +2069,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         | Operation::Waterline(o) => Some(o.plunge_feed),
                         Operation::Engrave(o) => Some(o.plunge_feed),
                         Operation::Vcarve(o) => Some(o.plunge_feed),
+                        Operation::Custom(o) => Some(o.plunge_feed),
                         _ => None,
                     })
                     .fold(f64::INFINITY, f64::min)

@@ -682,6 +682,24 @@ fn types() -> Vec<OperationType> {
             machine_needs: &[],
             shapes_part: true,
         },
+        OperationType {
+            kind: "custom",
+            title: "Custom toolpath (G-code)",
+            description: "A toolpath written elsewhere (an AI through MCP, a script, another CAM): G-code or JSON moves in the setup's frame (a vise: X Y Z, the tool tip; the 4th axis: X along the bar, Z the radius, A degrees), planned, simulated and checked like the others; posted through the machine's post, or verbatim.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("gcode", "gcode", "", "The program: G0 G1 G2 G3 (G17/G18/G19, I J K or R), G90/G91, G20/G21, F S A T M3/M5/M6, G54..G59 (the setup's WCS). What it can't read is listed with its line numbers.").opt(json!("")),
+                p("moves", "moves", "", "Instead of G-code: JSON moves [{rapid?, x?, y?, z?, a?, f?}], absolute, mm and degrees.").opt(json!([])).adv(),
+                p("verbatim", "boolean", "", "Post the program's own lines as given (still simulated and checked), not re-posted through the machine's post.").opt(json!(false)),
+                p("feed", "number", "mm/min", "Feed of feed moves before the program's first F.").min(0.1),
+                p("plunge_feed", "number", "mm/min", "On the 4th axis: the fastest descent towards the axis.").min(0.1),
+            ],
+            tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
+            geometry: &[],
+            machine_needs: &[],
+            shapes_part: false,
+        },
     ]
 }
 
@@ -859,6 +877,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::Rough3d(_) => "rough3d",
         Operation::Engrave(_) => "engrave",
         Operation::Vcarve(_) => "vcarve",
+        Operation::Custom(_) => "custom",
     }
 }
 
@@ -1299,6 +1318,14 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
                 v.insert("sample".into(), json!(0.1));
                 v.insert("tolerance".into(), json!(0.005));
             }
+            v.insert("feed".into(), json!(feed));
+            v.insert("plunge_feed".into(), json!(plunge));
+        }
+        "custom" => {
+            // (its program comes from elsewhere: empty until given)
+            v.insert("gcode".into(), json!(""));
+            v.insert("moves".into(), json!([]));
+            v.insert("verbatim".into(), json!(false));
             v.insert("feed".into(), json!(feed));
             v.insert("plunge_feed".into(), json!(plunge));
         }

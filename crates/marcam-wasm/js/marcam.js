@@ -119,6 +119,8 @@ export async function load(source, opts = {}) {
     // the toolpaths planned elsewhere (planAndPost's toolpaths_json), handed to this worker
     // under a key; calls whose opts.plan_key is that key use them instead of planning again
     seedPlan: (key, toolpathsJson) => call("seed_plan", key, toolpathsJson),
+    readGcode: (text, frame) => call("read_gcode", text, frame || "three"),
+    addCustom: (doc, opts) => call("add_custom", doc, opts),
     gapPick: (opts) => call("gap_pick", opts || {}),
     // the stock a setup starts with (what a setup before left): {triangles, bounds, stl?}
     carriedMesh: (job, opts, meshBytes) => call("carried_mesh", job, opts || {}, meshBytes),

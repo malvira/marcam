@@ -263,11 +263,49 @@ pub fn post_lines(
     // inside an operation that asks for arcs: its tolerance; moves folded into an arc
     let mut arc_tol: Option<f64> = None;
     let mut skip = 0usize;
+    // a custom toolpath posted verbatim: its lines, written at its first motion
+    let mut verbatim_lines: Option<&Vec<String>> = None;
     for (mi, mv) in tp.moves.iter().enumerate() {
         before.push(out.len());
         if skip > 0 {
             skip -= 1;
             continue;
+        }
+        if !matches!(
+            mv,
+            Move::Operation { .. } | Move::ToolChange { .. } | Move::Comment { .. }
+        ) {
+            if let Some(lines) = verbatim_lines.take() {
+                // its own lines for its moves (planned all the same: simulated and checked)
+                let rest = tp.moves[mi..]
+                    .iter()
+                    .take_while(|m| !matches!(m, Move::Operation { .. }))
+                    .count();
+                out.push("(custom toolpath: its own lines, as given)".into());
+                out.extend(lines.iter().cloned());
+                // (its modes back to the post's, if it changed them)
+                let changed = lines.iter().any(|l| {
+                    let u = l.to_ascii_uppercase();
+                    ["G91", "G20", "G18", "G19", "G93"]
+                        .iter()
+                        .any(|g| u.contains(g))
+                });
+                if changed {
+                    out.push("G90 G21 G17 G94".into());
+                }
+                for m in &tp.moves[mi..mi + rest] {
+                    match m {
+                        Move::Rapid { a: Some(a), .. } | Move::Cut { a, .. } => s.a = *a,
+                        _ => {}
+                    }
+                }
+                // where it left the machine: written in full by the next move
+                s.x = None;
+                s.y = None;
+                s.z = None;
+                skip = rest.saturating_sub(1);
+                continue;
+            }
         }
         match mv {
             Move::Comment { text } => out.push(format!("({text})")),
@@ -276,8 +314,10 @@ pub fn post_lines(
                 kind,
                 arcs: fit,
                 cycle,
+                verbatim,
             } => {
                 marks.push((*id, kind.clone(), out.len()));
+                verbatim_lines = verbatim.as_deref();
                 arc_tol = *fit;
                 if let Some(c) = cycle {
                     if machine.canned_cycles && machine.axes.is_identity() {

@@ -569,7 +569,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = (await addTypes()).join(",");
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 18 && String(typesAll).split(",").length === 18, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 19 && String(typesAll).split(",").length === 19, `${typesAll}`);
   const filled = [];
   const took = [];
   for (const kind of String(typesAll).split(",")) {
@@ -581,11 +581,11 @@ try {
     const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
     // (Mar's picking rule) the types whose geometry is a placeholder until a pick: not added,
     // the one-line prompt shown instead (the next Add replaces the draft)
-    if (["contour", "pocket", "drill", "chamfer", "thread_mill", "bore"].includes(kind)) {
+    if (["contour", "pocket", "drill", "chamfer", "thread_mill", "bore", "custom"].includes(kind)) {
       await js("document.getElementById('opForm').requestSubmit(); true");
       await sleep(800);
       const held = await js(`({ n: document.querySelectorAll('#tree .tree-op').length, prompt: document.getElementById('pickNone')?.textContent || '' })`);
-      filled.push(`${kind}:${blanks || "none blank"}${held.n === before && /^Nothing picked/.test(held.prompt) ? "" : ` (added before a pick: ${JSON.stringify(held)})`}`);
+      filled.push(`${kind}:${blanks || "none blank"}${held.n === before && (kind === "custom" || /^Nothing picked/.test(held.prompt)) ? "" : ` (added before a pick: ${JSON.stringify(held)})`}`);
       if (blanks) break;
       took.push(`${kind} ${((Date.now() - t0) / 1000).toFixed(1)} s`);
       continue;
@@ -602,7 +602,7 @@ try {
     await settle();
     took.push(`${kind} ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   }
-  check("every operation type's new form is fully filled and applies cleanly (those needing a pick wait for it)", filled.length === 18 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
+  check("every operation type's new form is fully filled and applies cleanly (those needing a pick, or a program, wait for it)", filled.length === 19 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js(`${SEL}?.type === 'rotary_finish'`), "the finish form", 60000);
@@ -737,7 +737,7 @@ try {
   await settle();
   const plateMachine = await js("document.getElementById('machine').value");
   const plateTypes = (await addTypes()).join(",");
-  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,chamfer,thread_mill,bore,contour,raster3d,waterline,rough3d,engrave,vcarve", `${plateMachine}; ${plateTypes}`);
+  check("vise setup: the setup's machine and only 3-axis operation types", plateMachine === "makera-carvera-4axis" && plateTypes === "face,pocket,drill,chamfer,thread_mill,bore,contour,raster3d,waterline,rough3d,engrave,vcarve,custom", `${plateMachine}; ${plateTypes}`);
   const plateOps = await js("document.querySelectorAll('#tree .tree-op').length");
   await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js(`${SEL}?.type === 'drill' && !!document.getElementById('opForm')`), "the drill form", 60000);

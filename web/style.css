@@ -327,3 +327,10 @@ details.menu[open] > summary { border-color: var(--accent); }
 /* the setup's type, at the top of its details */
 .setup-type { gap: 4px; align-items: center; margin: 4px 0 6px; }
 .setup-type button.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+/* a custom toolpath's program: what can't be read or planned, each with its line */
+.gcode-text { font: 12px/1.35 ui-monospace, Consolas, monospace; width: 100%; }
+.gcode-lines { max-height: 14em; overflow: auto; margin: 4px 0; }
+.gcode-lines .gcode-msg { padding: 2px 6px; margin: 2px 0; border-radius: 3px; }
+.gcode-lines .gcode-msg.warn { color: var(--warn); background: var(--warn-bg); }
+.gcode-lines .gcode-msg.error { padding: 2px 6px; }
+.gcode-lines code { font-size: 11px; opacity: 0.85; }

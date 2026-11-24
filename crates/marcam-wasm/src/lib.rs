@@ -113,6 +113,176 @@ pub mod api {
 
     /// Hand this worker the toolpaths planned elsewhere (`toolpaths`: JSON, as planAndPost's
     /// `toolpaths_json`) under `key`: `{ok, toolpaths}`.
+    /// A custom toolpath's program read as the planner reads it (`frame`: "three" or
+    /// "rotary"): `{steps, feeds, tools, speeds, warnings, errors}` (each `line N: ...`), for
+    /// its form to show its lines with what is wrong with them.
+    pub fn read_gcode(text: &str, frame: &str) -> Value {
+        let f = if frame == "rotary" {
+            marcam::gcode_in::Frame::Rotary
+        } else {
+            marcam::gcode_in::Frame::Three
+        };
+        let p = marcam::gcode_in::read(text, f);
+        json!({
+            "steps": p.steps.len(),
+            "feeds": p.steps.iter().filter(|s| !s.rapid).count(),
+            "tools": p.tools,
+            "speeds": p.speeds,
+            "warnings": p.warnings,
+            "errors": p.errors,
+        })
+    }
+
+    /// Add a custom toolpath to a setup: `opts` = {setup, gcode | moves, tool?, verbatim?,
+    /// name?}. Its defaults for the setup, the program, its tool (`tool`, else the program's T
+    /// word when the project has that tool, else the setup's first operation's, else the
+    /// project's first tool), in the setup's last output file (a new one when it has none).
+    /// `{project, operation, frame, read: {feed_moves, tools, warnings, errors}}`; an error
+    /// when the project or setup can't take it (the program's own errors are in `read`).
+    pub fn add_custom(doc: &str, opts: &str) -> Value {
+        let o: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let mut d: Value = match serde_json::from_str(doc) {
+            Ok(v) => v,
+            Err(e) => return err(format!("not a project: {e}")),
+        };
+        if d["schema_version"] != "0.2" {
+            return err("a 0.2 project (an older job is upgraded first)");
+        }
+        let Some(setups) = d["setups"].as_array() else {
+            return err("the project has no setups");
+        };
+        let setup = o["setup"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| {
+                setups
+                    .first()
+                    .and_then(|s| s["id"].as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        let Some(si) = setups.iter().position(|s| s["id"] == setup.as_str()) else {
+            return err(format!(
+                "no setup {setup:?} (the project's: {})",
+                setups
+                    .iter()
+                    .filter_map(|s| s["id"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        };
+        let s = &setups[si];
+        let rotary = s["kind"] == "rotary"
+            || (s["kind"].is_null()
+                && s["stock"]["shape"] != "box"
+                && s["holding"]["kind"] == "rotary_chuck");
+        let frame = if rotary {
+            marcam::gcode_in::Frame::Rotary
+        } else {
+            marcam::gcode_in::Frame::Three
+        };
+        let gcode = o["gcode"].as_str().unwrap_or("").to_string();
+        let moves = o["moves"].clone();
+        let read = if gcode.trim().is_empty() && moves.is_array() {
+            match serde_json::from_value::<Vec<marcam::gcode_in::JsonMove>>(moves.clone()) {
+                Ok(m) => marcam::gcode_in::from_json(&m, frame),
+                Err(e) => return err(format!("moves: {e}")),
+            }
+        } else {
+            marcam::gcode_in::read(&gcode, frame)
+        };
+        if gcode.trim().is_empty() && !moves.as_array().is_some_and(|m| !m.is_empty()) {
+            return err("gcode (the program's text) or moves");
+        }
+        let has = |n: u32| {
+            d["tools"]
+                .as_array()
+                .is_some_and(|ts| ts.iter().any(|t| t["number"] == n))
+        };
+        let tool = o["tool"]
+            .as_u64()
+            .map(|t| t as u32)
+            .or_else(|| read.tools.iter().copied().find(|t| has(*t)))
+            .or_else(|| {
+                s["operations"]
+                    .as_array()
+                    .and_then(|o| o.first())
+                    .and_then(|o| o["tool"].as_u64())
+                    .map(|n| n as u32)
+            })
+            .or_else(|| {
+                d["tools"]
+                    .as_array()
+                    .and_then(|t| t.first())
+                    .and_then(|t| t["number"].as_u64())
+                    .map(|n| n as u32)
+            });
+        let Some(tool) = tool else {
+            return err("no tool: the project has none (add one, or give its number)");
+        };
+        if !has(tool) {
+            return err(format!("the project has no tool T{tool}"));
+        }
+        let mut op = op_defaults(
+            &d.to_string(),
+            &json!({"type": "custom", "setup": setup, "tool": tool}).to_string(),
+            &[],
+        );
+        if op.get("error").is_some_and(|e| !e.is_null()) {
+            return op;
+        }
+        let ids: Vec<String> = setups
+            .iter()
+            .flat_map(|s| s["operations"].as_array().into_iter().flatten())
+            .filter_map(|o| o["id"].as_str().map(str::to_string))
+            .collect();
+        let id = (1..)
+            .map(|k| format!("op{k}"))
+            .find(|i| !ids.contains(i))
+            .expect("an id");
+        op["id"] = json!(id);
+        op["type"] = json!("custom");
+        op["tool"] = json!(tool);
+        op["gcode"] = json!(gcode);
+        if gcode.trim().is_empty() {
+            op["moves"] = moves;
+        }
+        op["verbatim"] = json!(o["verbatim"].as_bool().unwrap_or(false));
+        if let Some(n) = o["name"].as_str() {
+            op["name"] = json!(n);
+        }
+        let s = &mut d["setups"][si];
+        if let Some(ops) = s["operations"].as_array_mut() {
+            ops.push(op);
+        } else {
+            s["operations"] = json!([op]);
+        }
+        let title = o["name"].as_str().unwrap_or("Custom toolpath").to_string();
+        match s["outputs"].as_array_mut() {
+            Some(outs) if !outs.is_empty() => {
+                if let Some(list) = outs.last_mut().and_then(|o| o["operations"].as_array_mut()) {
+                    list.push(json!(id));
+                }
+            }
+            _ => {
+                s["outputs"] =
+                    json!([{"name": format!("{setup}_{id}"), "title": title, "operations": [id]}])
+            }
+        }
+        json!({
+            "project": d,
+            "operation": id,
+            "frame": if rotary { "rotary" } else { "three" },
+            "read": {
+                "feed_moves": read.steps.iter().filter(|s| !s.rapid).count(),
+                "tools": read.tools,
+                "warnings": read.warnings,
+                "errors": read.errors,
+            },
+        })
+    }
+
     pub fn seed_plan(key: &str, toolpaths: &str) -> Value {
         match serde_json::from_str::<Vec<Toolpath>>(toolpaths) {
             Ok(t) => {
@@ -2152,6 +2322,8 @@ pub mod api {
             "gap_depths" => gap_depths(&d(a), &s(b), c),
             "gap_pick" => gap_pick(&s(a)),
             "seed_plan" => seed_plan(&s(a), &s(b)),
+            "read_gcode" => read_gcode(&s(a), &s(b)),
+            "add_custom" => add_custom(&s(a), &s(b)),
             "gap_fine_keys" => gap_fine_keys(&s(a)),
             "carried_mesh" => carried_mesh(&d(a), &s(b), c),
             "svg_paths" => svg_paths(&s(a), &s(b)),

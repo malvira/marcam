@@ -47,6 +47,9 @@ pub enum Move {
         /// Its moves may be written as one drilling cycle (a machine with canned cycles).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cycle: Option<Box<DrillCycle>>,
+        /// A custom toolpath posted verbatim: these lines are written for its moves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verbatim: Option<Box<Vec<String>>>,
     },
     /// Load a tool and start the spindle.
     ToolChange { tool: u32, rpm: u32 },
@@ -209,6 +212,7 @@ impl Builder {
             kind: kind.to_string(),
             arcs: None,
             cycle: None,
+            verbatim: None,
         });
     }
 

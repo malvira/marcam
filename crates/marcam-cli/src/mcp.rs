@@ -4,7 +4,9 @@
 //! Tools: `describe` (operations, machines, tool libraries, materials), `open_project`,
 //! `operation_defaults`, `plan` (a project, some of its operations, or one new operation:
 //! G-code, warnings, times; files written where asked), `simulate` (material left, gouges,
-//! collisions), `feeds`, `pickables`, `replace_model`. Resources: the example projects and
+//! collisions), `feeds`, `pickables`, `replace_model`, `add_custom_toolpath` (G-code written
+//! elsewhere, by the client or a script: read, planned and checked like marcam's own, added
+//! to a setup). Resources: the example projects and
 //! the docs. The engine calls are the ones the web app makes (`marcam_wasm::api`), and
 //! planning is `marcam run`'s, so the G-code is the same byte for byte.
 //!
@@ -25,8 +27,12 @@ const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const HEAD_LINES: usize = 40;
 
 /// Docs and examples served as resources (`marcam://docs/<name>`, `marcam://examples/<name>`).
-const DOCS: [(&str, &str); 6] = [
+const DOCS: [(&str, &str); 7] = [
     ("mcp.md", include_str!("../../../docs/mcp.md")),
+    (
+        "custom-toolpaths.md",
+        include_str!("../../../docs/custom-toolpaths.md"),
+    ),
     ("api.md", include_str!("../../../docs/api.md")),
     ("profiles.md", include_str!("../../../docs/profiles.md")),
     ("embedding.md", include_str!("../../../docs/embedding.md")),
@@ -379,6 +385,67 @@ impl Server {
                     let mut r = r;
                     r["written"] = json!(o.display().to_string());
                     return Ok(r);
+                }
+                Ok(r)
+            }
+            "add_custom_toolpath" => {
+                let p = self.project(a)?;
+                let gcode =
+                    match (a["gcode"].as_str(), a["file"].as_str()) {
+                        (Some(g), _) => g.to_string(),
+                        (None, Some(f)) => {
+                            let fp = self.path(f, false)?;
+                            std::fs::read_to_string(&fp).map_err(|e| format!("{f}: {e}"))?
+                        }
+                        _ => return Err(
+                            "gcode (the program's text) or file (a .nc inside the open folders)"
+                                .into(),
+                        ),
+                    };
+                let setup = match a["setup"].as_str() {
+                    Some(s) => s.to_string(),
+                    None => p.json["setups"][0]["id"]
+                        .as_str()
+                        .ok_or("the project has no setups")?
+                        .to_string(),
+                };
+                let tool = a["tool"].as_u64().map(|t| t as u32);
+                let verbatim = a["verbatim"].as_bool().unwrap_or(false);
+                let (doc, id, prog) =
+                    crate::add_custom(&p.json, &setup, &gcode, tool, verbatim, a["name"].as_str())?;
+                let read = json!({
+                    "feed_moves": prog.steps.iter().filter(|s| !s.rapid).count(),
+                    "tools": prog.tools,
+                    "warnings": prog.warnings,
+                    "errors": prog.errors,
+                });
+                if !prog.errors.is_empty() {
+                    return Err(format!(
+                        "the program can't be planned as it is: {}",
+                        prog.errors.join("; ")
+                    ));
+                }
+                // planned as it will be: its own program only
+                let with = Project {
+                    text: doc.to_string(),
+                    json: doc.clone(),
+                    dir: p.dir.clone(),
+                    mesh: p.mesh.clone(),
+                };
+                let planned = plan(&with, &json!({"setup": setup, "operations": [id]}), None)?;
+                let mut r = json!({"operation": id, "setup": setup, "read": read, "plan": planned});
+                match a["out"].as_str() {
+                    Some(out) => {
+                        let o = self.path(out, true)?;
+                        let text = if out.ends_with(".json") {
+                            serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())? + "\n"
+                        } else {
+                            marcam::project_file::convert_to_toml(&doc.to_string())?
+                        };
+                        std::fs::write(&o, text).map_err(|e| format!("{out}: {e}"))?;
+                        r["written"] = json!(o.display().to_string());
+                    }
+                    None => r["project"] = doc,
                 }
                 Ok(r)
             }
@@ -771,6 +838,15 @@ fn tools() -> Value {
          "description": "The features found on a setup's part (holes, pockets, faces, surfaces) that operations can be pointed at, and the operation types each suits.",
          "inputSchema": with(json!({"model": {"type": "string"}, "index_a": {"type": "number"}})),
          "annotations": {"readOnlyHint": true}},
+        {"name": "add_custom_toolpath", "title": "Add a custom toolpath",
+         "description": "Add G-code written elsewhere (by you, a script, another CAM) to a setup as a custom toolpath: read (what it can't read or plan is listed with its line numbers), planned, checked (gouges, holder collisions, machine limits, feed caps) and estimated like marcam's own operations, then posted through the machine's post (or verbatim). Frames: a vise setup takes X Y Z (the tool tip, the setup's work coordinates, Z0 the top of the stock); a 4th-axis setup takes X along the bar, Z the radius from the axis and A in degrees, with Y 0. Returns the program as read, the plan (G-code head, issues, warnings, time), and the project (written to out if given).",
+         "inputSchema": {"type": "object", "properties": with(json!({
+            "gcode": {"type": "string", "description": "The program's text"},
+            "file": {"type": "string", "description": "Or a .nc file inside the open folders"},
+            "tool": {"type": "integer", "description": "The tool number (default: the program's T word when the project has it, else the setup's first)"},
+            "verbatim": {"type": "boolean", "description": "Post the program's own lines as given, not re-posted"},
+            "name": {"type": "string"},
+            "out": {"type": "string", "description": "Write the project here (inside the open folders; .json or TOML)"}}))["properties"]}},
         {"name": "replace_model", "title": "Replace the model",
          "description": "Put a new version of the part (an STL inside the open folders) in the project: each operation's picks are found again on it, or reported gone. With out, the new project is written there (TOML).",
          "inputSchema": {"type": "object", "required": ["file"], "properties": with(json!({"file": {"type": "string"}, "model": {"type": "string"}, "out": {"type": "string"}}))["properties"]}},

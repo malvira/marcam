@@ -166,6 +166,7 @@ fn the_protocol_tools_and_resources() {
             "simulate",
             "feeds",
             "pickables",
+            "add_custom_toolpath",
             "replace_model"
         ]
     );
@@ -394,4 +395,98 @@ fn files_only_inside_the_roots() {
     assert!(none.tool("plan", json!({"project": text})).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&other);
+}
+
+#[test]
+fn custom_toolpaths_through_mcp() {
+    let dir = work("custom");
+    let mut c = Client::start(&["--allow", dir.to_str().unwrap()], None);
+    // a vise program, as an AI would send it: a slot and an arc, a canned cycle it can't read
+    let g = "G21 G90
+T1 M6
+G0 X10 Y10 Z5
+G1 Z-1 F50
+G1 X40 F400
+G2 X40 Y30 I0 J10
+G81 X1 Y1 Z-2 R1
+G0 Z5
+M30
+";
+    let r = c
+        .tool("add_custom_toolpath", json!({"path": "plate/plate.marcam.toml", "setup": "vise1", "gcode": g, "name": "Slot", "out": "plate/with_custom.marcam.toml"}))
+        .unwrap();
+    assert_eq!(r["read"]["tools"], json!([1]), "{r}");
+    assert!(
+        r["read"]["warnings"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("line 7: G81"),
+        "{r}"
+    );
+    let prog = &r["plan"]["setups"][0]["programs"][0];
+    assert!(prog["issues"].as_array().unwrap().is_empty(), "{prog}");
+    assert!(
+        prog["gcode"].as_str().unwrap_or("").contains("G1") || prog["lines"].as_u64().unwrap() > 10,
+        "{prog}"
+    );
+    let written = std::fs::read_to_string(dir.join("plate/with_custom.marcam.toml")).unwrap();
+    assert!(
+        written.contains("custom") && written.contains("G2 X40 Y30 I0 J10"),
+        "{written}"
+    );
+    // the written project plans with it (the custom one among the others)
+    let all = c
+        .tool("plan", json!({"path": "plate/with_custom.marcam.toml"}))
+        .unwrap();
+    assert_eq!(
+        all["setups"][0]["programs"].as_array().unwrap().len(),
+        2,
+        "{all}"
+    );
+    // on the 4th axis: a helix two turns long on the knob's bar
+    let h = "G0 X-5 Z16 A0
+G1 Z11.5 F60
+G1 X-20 A720 F300
+G0 Z16
+";
+    let r = c
+        .tool(
+            "add_custom_toolpath",
+            json!({"path": "knob/knob.marcam.toml", "setup": "setup1", "gcode": h, "tool": 1}),
+        )
+        .unwrap();
+    assert!(r["read"]["errors"].as_array().unwrap().is_empty(), "{r}");
+    assert!(r["project"]["setups"][0]["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|o| o["type"] == "custom"));
+    // off the axis: refused, with its line
+    let e = c
+        .tool(
+            "add_custom_toolpath",
+            json!({"path": "knob/knob.marcam.toml", "setup": "setup1", "gcode": "G0 X0 Y2 Z16
+G1 Z10 F60
+"}),
+        )
+        .unwrap_err();
+    assert!(
+        e.contains("line 1") && e.contains("off the 4th axis"),
+        "{e}"
+    );
+    // or through plan: one new operation of the type
+    let p = c
+        .tool("plan", json!({"path": "plate/plate.marcam.toml", "setup": "vise1", "operation": {"type": "custom", "tool": 1, "gcode": "G0 X5 Y5 Z5
+G1 Z-0.5 F50
+G1 X20 F300
+"}}))
+        .unwrap();
+    assert!(
+        p["setups"][0]["programs"][0]["issues"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{p}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

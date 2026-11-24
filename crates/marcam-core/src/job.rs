@@ -707,6 +707,30 @@ pub enum Operation {
     Chamfer(Chamfer),
     /// 3-axis: mill threads in holes or on bosses, on a helix.
     ThreadMill(ThreadMill),
+    /// A toolpath written elsewhere (G-code or JSON moves: an AI through MCP, a person's
+    /// script), planned, simulated, checked and posted like marcam's own.
+    Custom(Custom),
+}
+
+/// A custom toolpath (Mar: "full custom toolpaths, 3 axis and 4 axis ... via MCP where AI
+/// would upload a custom generated gcode"): `gcode` (or `moves`, JSON) in the setup's frame,
+/// read by [`crate::gcode_in`]: on a vise X Y Z (the tool tip, the setup's WCS); on the 4th
+/// axis X along the bar, Z the radius, A degrees. Posted through the machine's post, or with
+/// `verbatim` its own lines as given (still simulated and checked).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Custom {
+    pub tool: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gcode: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moves: Vec<crate::gcode_in::JsonMove>,
+    /// Post its own lines as given, not re-posted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub verbatim: bool,
+    /// The feed of feed moves before the program's first F (mm/min).
+    pub feed: f64,
+    /// The fastest descent (mm/min) on the 4th axis (where the posts slow plunges).
+    pub plunge_feed: f64,
 }
 
 /// 3-axis: chamfer (or deburr) the top edges of closed outlines (`side`: "outside" for the
@@ -1402,6 +1426,7 @@ impl Operation {
             Operation::Parting(o) => o.tool,
             Operation::Chamfer(o) => o.tool,
             Operation::ThreadMill(o) => o.tool,
+            Operation::Custom(o) => o.tool,
         }
     }
 }

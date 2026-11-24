@@ -71,6 +71,7 @@ files (`plan`'s `out`, `replace_model`'s `out`) go only inside them too.
 | `feeds` | Feeds and speeds for a tool in a material: rpm, feed, plunge, depth per pass, stepover, chip load and thinning, within a machine's limits (see the calculator in the app) |
 | `pickables` | The features found on a setup's part (holes, pockets, faces, surfaces) and the operation types each suits |
 | `replace_model` | Puts a new version of the part (an STL) in the project: each operation's picks are found again on it or reported gone; with `out`, writes the new project |
+| `add_custom_toolpath` | Adds G-code written elsewhere (`gcode`, or a `file` inside the open folders) to a `setup` as a custom toolpath: what it can't read or plan is listed with its line numbers; it is planned and checked like the other operations (the answer has the plan); with `out`, writes the project. See [custom-toolpaths.md](custom-toolpaths.md) for the frames and an example to follow |
 
 The project for a tool is `path` (a file) or `project` (TOML text or a JSON object, with
 `dir` for the folder its mesh files are in). Every tool answers with JSON (as text and as
@@ -109,5 +110,7 @@ JSON-RPC 2.0 on stdin/stdout, one message a line; MCP revisions 2025-06-18, 2025
   and written to `out`; only some operations; one new operation; `operation_defaults`;
   `simulate`;
 - the plate: `plan`, `pickables`, `simulate` (3-axis), `replace_model` writing the project;
+- custom toolpaths: `add_custom_toolpath` on the plate (its warnings, its plan, the project
+  written and planned) and the knob's 4th axis, refused off the axis, and through `plan`;
 - files: allowed inside the client's roots, refused outside them (reading and writing), and
   none without roots or `--allow`.

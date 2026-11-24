@@ -879,6 +879,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         svg += `<div class="row small"><label class="filebtn">Load SVG into ${p.name.replace(/_/g, " ")}<input type="file" accept=".svg,image/svg+xml" data-svg="${p.name}" hidden></label>
           <label>height (mm) <input name="__svg_height" value="20" size="4"></label></div>`;
         html += `<label title="${esc(p.help)}">${label} <span class="muted">${n} path${n === 1 ? "" : "s"}; x y; x y | ...</span><textarea name="${p.name}" rows="2" spellcheck="false">${esc(text)}</textarea></label>`;
+      } else if (p.kind === "gcode") {
+        // (a custom toolpath) its program: pasted, or a file chosen; its lines read as the
+        // planner reads them, what it cannot read or plan listed with the line
+        const text = typeof v === "string" ? v : "";
+        const n = text ? text.split("\n").length : 0;
+        html += `<label title="${esc(p.help)}">${label} <span class="muted">${n} line${n === 1 ? "" : "s"}</span><textarea name="${p.name}" rows="8" spellcheck="false" placeholder="Paste G-code here, or choose a file" class="gcode-text">${esc(text)}</textarea></label>
+          <div class="row small"><label class="filebtn">Choose a G-code file<input type="file" accept=".nc,.gcode,.ngc,.tap,.cnc,.txt" data-gcode="${p.name}" hidden></label></div>
+          <div id="gcodeLines" class="gcode-lines small">${gcodeLinesHtml(op)}</div>`;
+      } else if (p.kind === "moves") {
+        html += `<label title="${esc(p.help)}">${label} <span class="muted">JSON</span><textarea name="${p.name}" rows="3" spellcheck="false">${esc(Array.isArray(v) && v.length ? JSON.stringify(v) : "")}</textarea></label>`;
       } else if (p.kind === "points") {
         html += `<label title="${esc(p.help)}">${label} <span class="muted">x y; x y; ...</span><input name="${p.name}" value="${esc(Array.isArray(v) ? pointsText(v) : "")}" placeholder="required"></label>`;
       } else if (p.kind === "points3") {
@@ -975,8 +985,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (p.kind === "boolean") out[p.name] = el.checked;
       else if (p.name === "tool" || p.kind === "integer") out[p.name] = el.value === "" || el.value === "__add" ? (p.name === "tool" ? op.tool : undefined) : parseInt(el.value, 10);
       else if (p.kind === "choice") out[p.name] = el.value;
-      else if (p.kind === "string") out[p.name] = el.value;
-      else if (p.kind === "paths") {
+      else if (p.kind === "string" || p.kind === "gcode") out[p.name] = el.value;
+      else if (p.kind === "moves") {
+        const v = el.value.trim();
+        if (v) {
+          try {
+            out[p.name] = JSON.parse(v);
+          } catch (e) {
+            throw new Error(`${p.name}: not JSON (${e.message})`);
+          }
+        } else out[p.name] = [];
+      } else if (p.kind === "paths") {
         out[p.name] = el.value
           .split("|")
           .map((path) => path.split(";").map((q) => q.split(/[,\s]+/).filter(Boolean).map(Number)).filter((q) => q.length === 2))
@@ -1000,6 +1019,42 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (!out.geometry.length) delete out.geometry;
     }
     return out;
+  }
+
+  /** A custom toolpath's program as the planner reads it: what it can't read or plan, each
+   *  with its line, and the program's lines around them; read again when the text changes. */
+  const gcodeChecks = new Map();
+  function gcodeLinesHtml(op) {
+    const text = op.gcode || "";
+    if (!text.trim()) return '<span class="muted">No program yet: paste it above, or choose a file.</span>';
+    const frame = isBox(setup()) ? "three" : "rotary";
+    const key = `${frame}|${text}`;
+    const got = gcodeChecks.get(op.id);
+    if (!got || got.key !== key) {
+      gcodeChecks.set(op.id, { key, res: null });
+      engine("readGcode", text, frame).then(({ result }) => {
+        const c = gcodeChecks.get(op.id);
+        if (c && c.key === key) {
+          c.res = result;
+          const el = $("gcodeLines");
+          if (el && t.selected === op.id) el.innerHTML = gcodeLinesHtml(opById(op.id) || op);
+        }
+      }).catch(() => {});
+      return '<span class="muted">Reading the program...</span>';
+    }
+    if (!got.res) return '<span class="muted">Reading the program...</span>';
+    const r = got.res;
+    const lines = text.split("\n");
+    const msgs = [...r.errors.map((m) => ["error", m]), ...r.warnings.map((m) => ["warn", m])];
+    const head = `<div class="${r.errors.length ? "error" : "muted"}">${r.feeds} feed move${r.feeds === 1 ? "" : "s"} read${r.tools.length ? `, tools ${r.tools.map((x) => "T" + x).join(", ")}` : ""}; ${r.errors.length} error${r.errors.length === 1 ? "" : "s"}, ${r.warnings.length} warning${r.warnings.length === 1 ? "" : "s"}</div>`;
+    const rows = msgs
+      .map(([kind, m]) => {
+        const ln = +(/^line (\d+)/.exec(m)?.[1] || 0);
+        const src = ln ? `<code>${ln}: ${esc((lines[ln - 1] || "").trim())}</code> ` : "";
+        return `<div class="gcode-msg ${kind === "error" ? "error" : "warn"}">${src}${esc(m.replace(/^line \d+: /, ""))}</div>`;
+      })
+      .join("");
+    return head + rows;
   }
 
   /** What a 3D parallel finish will do: its stepover, rows and levels (and a hint when no 3D
@@ -2024,6 +2079,23 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         if (t.edited) t.edited.add(el.dataset.svg);
       } catch (e) {
         showError(`SVG: ${e.message}`);
+      }
+      return;
+    }
+    // a G-code file for a custom toolpath: its text in the paste area, applied; its T word
+    // choosing the tool when the project has it
+    if (el.dataset?.gcode && el.files?.[0] && t.selected) {
+      const f = $("opForm");
+      try {
+        const text = await el.files[0].text();
+        f.elements[el.dataset.gcode].value = text;
+        if (t.edited) t.edited.add(el.dataset.gcode);
+        const m = /(?:^|[^A-Z(;])T(\d+)/i.exec(text.replace(/\([^)]*\)|;.*$/gm, ""));
+        const tl = m && (t.doc.tools || []).find((x) => x.number === +m[1]);
+        if (tl && f.elements.tool) f.elements.tool.value = String(tl.number);
+        await applyForm();
+      } catch (e) {
+        showError(`G-code: ${e.message}`);
       }
       return;
     }

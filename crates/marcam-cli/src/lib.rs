@@ -21,6 +21,15 @@ USAGE:
       --machine, else the job's \"machine\", else makera-z1-4axis. Built in:
       makera-z1-4axis, makera-carvera-4axis, makera-carvera-air-4axis,
       linuxcnc-4axis (see `marcam profiles list`).
+  marcam add-custom <project> <setup-id> <file.nc> [--tool <n>] [--verbatim] [--name <text>]
+                    [--out <file>] [--json]
+      Add a custom toolpath to a setup: G-code written elsewhere (a script, another CAM,
+      an AI), in the setup's frame (a vise: X Y Z, the tool tip; the 4th axis: X along the
+      bar, Z the radius, A degrees). Its tool: --tool, else the program's T word when the
+      project has that tool, else the setup's first. What the program can't be read or
+      planned with is printed with its line numbers; then it is planned (simulated, checked
+      and estimated like the others). Writes the project (--out, else in place).
+      --verbatim posts the program's own lines instead of re-posting them.
   marcam replace-model <project.json> <model-id> <new.stl|.3mf|.step> [--out <file>] [--json]
       Replace a mesh model with a new part (placement, setups, tools and operations
       kept) and find every operation's picks again on it. Operations whose picked
@@ -357,6 +366,140 @@ fn cmd_ops(args: &[String]) -> Result<ExitCode, String> {
     }
 }
 
+/// Add a custom toolpath (G-code) to `setup` of `project` (a 0.2 project's JSON): the
+/// engine's `add_custom` (see marcam_wasm), so the CLI, MCP, Python and the web app add it
+/// alike. Returns the project, the new operation's id and the program as read.
+pub fn add_custom(
+    project: &serde_json::Value,
+    setup: &str,
+    gcode: &str,
+    tool: Option<u32>,
+    verbatim: bool,
+    name: Option<&str>,
+) -> Result<(serde_json::Value, String, marcam::gcode_in::Program), String> {
+    let opts = serde_json::json!({"setup": setup, "gcode": gcode, "tool": tool, "verbatim": verbatim, "name": name});
+    let r = marcam_wasm::api::call(
+        "add_custom",
+        project.to_string().as_bytes(),
+        opts.to_string().as_bytes(),
+        &[],
+    );
+    if let Some(e) = r.get("error").filter(|e| !e.is_null()) {
+        return Err(e.as_str().map(str::to_string).unwrap_or(e.to_string()));
+    }
+    let rotary = r["frame"] == "rotary";
+    let frame = if rotary {
+        marcam::gcode_in::Frame::Rotary
+    } else {
+        marcam::gcode_in::Frame::Three
+    };
+    Ok((
+        r["project"].clone(),
+        r["operation"].as_str().unwrap_or("").to_string(),
+        marcam::gcode_in::read(gcode, frame),
+    ))
+}
+
+fn cmd_add_custom(o: &Opts) -> Result<ExitCode, String> {
+    let [path, setup, nc] = o.positional.as_slice() else {
+        return Err(format!(
+            "expected <project> <setup-id> <file.nc>\n\n{USAGE}"
+        ));
+    };
+    let text = read(path)?;
+    let json_text = marcam::project_file::to_json_text(&text)
+        .map(|c| c.into_owned())
+        .unwrap_or(text.clone());
+    let (p, _) =
+        marcam::project::Project::from_json_any(&json_text).map_err(|e| format!("{path}: {e}"))?;
+    let project = serde_json::to_value(&p).map_err(|e| e.to_string())?;
+    let gcode = std::fs::read_to_string(nc).map_err(|e| format!("{nc}: {e}"))?;
+    let tool = match o.flag("tool") {
+        Some(t) => Some(
+            t.trim_start_matches(['T', 't'])
+                .parse::<u32>()
+                .map_err(|_| format!("--tool {t}: a tool number"))?,
+        ),
+        None => None,
+    };
+    let (doc, id, prog) = add_custom(
+        &project,
+        setup,
+        &gcode,
+        tool,
+        o.has("verbatim"),
+        o.flag("name"),
+    )?;
+    // planned as it will be: its errors stop it here
+    let dir = project_dir(path);
+    let (jobs_err, issues) = match marcam::project::jobs_from_any_with(
+        &doc.to_string(),
+        &marcam::profiles::builtin_libraries(),
+        &|src| src.load(&dir).ok(),
+    ) {
+        Ok(jobs) => {
+            let mut notes = Vec::new();
+            let mut err = None;
+            for (sid, job) in &jobs {
+                if sid != setup {
+                    continue;
+                }
+                match plan_job(job, path) {
+                    Ok(tps) => {
+                        for tp in &tps {
+                            notes.extend(tp.notes.iter().filter(|n| n.contains("line ")).cloned());
+                        }
+                    }
+                    Err(e) => err = Some(e),
+                }
+            }
+            (err, notes)
+        }
+        Err(e) => (Some(e.to_string()), Vec::new()),
+    };
+    let target = o.flag("out").unwrap_or(path);
+    let out_text = if target.ends_with(".json") {
+        serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())? + "\n"
+    } else {
+        marcam::project_file::convert_to_toml(&doc.to_string())?
+    };
+    if o.has("json") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "operation": id, "file": target, "feeds": prog.steps.iter().filter(|s| !s.rapid).count(),
+                "tools": prog.tools, "warnings": prog.warnings, "errors": prog.errors, "plan_error": jobs_err,
+            }))
+            .map_err(|e| e.to_string())?
+        );
+    } else {
+        println!(
+            "{id}: {} feed moves read from {nc}",
+            prog.steps.iter().filter(|s| !s.rapid).count()
+        );
+        for w in &prog.warnings {
+            println!("  warning: {w}");
+        }
+        for e in &prog.errors {
+            println!("  error: {e}");
+        }
+        let _ = &issues;
+        if let Some(e) = &jobs_err {
+            println!("  not planned: {e}");
+        }
+    }
+    if jobs_err.is_some() || !prog.errors.is_empty() {
+        // (not written: the project as it was)
+        eprintln!("{target} not written: the program can't be planned as it is");
+        return Ok(ExitCode::from(1));
+    }
+    std::fs::write(target, out_text).map_err(|e| format!("{target}: {e}"))?;
+    if !o.has("json") {
+        println!("wrote {target}");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn cmd_replace_model(o: &Opts) -> Result<ExitCode, String> {
     let [path, model, mesh] = o.positional.as_slice() else {
         return Err(format!(
@@ -515,6 +658,10 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         "upgrade" => cmd_upgrade(&parse(rest, &["out", "json?"])?),
         "convert" => cmd_convert(&parse(rest, &["out", "json?", "bundle"])?),
         "replace-model" => cmd_replace_model(&parse(rest, &["out", "json?"])?),
+        "add-custom" => cmd_add_custom(&parse(
+            rest,
+            &["tool", "verbatim?", "name", "out", "json?"],
+        )?),
         "ops" => cmd_ops(rest),
         "mcp" => mcp::serve(rest),
         "faces" => cmd_faces(&parse(rest, &["model", "crease"])?),

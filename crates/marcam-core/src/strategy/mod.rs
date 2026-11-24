@@ -2,6 +2,7 @@
 
 pub mod adaptive;
 pub mod bore;
+pub mod custom;
 pub mod edges;
 pub mod engrave;
 mod flank_chamfer;
