@@ -1415,6 +1415,10 @@ try {
     const [back, front] = body.map((t) => (t || "").split(",").map(Number));
     await settled();
     const k = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return { tab: t?.textContent || '', error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    // (an operation on the 4th axis changed to indexed roughing and back: its Type list offers
+    // it, as the Add list does)
+    const idxOpt = await read("[...(document.getElementById('opForm')?.elements.__type?.options || [])].map((o) => o.textContent).join('|')");
+    check("carry-through: on the 4th axis, an operation's Type list offers Indexed roughing (3+1)", /Indexed roughing \(3\+1\)/.test(idxOpt), idxOpt);
     check("carry-through: the knurl on the OD picked on the part (radius 10, clear of the chuck, behind the turned-down part), planned",
       /Cylinder 20\.00/.test(odBand) && back && front && Math.abs(back[1] - 10) < 0.3 && Math.abs(front[1] - 10) < 0.3 && back[0] > -frame.length + 1.9 && front[0] <= -15 && /OK/.test(k.tab) && !k.error, `${odBand}; ${JSON.stringify(body)} ${JSON.stringify(k)}`);
     // its playback starts from the piece setup 1 left: the boss end narrower than the bar

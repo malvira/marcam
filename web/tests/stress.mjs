@@ -327,7 +327,8 @@ const A = {
     type = type || r.pick(opts.filter((x) => x !== cur));
     if (!type) return null;
     await js(`(() => { const s = document.getElementById('opForm').elements.__type; s.value = '${type}'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-    await waitFor(() => js(`document.getElementById('opForm')?.elements.__type?.value === '${type}'`), `the editor as ${type}`, 15000).catch(() => {});
+    // (a preset, "rough3d:indexed": the editor shows its type)
+    await waitFor(() => js(`document.getElementById('opForm')?.elements.__type?.value === '${type.split(":")[0]}'`), `the editor as ${type}`, 15000).catch(() => {});
     await sleep(200);
     return `change type ${cur} -> ${type}`;
   },
@@ -772,6 +773,7 @@ const SCENARIOS = {
         for (const ty of types) {
           await A.addOp(r0, ty);
           // before Apply: to the next type and back
+          // (an Add list entry may be a type's preset, "rough3d:indexed": its type in the form)
           const other = types[(types.indexOf(ty) + 1) % types.length];
           await A.changeType(r0, other);
           await A.changeType(r0, ty);

@@ -810,10 +810,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     const ty = typeOf(op.type);
-    const typeOpts = t.types
+    let typeOpts = t.types
       .filter((x) => fits(x, setup()) || x.kind === op.type)
       .map((x) => `<option value="${x.kind}" ${x.kind === op.type ? "selected" : ""}>${esc(x.title)}</option>`)
       .join("");
+    if (op.type !== "rough3d" && kindOfSetup(setup()) === "rotary" && t.types.some((x) => x.kind === "rough3d")) typeOpts += `<option value="${INDEXED_ROUGH}">Indexed roughing (3+1)</option>`;
     let html = `<form class="opform" id="opForm"><div class="tree-outname">${esc(ty?.title || op.type)} <span class="muted">${esc(op.id)}</span></div>
       ${opProblem(op) ? `<div class="error small" id="opError">Not planned: ${esc(opProblem(op))}. ${op.error ? "Pick it again or change its type." : "Choose another tool."}</div>` : ""}
       <label>Type <select name="__type" aria-label="Operation type of ${esc(op.id)}">${typeOpts}</select></label>
@@ -1814,6 +1815,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   async function changeType(kind) {
     const cur = readForm();
     const from = cur.type;
+    // (indexed roughing: 3D roughing, adaptive, at six angles, as the Add list makes it)
+    const indexed = kind === INDEXED_ROUGH;
+    if (indexed) kind = "rough3d";
     if (kind === from) return;
     const was = typeOf(from), ty = typeOf(kind);
     if (!ty) return;
@@ -1839,7 +1843,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return renderEditor();
     }
     if (!shapeOk) notes.push(`tool ${cur.tool} (${toolKind}) does not suit ${ty.title}: T${result.tool} instead`);
-    const next = { id: cur.id, ...result, type: kind };
+    const next = { id: cur.id, ...result, type: kind, ...(indexed ? { pattern: "adaptive", index_count: 6, indexes: [] } : {}) };
     for (const k of ["name", "color", "enabled"]) if (cur[k] !== undefined) next[k] = cur[k];
     if (geometry.length) next.geometry = geometry;
     else delete next.geometry;
