@@ -579,6 +579,17 @@ try {
     await waitFor(() => js(`!!document.getElementById('opForm') && ${SEL}?.type === '${kind}'`), `the ${kind} form`, 60000);
     // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
     const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
+    // (Mar's picking rule) the types whose geometry is a placeholder until a pick: not added,
+    // the one-line prompt shown instead (the next Add replaces the draft)
+    if (["contour", "pocket", "drill", "chamfer", "thread_mill", "bore"].includes(kind)) {
+      await js("document.getElementById('opForm').requestSubmit(); true");
+      await sleep(800);
+      const held = await js(`({ n: document.querySelectorAll('#tree .tree-op').length, prompt: document.getElementById('pickNone')?.textContent || '' })`);
+      filled.push(`${kind}:${blanks || "none blank"}${held.n === before && /^Nothing picked/.test(held.prompt) ? "" : ` (added before a pick: ${JSON.stringify(held)})`}`);
+      if (blanks) break;
+      took.push(`${kind} ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+      continue;
+    }
     await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${before + 1}`), `${kind} to be added`, 120000).catch(async (e) => {
       // (what held it: the form still open and why, the status line)
@@ -591,7 +602,7 @@ try {
     await settle();
     took.push(`${kind} ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   }
-  check("every operation type's new form is fully filled and applies cleanly", filled.length === 18 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
+  check("every operation type's new form is fully filled and applies cleanly (those needing a pick wait for it)", filled.length === 18 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js(`${SEL}?.type === 'rotary_finish'`), "the finish form", 60000);
