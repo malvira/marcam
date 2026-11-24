@@ -378,6 +378,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const { THREE } = v;
     if (!v.groups.machining) {
       v.groups.machining = new THREE.Group();
+      // (hidden until shown: made anew after a reset while the view without it is drawn, it
+      // was drawn with it for a frame, another setup chosen)
+      v.groups.machining.visible = false;
       v.scene.add(v.groups.machining);
       v.groups.work = new THREE.Group(); // turns with A
       v.groups.machining.add(v.groups.work);

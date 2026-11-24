@@ -367,7 +367,7 @@ try {
         if (lostPart && !may.has("view")) fail(seed, i, `${a.name}: the part vanished in ${frames.filter((f) => !f[0]).length} of ${frames.length} frames`);
         if (lostPath) fail(seed, i, `${a.name}: the toolpaths vanished in ${frames.filter((f) => !f[1]).length} of ${frames.length} frames ${await js("window.__monkey.frames.find((f) => !f.path)?.census")}`);
         const bad = frames.filter((f) => f[3]).map((f) => f[3]);
-        if (bad.length) fail(seed, i, `${a.name}: ${bad.length} of ${frames.length} frames drawn against the toggles (${[...new Set(bad)].join(" | ")}) ${await js("window.__monkey.frames.find((f) => f.census)?.census")}`);
+        if (bad.length) fail(seed, i, `${a.name}: ${bad.length} of ${frames.length} frames drawn against the toggles (${[...new Set(bad)].join(" | ")}) ${await js("window.__monkey.frames.find((f) => f.audit.length)?.census")}`);
       }
       const errs = app.pageErrors();
       if (errs.length > errs0) {
