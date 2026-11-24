@@ -1100,6 +1100,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
    *  coordinates typed under Advanced: its form and the one-line prompt only, not planned (a
    *  contour round the whole bar showed a red holder collision before its pick). */
   function unpicked(op) {
+    // (a new custom toolpath: nothing to plan until its program is given)
+    if (op?.type === "custom") return !!(t.draft && t.draft.op.id === op.id) && !op.gcode?.trim() && !op.moves?.length;
     if (!op || !NEEDS_PICK.has(op.type) || !(t.draft && t.draft.op.id === op.id) || op.picks?.length) return false;
     return ![...(t.edited || [])].some((k) => TYPED_GEOMETRY.has(k));
   }
