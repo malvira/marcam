@@ -2450,6 +2450,9 @@ pub struct JobSim {
     pub programs: Vec<(String, sim::SimStats, sim::Deviation)>,
     /// Holder and shank collisions per program (G-code lines not filled in).
     pub collisions: Vec<collision::CollisionReport>,
+    /// The stock's radii after each program (the page shows each program's result: kept here
+    /// rather than simulated a second time)
+    pub after: Vec<Vec<f32>>,
 }
 
 /// Simulate `tps` (from [`plan_with_mesh`]) on stock of `job.stock.radius`. The grid spans the
@@ -2510,6 +2513,7 @@ pub fn simulate_job(
     let bar = (job.stock.radius, -job.stock.length, 0.0);
     let mut programs = Vec::new();
     let mut collisions = Vec::new();
+    let mut after = Vec::new();
     for tp in tps {
         let (st, rep) = collision::simulate_rotary(
             &mut stock,
@@ -2524,12 +2528,14 @@ pub fn simulate_job(
         let dev = sim::deviation_with(&stock, &part, x_lo, x_hi, tol, &|t| intended.contains(&t));
         programs.push((tp.name.clone(), st, dev));
         collisions.push(rep);
+        after.push(stock.r.clone());
     }
     Ok(JobSim {
         stock,
         part,
         programs,
         collisions,
+        after,
     })
 }
 

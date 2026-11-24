@@ -1198,6 +1198,24 @@ try {
     nums.length >= 3 && nums.every((f, i) => i === 0 || f > nums[i - 1]) && nums[nums.length - 1] > nums[0] && !many.ringAfter,
     `${JSON.stringify(many.fills)}; after ${many.ringAfter}`);
   await clean("indexed roughing across the workers");
+  // (Mar: "the index roughing simulation playback is super chunky", "when you set the speed
+  // slider high") its playback with the stock: Play, the speed slider dragged to the top
+  // (x1000); it starts within seconds, the frames in budget, the stock at the end in time
+  {
+    const pressed = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return [b.getAttribute('aria-pressed') === 'true', r.left + r.width / 2, r.top + r.height / 2]; })()");
+    if (!pressed[0]) await drag([pressed[1], pressed[2]], [pressed[1], pressed[2]], 1);
+    await waitFor(() => read("!document.getElementById('vtPlay').disabled"), "the play button", 120000 * SLACK);
+    const p0 = Date.now();
+    await click("#vtPlay");
+    await waitFor(() => read("(() => { const m = window.__marcam.state.machining; return !!(m.open && m.stock && m.playing); })()"), "playing with the stock", 120000 * SLACK).catch(() => {});
+    const startMs = Date.now() - p0;
+    const sp = await read("(() => { const r = document.getElementById('simSpeed').getBoundingClientRect(); return [r.left, r.top + r.height / 2, r.width, +document.getElementById('simSpeed').value]; })()");
+    await drag([sp[0] + 8 + ((sp[2] - 16) * sp[3]) / 3, sp[1]], [sp[0] + sp[2] - 2, sp[1]], 10);
+    const run = await read(`(async () => { const m = window.__marcam.state.machining; const w0 = performance.now(); let worst = 0, last = w0, frames = 0; const pos0 = m.head ?? m.pos; await new Promise((r) => { const f = (t) => { worst = Math.max(worst, t - last); last = t; frames++; if ((m.pos < m.session.segments || m.busy) && performance.now() - w0 < ${120000 * SLACK}) requestAnimationFrame(f); else r(); }; requestAnimationFrame(f); }); return { speed: document.getElementById('simSpeedLabel').textContent, endMs: Math.round(performance.now() - w0), worst: Math.round(worst), frames, from: pos0, at: m.pos, of: m.session.segments }; })()`);
+    await shot("indexed_playback_end");
+    check("Indexed roughing's playback with the stock: Play to playing within 10 s, the speed at the top (x1000), the stock to the end within 60 s, no frame held over 100 ms",
+      startMs < 10000 * SLACK && run.speed === "×1000" && run.at === run.of && run.endMs < 60000 * SLACK && run.worst < 100 * SLACK, JSON.stringify({ startMs, ...run }));
+  }
   // a browser with one core: no workers; the planner finds the angles itself
   await S("Emulation.setHardwareConcurrencyOverride", { hardwareConcurrency: 1 });
   const one = await indexedRun("one core");
@@ -1334,7 +1352,8 @@ try {
     await click("#simPlay");
     await click("#simPlay");
     await click("#simPlay");
-    await sleep(600);
+    // (measured once it is playing again: Play first draws the stock afresh, then moves)
+    await waitFor(async () => { const a = await read("window.__marcam.state.machining.head ?? -1"); await sleep(300); return (await read("window.__marcam.state.machining.head ?? -1")) > a; }, "playing again", 30000).catch(() => {});
     const again = await measure();
     check("playback: Pause/Play pressed quickly twice: one loop, still at the speed shown (not twice it)", Math.abs(again.rate / again.factor - 1) < 0.1, JSON.stringify({ shown: again.shown, rate: +again.rate.toFixed(2) }));
     // the scrubber dragged while playing: on from where it was dropped

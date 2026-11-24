@@ -82,6 +82,12 @@ startWorker("sim");
 function cancelEngine(why = "cancelled") {
   simLock.drop();
   workers.sim.terminate();
+  // (and the background simulation's worker, if it was started)
+  if (workers.stats) {
+    workers.stats.terminate();
+    for (const [id, p] of [...pending.entries()]) if (p.worker === "stats") (pending.delete(id), p.reject(new Error(why)));
+    workers.stats = null;
+  }
   const waiting = [...pending.entries()].filter(([, p]) => p.worker === "sim");
   for (const [id] of waiting) pending.delete(id);
   simRing.active = 0;
@@ -147,9 +153,16 @@ function engine(cmd, ...args) {
   return engineOn(SIM_WORKER.has(cmd) ? "sim" : "main", cmd, ...args);
 }
 
+/** The angles indexed 3D roughing finds for itself (index count, no indexes), by what they
+ *  depend on: found again only when one of those changes. */
+const gapCache = new Map();
+/** The engine calls that plan the project they are given. */
+const PLANS = new Set(["simulate", "simOpen", "simGrid", "gpuOpen", "carriedMesh", "planAndPost"]);
 /** An engine call on worker `which` ("main", "sim", or one of the pool's, see [`pool`]). */
 function engineOn(which, cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
+  // (the same project every worker planned: the angles found written in)
+  if (PLANS.has(cmd) && args[0] && typeof args[0] === "object") args[0] = withKnownAngles(args[0]);
   // (Mar) setups with their own parts: the part file and theirs, given together
   if (state.extraMeshes?.size) args = args.map((a) => (a && a === state.mesh ? meshBundle() : a));
   // the person's tool libraries: their tools' cutting data for new operations' defaults
@@ -647,9 +660,6 @@ window.__marcam = Object.assign(window.__marcam || {}, { fmtTime, setMesh, clear
 // independent pieces: one fewer than the machine's cores (the planner has one), at most six,
 // none on a single core (the planner then does it all itself, as before)
 const POOL = Math.max(0, Math.min(6, (navigator.hardwareConcurrency || 1) - 1));
-/** The angles indexed 3D roughing finds for itself (index count, no indexes), by what they
- *  depend on: found again only when one of those changes. */
-const gapCache = new Map();
 /** Part files smaller than this (about 20,000 triangles as binary STL): no pool. */
 const POOL_MIN_BYTES = 84 + 50 * 20000;
 
@@ -657,6 +667,31 @@ const POOL_MIN_BYTES = 84 + 50 * 20000;
  *  across the pool and written in as its indexes: the planner then takes them as given, the
  *  same angles it would find (the same toolpaths), without searching for them on its one
  *  worker. `job` itself is left as it is. `stale()`: a newer run asked for meanwhile. */
+/** What indexed roughing's angles depend on: the part (its file and placement), the stock, the
+ *  setup's kind, the tool, how many angles. */
+function gapKey(job, s, op) {
+  const parts = (job.models || []).filter((m) => s.part?.includes(m.id));
+  return JSON.stringify([state.meshesGen, state.meshName, parts, s.stock, s.holding, s.kind, (job.tools || []).find((t) => t.number === op.tool), op.tool, op.index_count]);
+}
+
+/** `job` with the angles already found (see [`withGapAngles`]) written in, for every engine
+ *  call that plans it: (the impeller) planned with them and asked again without, a worker found
+ *  nothing it had planned and planned it all again, 16 s before a simulation could start.
+ *  `job` itself when there are none. */
+function withKnownAngles(job) {
+  if (!gapCache.size || !job || typeof job !== "object" || job.schema_version !== "0.2") return job;
+  let copy = null;
+  for (const s of job.setups || [])
+    for (const op of s.operations || []) {
+      if (op.type !== "rough3d" || !(op.index_count > 0) || op.indexes?.length) continue;
+      const angles = gapCache.get(gapKey(job, s, op));
+      if (!angles) continue;
+      copy ||= structuredClone(job);
+      copy.setups.find((x) => x.id === s.id).operations.find((x) => x.id === op.id).indexes = angles;
+    }
+  return copy || job;
+}
+
 async function withGapAngles(job, setupId, stale) {
   // (a small part: the search is quicker than starting the workers; the planner does it)
   if (!POOL || job.schema_version !== "0.2" || !(state.mesh?.length > POOL_MIN_BYTES)) return job;
@@ -669,8 +704,7 @@ async function withGapAngles(job, setupId, stale) {
   if (!todo.length) return job;
   const copy = structuredClone(job);
   for (const [s, op] of todo) {
-    const parts = (job.models || []).filter((m) => s.part?.includes(m.id));
-    const key = JSON.stringify([state.meshesGen, state.meshName, parts, s.stock, s.holding, s.kind, (job.tools || []).find((t) => t.number === op.tool), op.tool, op.index_count]);
+    const key = gapKey(job, s, op);
     let angles = gapCache.get(key);
     if (!angles) {
       const n = op.index_count;
@@ -955,8 +989,11 @@ window.__marcam.resimPending = () => resimPending;
 loadSimRes();
 
 /** One simulation at a time (the batch one, a playback opening: see machining.js): the next
- *  waits for the one running; a cancel drops the waiting ones too. */
-const simLock = {
+ *  waits for the one running; a cancel drops the waiting ones too. (Mar: the impeller's
+ *  playback never came: it waited behind the background simulation of its 126k moves, half
+ *  a minute and more) the background ones (quiet) go in a lane of their own, on a worker of
+ *  their own: a playback never waits for them. */
+const makeLock = () => ({
   busy: false,
   waiting: 0,
   gen: 0,
@@ -992,6 +1029,24 @@ const simLock = {
   drop() {
     this.gen++;
   },
+});
+const statsLock = makeLock();
+const simLock = {
+  lane: makeLock(),
+  /** As a lock's run; the background (quiet) batch simulations in their own lane. */
+  run(kind, fn, opts = {}) {
+    return (kind === "batch" && opts.quiet ? statsLock : this.lane).run(kind, fn, opts);
+  },
+  drop() {
+    this.lane.drop();
+    statsLock.drop();
+  },
+  get busy() {
+    return this.lane.busy || statsLock.busy;
+  },
+  get waiting() {
+    return this.lane.waiting + statsLock.waiting;
+  },
 };
 
 function simulate() {
@@ -1017,6 +1072,8 @@ async function simulateQuiet(max = Infinity, res) {
 }
 
 async function simulateLocked(opts = {}) {
+  // (the background ones: on their own worker, see simLock)
+  const eng = (cmd, ...args) => (opts.quiet ? engineOn("stats", cmd, ...args) : engine(cmd, ...args));
   // (in the background, never a plan: the results went meanwhile, so nothing to simulate)
   if (!state.result && opts.quiet) return;
   if (!state.result) await generate();
@@ -1051,16 +1108,16 @@ async function simulateLocked(opts = {}) {
     let backend = `CPU (${why})`;
     if (gpu) {
       try {
-        const { result: open } = await engine("gpuOpen", state.job, { ...simOpts(opts.res), libraries: libraries() }, state.mesh);
+        const { result: open } = await eng("gpuOpen", state.job, { ...simOpts(opts.res), libraries: libraries() }, state.mesh);
         // (gpuOpen plans through the same cache and leaves the hidden operations out)
-        result = await simulateOnGpu(gpu, open, async (o, bytes) => (await engine("gpuStats", o, bytes)).result);
+        result = await simulateOnGpu(gpu, open, async (o, bytes) => (await eng("gpuStats", o, bytes)).result);
         backend = `GPU (${gpu.name})`;
       } catch (e) {
         // the engine refuses some jobs on the GPU (indexed 3+1 moves): the CPU does them
         backend = `CPU (${e.message})`;
       }
     }
-    if (!result) result = (await engine("simulate", state.job, simOpts(opts.res), state.mesh)).result;
+    if (!result) result = (await eng("simulate", state.job, simOpts(opts.res), state.mesh)).result;
     const ms = performance.now() - t0;
     if (epoch !== state.epoch || forJob !== state.job) return;
     showBackend(backend);

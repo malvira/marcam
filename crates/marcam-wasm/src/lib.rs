@@ -484,15 +484,11 @@ pub mod api {
             Ok(r) => r,
             Err(e) => return err(e),
         };
-        // replay to capture the stock after each program
-        let mut stock = sim::RadialMap::of_job(res.stock.grid, &job);
-        let cutters = |t: u32| {
-            job.tool(t)
-                .and_then(|d| marcam::cutter_for(t, d.shape).ok())
-        };
+        // the stock after each program, as the simulation left it (not simulated again: the
+        // impeller's 126k moves took twice as long)
         let mut stocks = Vec::new();
-        for ((tp, (name, st, dev)), coll) in tps.iter().zip(&res.programs).zip(&res.collisions) {
-            sim::simulate(&mut stock, tp, &cutters, (dx * 2.0).min(0.1));
+        for (((name, st, dev), coll), r) in res.programs.iter().zip(&res.collisions).zip(&res.after)
+        {
             stocks.push(json!({
                 "name": name,
                 "collisions": coll,
@@ -504,7 +500,7 @@ pub mod api {
                 "max_gouge": dev.max_gouge,
                 "gouge_cells": dev.gouge_cells,
                 "feature_cells": dev.feature_cells,
-                "r": stock.r,
+                "r": r,
             }));
         }
         let g = res.stock.grid;
