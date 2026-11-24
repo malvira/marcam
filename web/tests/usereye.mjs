@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
-import { findBrowser, freePort, sleep, waitFor } from "./harness.mjs";
+import { findBrowser, freePort, httpGet, sleep, waitFor } from "./harness.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const shots = join(root, "web", "tests", "screenshots", "usereye");
@@ -84,12 +84,14 @@ async function start() {
     const port = await freePort();
     children.push(spawn(process.platform === "win32" ? "python" : "python3", [join(root, "scripts", "serve.py"), String(port), root], { stdio: "ignore" }));
     url = `http://127.0.0.1:${port}/web/`;
-    await waitFor(async () => { try { return (await fetch(url)).ok; } catch { return false; } }, "the server", 15000);
+    // (node:http, its body read: Node's fetch left a body unread and undici asserted on
+    // Windows CI, `assert(!this.paused)`, after e2e had passed)
+    await waitFor(async () => { try { return (await httpGet(url)).ok; } catch { return false; } }, "the server", 15000);
   }
   const profile = mkdtempSync(join(tmpdir(), "marcam-eye-"));
   const dport = await freePort();
   children.push(spawn(findBrowser(), ["--headless=new", `--remote-debugging-port=${dport}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", ...(process.env.MARCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []), "about:blank"], { stdio: "ignore" }));
-  const version = await waitFor(async () => { try { return await (await fetch(`http://127.0.0.1:${dport}/json/version`)).json(); } catch { return null; } }, "the browser", 20000);
+  const version = await waitFor(async () => { try { return (await httpGet(`http://127.0.0.1:${dport}/json/version`)).json(); } catch { return null; } }, "the browser", 20000);
   const ws = new WebSocket(version.webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener("open", r, { once: true }));
   let n = 0;

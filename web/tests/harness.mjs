@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { get as nodeHttpGet } from "node:http";
 // a GET over node:http, the body read to its end (Node's fetch has crashed on Windows CI in
 // undici, `assert(!this.paused)`, on a response whose body was left unread)
-function httpGet(u) {
+export function httpGet(u) {
   return new Promise((resolve, reject) => {
     const q = nodeHttpGet(u, (r) => {
       let body = "";
