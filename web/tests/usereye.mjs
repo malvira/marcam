@@ -1375,6 +1375,9 @@ try {
     const val = (name) => read(`document.getElementById('opForm')?.elements['${name}']?.value ?? null`);
     // the boss: its outline (the edge round its top), cut down its walls
     await addOp("contour", "3\\.175 x 12");
+    // (Mar's picking rule) before its pick: the one-line prompt only, nothing planned, no error
+    const before = await read(`(() => { const vis = ${VISIBLE}; return { prompt: vis(document.getElementById('pickNone')) ? document.getElementById('pickNone').textContent : '', tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).length, error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '', issues: [...document.querySelectorAll('.issues, #summary .error')].filter((e) => vis(e)).map((e) => e.textContent.slice(0, 60)) }; })()`);
+    check("carry-through: a contour added, nothing picked yet: only the 'Nothing picked' line, not planned, no error", /^Nothing picked\. Pick/.test(before.prompt) && before.tabs === 0 && !before.error && !before.issues.length, JSON.stringify(before));
     const bossPick = await pickOn("(x) => x.kind === 'edge_loop' && x.data.side === 'outside' && Math.abs(x.data.length - 48) < 0.5", "the boss");
     const bossDepth = +(await val("depth"));
     // the pocket in it
@@ -1419,6 +1422,12 @@ try {
     // it, as the Add list does)
     const idxOpt = await read("[...(document.getElementById('opForm')?.elements.__type?.options || [])].map((o) => o.textContent).join('|')");
     check("carry-through: on the 4th axis, an operation's Type list offers Indexed roughing (3+1)", /Indexed roughing \(3\+1\)/.test(idxOpt), idxOpt);
+    // (the knurl's simulation: no gouge where the knurl never cut, the carried piece's own
+    // resolution on the turned OD was counted as 3340 gouged cells)
+    await click("#simulate");
+    await waitFor(() => read("/Simulated in|failed|not started/.test(document.getElementById('status').textContent)"), "the knurl's simulation", 180000 * SLACK).catch(() => {});
+    const gouges = await read("({ status: document.getElementById('status').textContent, error: document.getElementById('error').textContent, cells: (window.__marcam.state.sim?.stocks || []).map((s) => s.gouge_cells) })");
+    check("carry-through: the knurl simulated: no gouge reported (the turned OD it never cut is not counted)", /Simulated in/.test(gouges.status) && !/gouged/.test(gouges.error) && gouges.cells.every((n) => n === 0), JSON.stringify(gouges));
     check("carry-through: the knurl on the OD picked on the part (radius 10, clear of the chuck, behind the turned-down part), planned",
       /Cylinder 20\.00/.test(odBand) && back && front && Math.abs(back[1] - 10) < 0.3 && Math.abs(front[1] - 10) < 0.3 && back[0] > -frame.length + 1.9 && front[0] <= -15 && /OK/.test(k.tab) && !k.error, `${odBand}; ${JSON.stringify(body)} ${JSON.stringify(k)}`);
     // its playback starts from the piece setup 1 left: the boss end narrower than the bar

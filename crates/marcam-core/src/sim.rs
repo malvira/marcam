@@ -1191,7 +1191,12 @@ pub fn deviation_with(
             d.cells += 1;
             sum += left.max(0.0);
             d.max_left = d.max_left.max(left);
-            let gouge = lo - s;
+            // (Mar's carry-through: 3340 "gouged" cells on the turned OD the knurl never
+            // touched) a cell below the part that nothing here cut is where the stock started
+            // (a piece carried in, at the previous setup's resolution), not a gouge of these
+            // programs: theirs only
+            let cut = stock.op[i * g.na + j] != 0;
+            let gouge = if cut { lo - s } else { (lo - s).min(0.0) };
             if gouge > d.max_gouge {
                 d.max_gouge = gouge;
                 d.gouge_at = Some((x, g.phi(j).to_degrees()));

@@ -783,6 +783,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     try {
       if (t.selected === t.draft.op.id && $("opForm")) op = readForm();
     } catch {}
+    if (unpicked(op)) return pv(null);
     const doc = structuredClone(t.doc);
     const s = doc.setups.find((x) => x.id === t.setup);
     if (!s) return pv(null);
@@ -1014,6 +1015,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
    *  body's ends, an edge, a cut's place, tabs' places): under Advanced, not in the form. */
   const TYPED_GEOMETRY = new Set(["paths", "points", "holes", "rect", "path", "x_range", "y_range", "a_range", "body_back", "body_front", "edge", "x", "tab_at"]);
 
+  /** The types whose geometry is a placeholder until something is picked (a contour round
+   *  the whole bar, a pocket's rectangle): a new one is not planned before a pick. */
+  const NEEDS_PICK = new Set(["contour", "pocket", "drill", "chamfer", "thread_mill", "bore"]);
+  /** (Mar's picking rule) a new operation of those types with nothing picked and no
+   *  coordinates typed under Advanced: its form and the one-line prompt only, not planned (a
+   *  contour round the whole bar showed a red holder collision before its pick). */
+  function unpicked(op) {
+    if (!op || !NEEDS_PICK.has(op.type) || !(t.draft && t.draft.op.id === op.id) || op.picks?.length) return false;
+    return ![...(t.edited || [])].some((k) => TYPED_GEOMETRY.has(k));
+  }
+
   function pickModeOf(ty) {
     if (!ty) return null;
     // before picking existed per type: rotary operations (and the raster) were bounded by faces
@@ -1031,7 +1043,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const list = [...new Set(mode.kinds.map((k) => names[k] || k.replace(/_/g, " ")))];
     const what = list.length > 1 ? `${list.slice(0, -1).join(", ")} or ${list[list.length - 1]}` : list[0];
     const typed = ty.params.some((p) => TYPED_GEOMETRY.has(p.name) && (Array.isArray(op[p.name]) ? op[p.name].length : op[p.name] != null));
-    const meanwhile = typed ? " (meanwhile: the coordinates under Advanced)" : mode.faces || mode.legacy ? " (meanwhile: the whole part)" : "";
+    const meanwhile = unpicked(op) ? "" : typed ? " (meanwhile: the coordinates under Advanced)" : mode.faces || mode.legacy ? " (meanwhile: the whole part)" : "";
     return `Nothing picked. Pick ${what} on the part${meanwhile}.`;
   }
 
@@ -2110,6 +2122,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const s = doc.setups.find((x) => x.id === t.setup);
     if (!s) return false;
     const isNew = !!(t.draft && t.draft.op.id === op.id);
+    if (isNew && unpicked(op)) {
+      showFormError(null);
+      return false;
+    }
     if (!isNew) {
       const was = s.operations.find((o) => o.id === op.id);
       // (a number the form shows at its default, not written in the project: left unwritten)
