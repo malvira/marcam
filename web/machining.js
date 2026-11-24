@@ -194,7 +194,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
    *  it plays; again: pause. */
   async function playButton() {
     if (!m.session) return;
-    if (!m.expanded || $("simControls").classList.contains("hidden")) await expand();
+    if (!m.expanded || $("simControls").classList.contains("hidden")) {
+      // (its opening dropped by a newer plan: the playback after it opens unfolded)
+      try {
+        await expand();
+      } catch {
+        return;
+      }
+    }
     $("simPlay").click();
   }
   /** The playback's controls (scrubber, speed, the end): shown, the stock simulated along if
@@ -1066,6 +1073,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     epoch++;
     close();
     Object.assign(m, { session: null, r: null, op: null, pos: 0, target: 0, wanted: null, busy: false, stockMesh: null, ghost: null, dgrid: null, dr: null, dop: null, toolNumber: null, colors: {} });
+    // (the play button disabled with the session gone: close drew it while it was there)
+    renderToggles();
     $("opLegend").innerHTML = "";
     const v = state.three;
     if (v && !v.failed && v.groups.machining) {
@@ -1251,13 +1260,19 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function lost(why) {
     // a newer plan (the playback being made for the last one stopped): what is shown stays
     // until the new playback replaces it, at the same place
-    if (why === "replanning" && m.open) {
+    // (and one the person just unfolded, being opened again with the stock: closed here, its
+    // controls folded and the playback after the plan came folded; ▶ pressed, nothing to see)
+    if (why === "replanning" && (m.open || m.expanded)) {
       if (m.session) m.keepAt = m.busy && m.wanted != null ? m.wanted : m.pos;
       m.session = null;
+      // (the play button as it is: nothing to play until the new playback; left enabled, a
+      // press did nothing)
+      renderToggles();
       return;
     }
     if (m.session || m.open) close();
     m.session = null;
+    renderToggles();
   }
 
   /** The playback's copies of the part (no stock: the part turns under the tool) where the

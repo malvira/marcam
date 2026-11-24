@@ -718,8 +718,13 @@ try {
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
   await js("const f = document.getElementById('opForm'); f.elements.points.value = '30 20; 33 20'; f.elements.points.dispatchEvent(new Event('input', { bubbles: true })); f.requestSubmit(); true");
   await waitFor(() => js(`document.querySelectorAll('#tree .tree-op').length === ${plateOps + 1}`), "the drill to be added", 60000);
-  const drillPts = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.type === 'drill' && o.points.length === 2)?.points)");
-  check("3-axis form: fully filled, and points are typed as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}`);
+  // (the project text written after the tree: waited for; the drill in whichever setup is
+  // selected, not only the first)
+  const drillOf = "(() => { const j = JSON.parse(document.getElementById('job').value); return JSON.stringify((j.setups || [j]).flatMap((s) => s.operations || []).find((o) => o.type === 'drill' && o.points?.length === 2)?.points); })()";
+  await waitFor(() => js(`${drillOf} !== undefined`), "the drill in the project", 30000).catch(() => {});
+  const drillPts = await js(drillOf);
+  const drillsSeen = await js("(() => { try { const j = JSON.parse(document.getElementById('job').value); return JSON.stringify((j.setups || [j]).flatMap((s) => (s.operations || []).filter((o) => o.type === 'drill').map((o) => s.id + ':' + JSON.stringify(o.points)))); } catch (e) { return 'unreadable: ' + e.message; } })()");
+  check("3-axis form: fully filled, and points are typed as 'x y; x y'", drillBlank === "" && drillPts === "[[30,20],[33,20]]", `blank: ${drillBlank || "none"}; points ${drillPts}; drills in the project ${drillsSeen}`);
   // a V-carve whose outline comes from an SVG file, through the form's file input
   const vOps = await js("document.querySelectorAll('#tree .tree-op').length");
   await js("document.getElementById('treeAddType').value = 'vcarve'; document.getElementById('treeAdd').click(); true");
