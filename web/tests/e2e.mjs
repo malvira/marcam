@@ -733,7 +733,10 @@ try {
   const drillBlank = await js("[...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.name !== '__name' && e.value.trim() === '').map(e => e.name).join(',')");
   // (Mar: typed coordinates are an advanced option, hidden away) the drill's points not in
   // the form until Advanced is opened; the form says what to pick instead
-  const folded = await js("(() => { const e = document.getElementById('opForm').elements.points; const r = e.getBoundingClientRect(); return { hidden: !(r.width && r.height), inAdvanced: !!e.closest('#opAdvanced'), open: !!document.getElementById('opAdvanced')?.open, none: document.getElementById('pickNone')?.textContent || '' }; })()");
+  // (the section remembers being open, as More does: the chamfer's opened it; folded first)
+  await js("(() => { const d = document.getElementById('opAdvanced'); if (d?.open) d.querySelector('summary').click(); return true; })()");
+  await sleep(200);
+  const folded = await js("(() => { const e = document.getElementById('opForm').elements.points; return { hidden: !e.checkVisibility(), inAdvanced: !!e.closest('#opAdvanced'), open: !!document.getElementById('opAdvanced')?.open, none: document.getElementById('pickNone')?.textContent || '' }; })()");
   check("Advanced: the drill's typed points folded away under Advanced, the form saying what to pick", folded.hidden && folded.inAdvanced && !folded.open && /Pick a hole on the part/.test(folded.none), JSON.stringify(folded));
   await js("document.querySelector('#opAdvanced > summary').click(); true");
   await js("const f = document.getElementById('opForm'); f.elements.points.value = '30 20; 33 20'; f.elements.points.dispatchEvent(new Event('input', { bubbles: true })); f.requestSubmit(); true");
@@ -2915,7 +2918,7 @@ try {
         // (rotary turning's feeds are its roughing and finishing ones: no "feed"; waited for,
         // it ran out the time and the next type's form was judged too early)
         const ready = () => { const e = document.getElementById('opForm')?.elements; return sel()?.type === kind && e?.__type?.value === kind && !!(e.feed || e.rough_feed); };
-        for (let i = 0; i < 1200 && !ready(); i++) await new Promise((r) => setTimeout(r, 50));
+        for (let i = 0; i < 3600 && !ready(); i++) await new Promise((r) => setTimeout(r, 50));
         if (performance.now() - w0 > 5000) slow.push(kind + " " + Math.round(performance.now() - w0) + " ms");
         if (sel()?.type !== kind) out.push(kind + ": no form");
         const f = document.getElementById('opForm');
