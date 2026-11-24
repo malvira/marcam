@@ -415,6 +415,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       for (const c of v.groups.part.children) {
         const k = c.clone(true);
         k.traverse((x) => (x.userData.shared = true));
+        k.userData.src = c;
         next.add(k);
       }
       m.stockMesh = null;
@@ -1259,6 +1260,39 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.session = null;
   }
 
+  /** The playback's copies of the part (no stock: the part turns under the tool) where the
+   *  part is: (Mar's knob) dragged off the axis, the part stayed drawn on it, the copies made
+   *  when the playback was; its plan failing, for good. Placed as the part each frame, made
+   *  again when its meshes are new (cheap: a compare while nothing moved). */
+  function syncPartCopies(v) {
+    const work = v.groups.work, part = v.groups.part;
+    if (!part || m.swapping) return;
+    const copies = work.children.filter((c) => c.userData.src);
+    if (!copies.length) return;
+    const srcs = part.children;
+    if (copies.length !== srcs.length || copies.some((k, i) => k.userData.src !== srcs[i])) {
+      // (the part's meshes made anew: copies of them; the old ones' geometry is the old
+      // part's, not disposed here)
+      for (const k of copies) work.remove(k);
+      for (const c of srcs) {
+        const k = c.clone(true);
+        k.traverse((x) => (x.userData.shared = true));
+        k.userData.src = c;
+        work.add(k);
+      }
+      applyLayers();
+      return;
+    }
+    for (const k of copies) {
+      const c = k.userData.src;
+      if (!k.position.equals(c.position) || !k.quaternion.equals(c.quaternion) || !k.scale.equals(c.scale)) {
+        k.position.copy(c.position);
+        k.quaternion.copy(c.quaternion);
+        k.scale.copy(c.scale);
+      }
+    }
+  }
+
   /** Picking on the model, a new operation's preview, placing tabs: they are drawn in the
    *  part's own frame, so the work is shown at A0 (and the tool hidden) meanwhile. Called
    *  every frame (cheap). */
@@ -1267,6 +1301,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // the vise's jaws go with the part and the stock, a playback open or not
     if (v?.groups?.jaws) v.groups.jaws.visible = view.part || view.stock;
     if (!m.open || !v || v.failed || !v.groups.work) return;
+    syncPartCopies(v);
     // (a test's chosen layers, View hooks: they stand until it clears them)
     if (state.viewShow) {
       if (v.groups.machining) v.groups.machining.visible = false;

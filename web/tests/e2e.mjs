@@ -2873,7 +2873,7 @@ try {
     await js("document.getElementById('example').value = 'knob_indexed'; document.getElementById('loadExample').click(); true");
     await settle();
     const gaps = await js(`await (async () => {
-      const t = window.__marcam.state.tree, out = [];
+      const t = window.__marcam.state.tree, out = [], slow = [];
       const kinds = [...document.getElementById('treeAddType').options].map((o) => o.value);
       for (const kind of kinds) {
         // (the tree draws its Add box again after a cancel: found each time)
@@ -2881,7 +2881,15 @@ try {
         document.getElementById('treeAdd').click();
         // (the form complete: its defaults in, the feed last)
         const sel = () => (t.draft?.op.id === t.selected ? t.draft.op : t.doc?.setups.find((x) => x.id === t.setup)?.operations.find((o) => o.id === t.selected));
-        for (let i = 0; i < 200 && !(sel()?.type === kind && document.getElementById('opForm')?.elements.feed); i++) await new Promise((r) => setTimeout(r, 50));
+        // (its defaults come from the engine worker that plans: on a slow runner after the
+        // last add's plan; Windows CI took over 10 s, the form before it judged instead)
+        const w0 = performance.now();
+        // (rotary turning's feeds are its roughing and finishing ones: no "feed"; waited for,
+        // it ran out the time and the next type's form was judged too early)
+        const ready = () => { const e = document.getElementById('opForm')?.elements; return sel()?.type === kind && e?.__type?.value === kind && !!(e.feed || e.rough_feed); };
+        for (let i = 0; i < 1200 && !ready(); i++) await new Promise((r) => setTimeout(r, 50));
+        if (performance.now() - w0 > 5000) slow.push(kind + " " + Math.round(performance.now() - w0) + " ms");
+        if (sel()?.type !== kind) out.push(kind + ": no form");
         const f = document.getElementById('opForm');
         const ty = t.types.find((x) => x.kind === kind);
         for (const p of ty.params) {
@@ -2895,9 +2903,10 @@ try {
         document.querySelector('#tree .tree-op[data-op="' + id + '"] [data-act="delete"]')?.click();
         for (let i = 0; i < 100 && t.doc?.setups.some((x) => x.operations.some((o) => o.id === id)); i++) await new Promise((r) => setTimeout(r, 50));
       }
-      return out;
+      return { out, slow };
     })()`);
-    check("every operation form shows every parameter of its type (the registry's)", gaps.length === 0, gaps.join(", "));
+    if (gaps.slow.length) console.log(`notice operation forms slow to open: ${gaps.slow.join(", ")}`);
+    check("every operation form shows every parameter of its type (the registry's)", gaps.out.length === 0, gaps.out.join(", "));
   }
 
   // 8y. (Mar) undo and redo for every edit: Edit > Undo / Redo and Ctrl+Z / Ctrl+Shift+Z

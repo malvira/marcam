@@ -233,19 +233,11 @@ function handleColours(img, [x0, y0, w, h]) {
   return { n, pts };
 }
 /** The centroid of the part's colour (#c8ccd2, lit: greys) in the view. */
-function partAt(img, [x0, y0, w, h]) {
-  let sx = 0, n = 0;
-  for (let y = y0; y < y0 + h; y += 2)
-    for (let x = x0; x < x0 + w; x += 2) {
-      const [r, g, b] = img.at(x, y);
-      if (r > 120 && Math.abs(r - g) < 12 && Math.abs(g - b) < 14 && r < 245) {
-        sx += x;
-        n++;
-      }
-    }
-  return n ? sx / n : null;
-}
-
+/** Where the part is drawn on the screen: its drawn meshes' box (the part's group, or the
+ *  playback's copy of it) projected by the camera, `{cx, w, h}` in page pixels; null when
+ *  none is drawn. (CI's software GL: grey pixels matched the stock and the panes as well,
+ *  a drag of 60 px read as 2) */
+const partDrawn = () => read(`(() => { const v = window.__marcam.state.three; const T = v.THREE; const shown = (o) => { for (let x = o; x; x = x.parent) { if (!x.visible) return false; if (x === v.scene) return true; } return false; }; const box = new T.Box3(); const add = (root) => root?.traverse((o) => { if ((o.isMesh) && shown(o) && o.geometry?.attributes?.position?.count) { o.updateMatrixWorld(true); if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); box.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld)); } }); add(v.groups.part); v.groups.work?.children.forEach((c) => c.userData.shared && add(c)); if (box.isEmpty()) return null; const el = v.renderer.domElement, rc = el.getBoundingClientRect(); let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity]; for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) { const p = new T.Vector3(x, y, z).project(v.camera); const sx = rc.left + ((p.x + 1) / 2) * rc.width, sy = rc.top + ((1 - p.y) / 2) * rc.height; lo = [Math.min(lo[0], sx), Math.min(lo[1], sy)]; hi = [Math.max(hi[0], sx), Math.max(hi[1], sy)]; } return { cx: (lo[0] + hi[0]) / 2, cy: (lo[1] + hi[1]) / 2, w: Math.round(hi[0] - lo[0]), h: Math.round(hi[1] - lo[1]) }; })()`);
 try {
   // ---------------------------------------------------------------- a fresh page
   await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
@@ -345,7 +337,7 @@ try {
   img = await shot("part_selected");
   hc = handleColours(img, r);
   check("the Part selected: handles in the view", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
-  const before = partAt(img, r);
+  const before = (await partDrawn())?.cx;
   if (hc.pts.red.length) {
     // the red arrow: from its pixels' middle, outward from the handles' middle
     const mid = (ps) => ps.reduce((a, p) => [a[0] + p[0] / ps.length, a[1] + p[1] / ps.length], [0, 0]);
@@ -365,7 +357,7 @@ try {
     const shownMid = await drag(from, [from[0] + (60 * d[0]) / l, from[1] + (60 * d[1]) / l]);
     await sleep(2500);
     img = await shot("part_dragged");
-    const after = partAt(img, r);
+    const after = (await partDrawn())?.cx;
     check("a handle dragged: its value shown while dragging, the part moved on screen", /[XYZ] [+-][\d.]+ /.test(shownMid) && before != null && after != null && Math.abs(after - before) > 3, `shown "${shownMid}"; part x ${before?.toFixed(0)} -> ${after?.toFixed(0)}`);
   }
   await clean("the part dragged");
@@ -432,21 +424,24 @@ try {
     const from = ax || near[Math.min(near.length - 1, 6)];
     const d = [from[0] - c[0], from[1] - c[1]];
     const l = Math.hypot(...d) || 1;
-    const b0 = partBox(img0, r);
+    const b0 = await partDrawn();
     await drag(from, [from[0] + (60 * d[0]) / l, from[1] + (60 * d[1]) / l]);
     await settled();
-    const b1 = partBox(await shot("after_drag_settled"), r);
+    await shot("after_drag_settled");
+    const b1 = await partDrawn();
     return { moved: !!(b0 && b1 && Math.abs(b1.cx - b0.cx) > 3), why: `part x ${b0?.cx.toFixed(0)} -> ${b1?.cx.toFixed(0)}` };
   };
   /** A typed value: it stays in its field after the plan settles, and the part moves. */
   const typed = async (pane, css, text) => {
     await openMore(pane);
-    const b0 = partBox(await shot("before_typed"), r);
+    await shot("before_typed");
+    const b0 = await partDrawn();
     await typeInto(css, text);
     await settled();
     await openMore(pane);
     const shown = await read(`document.querySelector('${css}')?.value`);
-    const b1 = partBox(await shot("after_typed"), r);
+    await shot("after_typed");
+    const b1 = await partDrawn();
     return { ok: shown === text && !!(b0 && b1 && (Math.abs(b1.cx - b0.cx) > 3 || Math.abs(b1.w - b0.w) > 3 || Math.abs(b1.h - b0.h) > 3)), why: `shown ${shown}; part ${JSON.stringify(b0 && [b0.cx.toFixed(0), b0.w, b0.h])} -> ${JSON.stringify(b1 && [b1.cx.toFixed(0), b1.w, b1.h])}` };
   };
   // setup 1: the part's position and angle typed (the handle drag above, settled, below)
@@ -677,6 +672,8 @@ try {
   const playhead = () => read("+document.getElementById('simScrub').value");
   const controls = async (where_) => {
     await settled();
+    // (the controls' state before ▶, just after, a second later: for CI's log)
+    let trail = [];
     // (the playback's controls, or the small play button that opens them)
     if (!(await where("#simPlay"))) {
       const p = await where("#vtPlay");
@@ -685,7 +682,14 @@ try {
       // (a person presses it once it is enabled: pressed while disabled it does nothing, and
       // on CI's software GL the setup's playback can still be opening)
       await waitFor(() => read("!document.getElementById('vtPlay').disabled"), "the play button enabled", 60000 * Number(process.env.MARCAM_PERF_SLACK || 1)).catch(() => {});
-      await click("#vtPlay");
+      const st = "(() => { const m = window.__marcam.state.machining; return (m.expanded ? 'E' : 'e') + (m.open ? 'O' : 'o') + (m.session ? 'S' : 's') + (document.getElementById('vtPlay').disabled ? 'd' : '') + '/' + (document.body.dataset.playback || '-'); })()";
+      trail = [await read(st)];
+      const at = await click("#vtPlay");
+      // (what is under the point pressed, and how many play buttons the page has)
+      trail.push(await read(`(() => { const e = document.elementFromPoint(${at[0]}, ${at[1]}); return 'hit:' + (e ? (e.id || e.tagName + '.' + e.className) + (e.closest('#vtPlay') ? '(in vtPlay)' : '') : 'none') + ' n:' + document.querySelectorAll('#vtPlay').length; })()`));
+      trail.push(await read(st));
+      await sleep(1000);
+      trail.push(await read(st));
       // (a setup continuing from another: its stock worked out first, from the setup before,
       // planned and simulated; slow on CI's software GL, hence its slack)
       await waitFor(() => where("#simPlay"), "the playback's controls", 60000 * Number(process.env.MARCAM_PERF_SLACK || 1)).catch(() => {});
@@ -696,7 +700,7 @@ try {
     const seen = {};
     for (const id of ["simPlay", "simStep", "simEnd", "simSpeed", "simScrub"]) seen[id] = !!(await where(`#${id}`));
     // (not there: what the playback was doing, for CI's log, where its screenshots are not)
-    const why = Object.values(seen).every(Boolean) ? "" : ` ${JSON.stringify(await read("(() => { const m = window.__marcam.state.machining; return { open: m.open, expanded: m.expanded, stock: m.stock, busy: m.busy, session: !!m.session, controls: document.getElementById('simControls').className, playback: document.body.dataset.playback, lock: window.__marcam.simLock?.busy, status: document.getElementById('status').textContent.slice(0, 120), error: document.getElementById('error').textContent.slice(0, 160) }; })()"))}`;
+    const why = Object.values(seen).every(Boolean) ? "" : ` trail ${trail.join(" ")} ${JSON.stringify(await read("(() => { const m = window.__marcam.state.machining; return { open: m.open, expanded: m.expanded, stock: m.stock, busy: m.busy, session: !!m.session, controls: document.getElementById('simControls').className, playback: document.body.dataset.playback, lock: window.__marcam.simLock?.busy, status: document.getElementById('status').textContent.slice(0, 120), error: document.getElementById('error').textContent.slice(0, 160) }; })()"))}`;
     if (why) await shot(`controls_missing_${where_.replace(/\W+/g, "_")}`);
     check(`${where_}: Play, Step, the end, the speed and the playhead on the screen`, Object.values(seen).every(Boolean), JSON.stringify(seen) + why);
     if (!seen.simPlay || !seen.simScrub) return;
@@ -855,13 +859,14 @@ try {
     const c = mid([...hcR.pts.red, ...hcR.pts.green]);
     const far = hcR.pts.blue.filter((p) => Math.hypot(p[0] - c[0], p[1] - c[1]) > 14).sort((a, b) => Math.hypot(a[0] - c[0], a[1] - c[1]) - Math.hypot(b[0] - c[0], b[1] - c[1]));
     const from = far[Math.min(far.length - 1, 6)];
-    const b0 = partBox(imgR, rv);
+    const b0 = await partDrawn();
     await drag(from, [from[0], from[1] - 50]);
     await settled();
     await openMore("partPane");
     const t1 = await tOf();
-    const b1 = partBox(await shot("radial_dragged"), rv);
-    check("the blue arrow dragged: the part off the axis on the screen and in its Z field", Math.abs(t1[2] - t0[2]) > 0.5 && !!(b0 && b1 && Math.abs(b1.cx - b0.cx) + Math.abs(b1.h - b0.h) > 2), `Z ${t0[2]} -> ${t1[2]}; part ${JSON.stringify(b0 && [b0.cx.toFixed(0), b0.h])} -> ${JSON.stringify(b1 && [b1.cx.toFixed(0), b1.h])}`);
+    await shot("radial_dragged");
+    const b1 = await partDrawn();
+    check("the blue arrow dragged: the part off the axis on the screen and in its Z field", Math.abs(t1[2] - t0[2]) > 0.5 && !!(b0 && b1 && Math.hypot(b1.cx - b0.cx, b1.cy - b0.cy) > 20), `Z ${t0[2]} -> ${t1[2]}; part centre ${JSON.stringify(b0 && [Math.round(b0.cx), Math.round(b0.cy)])} -> ${JSON.stringify(b1 && [Math.round(b1.cx), Math.round(b1.cy)])}`);
   }
   check("on the 4th axis: Center on axis, Center along stock, Flush to front and back in the Part", !!(await where(".part-presets button", "^Center on axis$")) && !!(await where(".part-presets button", "^Flush to front$")));
   await click(".part-presets button", "^Center on axis$");
@@ -1352,7 +1357,9 @@ try {
     // the slider's place for a speed (×10^v, v 0..3)
     const at = (v) => [slider[0] + 8 + ((slider[2] - 16) * v) / 3, slider[1]];
     const thumb = async () => at(+(await read("document.getElementById('simSpeed').value")));
-    const measure = () => read(`(async () => { const m = window.__marcam.state.machining; const tAt = (k) => (k <= 0 ? 0 : m.session.times[Math.min(k, m.session.times.length) - 1]); const h = () => (m.playing && m.head != null ? m.head : m.pos); const w0 = performance.now(), c0 = tAt(h()); let worst = 0, last = w0; await new Promise((r) => { const f = (t) => { worst = Math.max(worst, t - last); last = t; if (performance.now() - w0 < 2500) requestAnimationFrame(f); else r(); }; requestAnimationFrame(f); }); const w = (performance.now() - w0) / 1000; const shown = document.getElementById('simSpeedLabel').textContent; return { shown, factor: Math.pow(10, +document.getElementById('simSpeed').value), rate: (tAt(h()) - c0) / w, worst, lag: h() - m.pos }; })()`);
+    // (the clock against the frames' time, each counted to 0.1 s at most as the playback does:
+    // a frame held longer slows it, never jumps it; CI's software GL drew few, long frames)
+    const measure = () => read(`(async () => { const m = window.__marcam.state.machining; const tAt = (k) => (k <= 0 ? 0 : m.session.times[Math.min(k, m.session.times.length) - 1]); const h = () => (m.playing && m.head != null ? m.head : m.pos); const w0 = performance.now(), c0 = tAt(h()); let worst = 0, last = w0, capped = 0; await new Promise((r) => { const f = (t) => { worst = Math.max(worst, t - last); capped += Math.min(100, t - last); last = t; if (performance.now() - w0 < 2500) requestAnimationFrame(f); else r(); }; requestAnimationFrame(f); }); const w = capped / 1000; const shown = document.getElementById('simSpeedLabel').textContent; return { shown, factor: Math.pow(10, +document.getElementById('simSpeed').value), rate: (tAt(h()) - c0) / w, worst, lag: h() - m.pos }; })()`);
     const runs = [];
     for (const v of [0.3, 2, 0.3]) {
       await drag(await thumb(), at(v), 10);
@@ -1371,6 +1378,9 @@ try {
     await click("#simPlay");
     // (measured once it is playing again: Play first draws the stock afresh, then moves)
     await waitFor(async () => { const a = await read("window.__marcam.state.machining.head ?? -1"); await sleep(300); return (await read("window.__marcam.state.machining.head ?? -1")) > a; }, "playing again", 30000).catch(() => {});
+    // (and the stock drawn again for the Play pressed last, a build queued behind the first:
+    // the frame it holds is capped at 0.1 s of clock, so measured over it the clock runs slow)
+    await sleep(1500);
     const again = await measure();
     check("playback: Pause/Play pressed quickly twice: one loop, still at the speed shown (not twice it)", Math.abs(again.rate / again.factor - 1) < 0.1, JSON.stringify({ shown: again.shown, rate: +again.rate.toFixed(2) }));
     // the scrubber dragged while playing: on from where it was dropped
