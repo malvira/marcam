@@ -1314,25 +1314,55 @@ try {
     };
     // a feature picked as a person does: Pick on the model, a click on it in the 3D view
     // (turned to the iso view first if it cannot be seen), Done picking
-    const faceAt = (pred) => `(() => { const t = window.__marcam.state.tree, v = window.__marcam.state.three; const target = t.pick?.list.find(${pred}); if (!target) return null; const want = new Set(target.faces); const tri = t.regions.tri; const el = v.renderer.domElement, rc = el.getBoundingClientRect(); const ray = new v.THREE.Raycaster(); for (let k = 0; k < t.regions.of.length; k++) { if (!want.has(t.regions.list[t.regions.of[k]].id)) continue; for (const w of [[1/3, 1/3, 1/3], [0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]) { const c = new v.THREE.Vector3(...[0, 1, 2].map((d) => w[0] * tri[9*k+d] + w[1] * tri[9*k+3+d] + w[2] * tri[9*k+6+d])); const p = c.clone().project(v.camera); if (Math.abs(p.x) > 0.9 || Math.abs(p.y) > 0.9) continue; ray.setFromCamera(new v.THREE.Vector2(p.x, p.y), v.camera); const hit = ray.intersectObject(t.pickMesh)[0]; if (hit && hit.point.distanceTo(c) < 0.05) return [rc.left + ((p.x + 1) / 2) * rc.width, rc.top + ((1 - p.y) / 2) * rc.height]; } } return null; })()`;
+    const faceAt = (pred) => `(() => { const t = window.__marcam.state.tree, v = window.__marcam.state.three; const target = t.pick?.list.find(${pred}); if (!target) return null; const want = new Set(target.faces); const tri = t.regions.tri; const el = v.renderer.domElement, rc = el.getBoundingClientRect(); const ray = new v.THREE.Raycaster(); for (let k = 0; k < t.regions.of.length; k++) { if (!want.has(t.regions.list[t.regions.of[k]].id)) continue; for (const w of [[1/3, 1/3, 1/3], [0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]) { const c = new v.THREE.Vector3(...[0, 1, 2].map((d) => w[0] * tri[9*k+d] + w[1] * tri[9*k+3+d] + w[2] * tri[9*k+6+d])); const p = c.clone().project(v.camera); if (Math.abs(p.x) > 0.9 || Math.abs(p.y) > 0.9) continue; const sx = ((p.x + 1) / 2) * rc.width, sy = ((1 - p.y) / 2) * rc.height; const on = (dx, dy) => { ray.setFromCamera(new v.THREE.Vector2(((sx + dx) / rc.width) * 2 - 1, -((sy + dy) / rc.height) * 2 + 1), v.camera); const h = ray.intersectObject(t.pickMesh)[0]; return h && want.has(t.regions.list[t.regions.of[h.faceIndex]].id) ? h : null; }; const hit = on(0, 0); if (!hit || hit.point.distanceTo(c) > 0.05) continue; if (![[3, 0], [-3, 0], [0, 3], [0, -3]].every(([dx, dy]) => on(dx, dy))) continue; return [Math.round(rc.left + sx), Math.round(rc.top + sy)]; } } return null; })()`;
+    // (the view still: a turn of the camera animates; aimed mid-turn, the click landed where
+    // the part had been)
+    const still = () => waitFor(async () => { const a = await read("window.__marcam.state.three.camera.position.toArray().map((x) => x.toFixed(3)).join()"); await sleep(250); return a === (await read("window.__marcam.state.three.camera.position.toArray().map((x) => x.toFixed(3)).join()")); }, "the view still", 20000).catch(() => {});
     const pickOn = async (pred, what) => {
       await click("#pickFaces");
       await waitFor(() => read("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick?.list?.length"), `${what}: picking`, 60000);
-      await sleep(600);
+      // (aimed once the view is still, as a person does: a plan landing meanwhile (the new
+      // operation's) can frame the view again, and the point aimed at was then empty)
+      await settled();
+      await still();
       let at = await read(faceAt(pred));
       if (!at) {
         await read("window.__marcam.setView('iso', {})");
-        await sleep(600);
+        await sleep(300);
+        await still();
         at = await read(faceAt(pred));
       }
+      const scene = "(() => { const v = window.__marcam.state.three, t = window.__marcam.state.tree; return { cam: v.camera.position.toArray().map((x) => +x.toFixed(2)).join(), mesh: t.pickMesh?.uuid?.slice(0, 8), mw: t.pickMesh ? [...t.pickMesh.matrixWorld.elements].map((x) => +x.toFixed(2)).join() : null, parent: t.pickMesh?.parent?.type, visible: t.pickMesh?.visible }; })()";
+      const aimed = await read(scene);
       if (at) {
         await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1] });
         await S("Input.dispatchMouseEvent", { type: "mousePressed", x: at[0], y: at[1], button: "left", clickCount: 1 });
         await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: at[0], y: at[1], button: "left", clickCount: 1 });
         await sleep(1000);
       }
-      const picked = await read("(() => { const t = window.__marcam.state.tree; return [...(t.pick?.sel || [])].map((id) => t.pick.list.find((x) => x.id === id)?.label).join(' | '); })()");
+      const pickedNow = () => read("(() => { const t = window.__marcam.state.tree; return [...(t.pick?.sel || [])].map((id) => t.pick.list.find((x) => x.id === id)?.label).join(' | '); })()");
+      // (missed, the view moved under the click: aimed again and clicked once more, as a
+      // person does; the first miss in the log)
+      if (at && !(await pickedNow())) {
+        console.log(`  ${what}: the first click picked nothing; aimed again`);
+        await settled();
+        await still();
+        const again = await read(faceAt(pred));
+        if (again) {
+          await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: again[0], y: again[1] });
+          await S("Input.dispatchMouseEvent", { type: "mousePressed", x: again[0], y: again[1], button: "left", clickCount: 1 });
+          await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: again[0], y: again[1], button: "left", clickCount: 1 });
+          await sleep(1000);
+        }
+      }
+      const picked = await pickedNow();
       await shot(`carry_pick_${what.replace(/\W+/g, "_")}`);
+      // (nothing picked by the click: what was under it, and whether the same point picks it
+      // called directly, for the log; still a failure)
+      if (!picked) {
+        const diag = at ? await read(`(async () => { const v = window.__marcam.state.three, t = window.__marcam.state.tree; const e = document.elementFromPoint(${at[0]}, ${at[1]}); const r = v.renderer.domElement.getBoundingClientRect(); const pr = await window.__marcam.tree.pickAt(${at[0]} - r.left, ${at[1]} - r.top); const sel = [...t.pick.sel].length; if (sel) t.pick.sel.clear(); return { under: e ? (e.tagName + '#' + e.id + (e === v.renderer.domElement ? '(the view)' : '')) : 'none', notes: t.pick.notes, direct: pr ? (pr.pickable?.label || 'a face, nothing to pick') : 'no face', picking: !!t.picking, n: t.pick.list.length }; })()`) : { at: "no point of it seen" };
+        console.log(`  ${what}: the click picked nothing: ${JSON.stringify(diag)}; aimed at ${JSON.stringify(at)} with ${JSON.stringify(aimed)}; now ${JSON.stringify(await read(scene))}; aimed now ${JSON.stringify(await read(faceAt(pred)))}`);
+      }
       await click("#pickFaces");
       await waitFor(() => read("!window.__marcam.state.tree.pickMesh"), `${what}: done picking`, 60000).catch(() => {});
       await settled();
