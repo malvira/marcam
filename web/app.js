@@ -156,6 +156,12 @@ function engine(cmd, ...args) {
 /** The angles indexed 3D roughing finds for itself (index count, no indexes), by what they
  *  depend on: found again only when one of those changes. */
 const gapCache = new Map();
+/** The key a project's toolpaths are handed over under (see planAndPost's toolpaths_json and
+ *  seedPlan): the meshes as they are, the setup, the project exactly as planned. */
+const planKey = (job, setup, libs) => JSON.stringify([state.meshesGen, setup ?? null, libs ?? null, job]);
+/** The simulating workers, handed the toolpaths the planner made (they plan nothing again). */
+const SIMULATING = new Set(["sim", "stats"]);
+
 /** The engine calls that plan the project they are given. */
 const PLANS = new Set(["simulate", "simOpen", "simGrid", "gpuOpen", "carriedMesh", "planAndPost"]);
 /** An engine call on worker `which` ("main", "sim", or one of the pool's, see [`pool`]). */
@@ -168,6 +174,8 @@ function engineOn(which, cmd, ...args) {
   // the person's tool libraries: their tools' cutting data for new operations' defaults
   // (and every command that reads the project: one of their tools is found in them)
   if (WITH_LIBRARIES.has(cmd) && args[1] && typeof args[1] === "object" && !args[1].libraries) args[1] = { ...args[1], libraries: libraries() };
+  // (a simulating worker: told which toolpaths it was handed, the planner's for this project)
+  if (SIMULATING.has(which) && PLANS.has(cmd) && args[0] && args[1] && typeof args[1] === "object") args[1] = { ...args[1], plan_key: planKey(args[0], args[1].setup, args[1].libraries) };
   const id = nextId++;
   simCallStart(cmd);
   if (!workers[which]) startWorker(which);
@@ -779,7 +787,16 @@ async function generate(opts = {}) {
     // (diagnostics: how long the angles took, across the pool)
     state.gapMs = performance.now() - t0;
     if (run !== state.genRun || !planned) return;
-    const { result } = await engine("planAndPost", planned, machineArg(), state.mesh, { max_points: 150000, libraries: libraries(), setup: job.schema_version === "0.2" ? setupId : undefined });
+    const setupArg = job.schema_version === "0.2" ? setupId : undefined;
+    const libs = libraries();
+    const { result } = await engine("planAndPost", planned, machineArg(), state.mesh, { max_points: 150000, libraries: libs, setup: setupArg, export_toolpaths: true });
+    // (the toolpaths handed to the simulating workers: the playback opens without planning them
+    // all again, the impeller's 12 s)
+    if (result.toolpaths_json) {
+      const key = planKey(withKnownAngles(planned), setupArg, libs);
+      for (const w of SIMULATING) engineOn(w, "seedPlan", key, result.toolpaths_json).catch(() => {});
+      delete result.toolpaths_json;
+    }
     const ms = performance.now() - t0;
     // an edit since then (auto-regenerate) has asked for a newer run: this one is dropped
     if (run !== state.genRun) return;

@@ -106,6 +106,25 @@ pub mod api {
     }
 
     thread_local! {
+        /// Toolpaths planned elsewhere (the page's planning worker) for a project, by the key
+        /// the page gives them: [`plan_for_sim`] takes them when a call names that key.
+        static SEED: std::cell::RefCell<Option<(String, Vec<Toolpath>)>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Hand this worker the toolpaths planned elsewhere (`toolpaths`: JSON, as planAndPost's
+    /// `toolpaths_json`) under `key`: `{ok, toolpaths}`.
+    pub fn seed_plan(key: &str, toolpaths: &str) -> Value {
+        match serde_json::from_str::<Vec<Toolpath>>(toolpaths) {
+            Ok(t) => {
+                let n = t.len();
+                SEED.with(|s| *s.borrow_mut() = Some((key.to_string(), t)));
+                json!({ "ok": true, "toolpaths": n })
+            }
+            Err(e) => err(format!("seed_plan: {e}")),
+        }
+    }
+
+    thread_local! {
         /// Operations planned before (see marcam::PlanCache).
         static PLAN_CACHE: std::cell::RefCell<marcam::PlanCache> = std::cell::RefCell::new(marcam::PlanCache::new());
     }
@@ -135,12 +154,25 @@ pub mod api {
         mesh: Option<&Mesh>,
         opts: &Value,
     ) -> Result<Vec<Toolpath>, marcam::Error> {
-        let mut tps = PLAN_CACHE.with(|c| {
-            let mut c = c.borrow_mut();
-            let r = marcam::plan_with_mesh_cached(job, mesh, &mut c);
-            c.take_counts();
-            r
-        })?;
+        // (the toolpaths the page's planner made, handed over for this very project: not
+        // planned again here, the impeller's took 12 s more before its playback could open)
+        let seeded = opts["plan_key"].as_str().and_then(|k| {
+            SEED.with(|s| {
+                s.borrow()
+                    .as_ref()
+                    .filter(|(key, _)| key == k)
+                    .map(|(_, t)| t.clone())
+            })
+        });
+        let mut tps = match seeded {
+            Some(t) => t,
+            None => PLAN_CACHE.with(|c| {
+                let mut c = c.borrow_mut();
+                let r = marcam::plan_with_mesh_cached(job, mesh, &mut c);
+                c.take_counts();
+                r
+            })?,
+        };
         let hide: Vec<u32> = opts["hide"]
             .as_array()
             .map(|a| {
@@ -424,6 +456,9 @@ pub mod api {
             "programs": programs,
             "time_total_s": total_s,
             "plan_cache": { "reused": reused, "planned": planned },
+            // (`export_toolpaths`: the toolpaths too, for the page to hand to its simulating
+            // worker instead of it planning them again)
+            "toolpaths_json": (opts["export_toolpaths"] == true).then(|| serde_json::to_string(&tps).ok()).flatten(),
         })
     }
 
@@ -2077,6 +2112,7 @@ pub mod api {
             "gap_keys" => gap_keys(&s(a)),
             "gap_depths" => gap_depths(&d(a), &s(b), c),
             "gap_pick" => gap_pick(&s(a)),
+            "seed_plan" => seed_plan(&s(a), &s(b)),
             "gap_fine_keys" => gap_fine_keys(&s(a)),
             "carried_mesh" => carried_mesh(&d(a), &s(b), c),
             "svg_paths" => svg_paths(&s(a), &s(b)),
