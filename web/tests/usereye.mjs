@@ -1293,6 +1293,84 @@ try {
     await click("#vtPlay").catch(() => {});
     await clean("the cut piece carried on");
   }
+  // ---------------------------------------------------------------- playback: one clock
+  // (Mar: "the simulation sliders [are] not very consistent. changing the speed ... causes
+  // visual bugs and the wrong playback speed"; chunky when fast) the knob playing with its
+  // stock; the speed slider dragged low, high, low: the machine clock runs at the speed shown,
+  // frames in budget, the stock right behind; the scrubber dragged while playing: it goes on
+  // from there; paused, the stock drawn is the one a fresh seek to that place draws
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { const s = document.getElementById('example'); s.value = 'knob'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    // the stock on (its toggle), then Play
+    const stockBtn = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return b.getAttribute('aria-pressed') === 'true' ? null : [r.left + r.width / 2, r.top + r.height / 2]; })()");
+    if (stockBtn) await drag(stockBtn, stockBtn, 1);
+    await sleep(800);
+    await click("#vtPlay");
+    await waitFor(() => read("document.body.dataset.playing === 'yes' && !!window.__marcam.state.machining?.session"), "the playback playing", 120000);
+    await sleep(1500);
+    const slider = await read("(() => { const r = document.getElementById('simSpeed').getBoundingClientRect(); return [r.left, r.top + r.height / 2, r.width]; })()");
+    // the slider's place for a speed (×10^v, v 0..3)
+    const at = (v) => [slider[0] + 8 + ((slider[2] - 16) * v) / 3, slider[1]];
+    const thumb = async () => at(+(await read("document.getElementById('simSpeed').value")));
+    const measure = () => read(`(async () => { const m = window.__marcam.state.machining; const tAt = (k) => (k <= 0 ? 0 : m.session.times[Math.min(k, m.session.times.length) - 1]); const h = () => (m.playing && m.head != null ? m.head : m.pos); const w0 = performance.now(), c0 = tAt(h()); let worst = 0, last = w0; await new Promise((r) => { const f = (t) => { worst = Math.max(worst, t - last); last = t; if (performance.now() - w0 < 2500) requestAnimationFrame(f); else r(); }; requestAnimationFrame(f); }); const w = (performance.now() - w0) / 1000; const shown = document.getElementById('simSpeedLabel').textContent; return { shown, factor: Math.pow(10, +document.getElementById('simSpeed').value), rate: (tAt(h()) - c0) / w, worst, lag: h() - m.pos }; })()`);
+    const runs = [];
+    for (const v of [0.3, 2, 0.3]) {
+      await drag(await thumb(), at(v), 10);
+      await sleep(700);
+      runs.push(await measure());
+    }
+    const SL = Number(process.env.MARCAM_PERF_SLACK || 1);
+    const rateOk = runs.every((r) => Math.abs(r.rate / r.factor - 1) < 0.1);
+    const framesOk = runs.every((r) => r.worst < 50 * SL);
+    check("playback: the speed slider dragged low, high, low while playing: the machine clock runs at the speed shown (within 10%) each time", rateOk, JSON.stringify(runs.map((r) => ({ shown: r.shown, rate: +r.rate.toFixed(2) }))));
+    check("playback: frames in budget at every speed (none held over 50 ms), the stock right behind the playhead", framesOk, JSON.stringify(runs.map((r) => ({ worst: Math.round(r.worst), lag: r.lag }))));
+    // one loop: Pause and Play pressed quickly twice; the clock still at the speed shown
+    await click("#simPlay");
+    await click("#simPlay");
+    await click("#simPlay");
+    await click("#simPlay");
+    await sleep(600);
+    const again = await measure();
+    check("playback: Pause/Play pressed quickly twice: one loop, still at the speed shown (not twice it)", Math.abs(again.rate / again.factor - 1) < 0.1, JSON.stringify({ shown: again.shown, rate: +again.rate.toFixed(2) }));
+    // the scrubber dragged while playing: on from where it was dropped
+    const scrub = await read("(() => { const r = document.getElementById('simScrub').getBoundingClientRect(); return [r.left, r.top + r.height / 2, r.width, +document.getElementById('simScrub').max]; })()");
+    const pos = () => read("(() => { const m = window.__marcam.state.machining; return m.playing && m.head != null ? m.head : m.pos; })()");
+    const xOf = (k) => scrub[0] + 8 + ((scrub[2] - 16) * k) / scrub[3];
+    const now = await pos();
+    const goal = Math.round(scrub[3] * 0.25);
+    await drag([xOf(now), scrub[1]], [xOf(goal), scrub[1]], 12);
+    await sleep(1200);
+    const after = await pos();
+    check("playback: the scrubber dragged while playing: the playhead goes on from where it was dropped", Math.abs(after - goal) < scrub[3] * 0.05 && after >= goal - 5, JSON.stringify({ from: now, dropped: goal, after }));
+    // paused: the stock drawn is what a fresh seek to that place draws
+    await click("#simPlay");
+    await waitFor(() => read("document.body.dataset.playing !== 'yes' && !window.__marcam.state.machining.busy"), "paused", 30000);
+    await sleep(800);
+    const here = await read("window.__marcam.state.machining.pos");
+    const vr = await viewRect();
+    const a = await shot("playback_paused");
+    // (back to the start and to the same place again by the scrubber: a fresh seek)
+    await drag([xOf(here), scrub[1]], [xOf(0), scrub[1]], 6);
+    await waitFor(() => read("window.__marcam.state.machining.pos === 0 && !window.__marcam.state.machining.busy"), "the start", 60000).catch(() => {});
+    await read(`(() => { const s = document.getElementById('simScrub'); s.value = '${here}'; s.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await waitFor(() => read(`window.__marcam.state.machining.pos === ${here} && !window.__marcam.state.machining.busy`), "the same place again", 120000).catch(() => {});
+    await sleep(800);
+    const b = await shot("playback_fresh_seek");
+    let diff = 0, n = 0;
+    for (let y = vr[1]; y < vr[1] + vr[3]; y += 2)
+      for (let x = vr[0]; x < vr[0] + vr[2]; x += 2) {
+        const p = a.at(x, y), q = b.at(x, y);
+        n++;
+        if (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]) > 60) diff++;
+      }
+    check("playback: paused after all that, the stock drawn is the same as a fresh seek to that place draws", diff < n * 0.01, `${diff} of ${n} px differ at move ${here}`);
+    await clean("the playback's speed and scrubber");
+  }
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

@@ -507,11 +507,16 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   const moving = () => !!m.expanded && (m.playing || performance.now() - (m.scrubAt || 0) < 1500);
   /** The toolpath drawn: at rest all of it alike; while moving, what has been played and
    *  (faint) what is to come; "up to the playhead": only what has been played. */
+  /** The playhead: the clock's place while playing (see frame), else the stock's. */
+  function head() {
+    return m.playing && m.head != null ? m.head : m.pos;
+  }
+
   function showRange() {
     // (a new playback being built: the old one shown as it is, its toolpath drawn as it was)
     if (!m.paths || !m.session || m.swapping) return;
     const n = m.session.segments;
-    const at = Math.min(m.pos, n);
+    const at = Math.min(head(), n);
     const upTo = m.expanded && view.paths === "playhead" ? at : moving() ? at : n;
     const ahead = m.expanded && view.paths === "all" && moving() ? n - at : 0;
     m.moving = moving();
@@ -634,15 +639,17 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
     if (!v || v.failed || !m.session || !m.session.segments) return;
     const s = m.session;
-    const k = Math.max(0, Math.min(m.pos, s.segments) - 1);
+    // (Mar: "the wrong playback speed", chunky when fast) the playhead: where the clock is
+    // while playing, the stock catching up behind it; else the stock's place
+    const at = head();
+    const k = Math.max(0, Math.min(at, s.segments) - 1);
     const p = s.path;
     // machine tool tip, A, rapid, tool, operation tag
     let [x, y, z, a, , toolNo, opTag] = p.subarray(7 * k, 7 * k + 7);
     // playing: part of the way along the move under way (it does not jump move to move)
-    // (only once the stock has caught up with the move the fraction belongs to)
-    const f = m.playing && m.fracAt === m.pos ? m.frac || 0 : 0;
-    if (f > 0 && m.pos < s.segments && m.pos > 0) {
-      const q = p.subarray(7 * m.pos, 7 * m.pos + 7);
+    const f = m.playing && m.fracAt === at ? m.frac || 0 : 0;
+    if (f > 0 && at < s.segments && at > 0) {
+      const q = p.subarray(7 * at, 7 * at + 7);
       if (q[5] === toolNo) {
         x += (q[0] - x) * f;
         y += (q[1] - y) * f;
@@ -669,8 +676,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     v.groups.toolModel.visible = !!m.expanded && view.tool;
     syncFrame();
     showRange();
-    const clock = s.times?.length ? ` · ${fmtClock(timeAt(m.pos))} / ${fmtClock(s.times[s.times.length - 1])}` : "";
-    $("simLabel").textContent = `move ${m.pos.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${clock}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.stock ? (m.gpu ? "GPU" : "CPU") : "no stock"}${m.note ? ` · ${m.note}` : ""}`;
+    const clock = s.times?.length ? ` · ${fmtClock(timeAt(at))} / ${fmtClock(s.times[s.times.length - 1])}` : "";
+    if (m.playing) $("simScrub").value = String(at);
+    $("simLabel").textContent = `move ${at.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${clock}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.stock ? (m.gpu ? "GPU" : "CPU") : "no stock"}${m.note ? ` · ${m.note}` : ""}`;
   }
 
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
@@ -727,7 +735,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.stockMesh.geometry.attributes.color.needsUpdate = true;
       barNormals(m.stockMesh.geometry, i0 - 1, i1 + 1);
     }
-    $("simScrub").value = String(m.pos);
+    if (!m.playing) $("simScrub").value = String(m.pos);
     placeTool();
   }
 
@@ -1076,16 +1084,28 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
   }
 
+  /** Start the playing loop: one at a time (a Play pressed again, or Pause then Play within
+   *  a frame, started a second one, and it played twice as fast). */
+  function startLoop() {
+    const id = (m.loopId = (m.loopId || 0) + 1);
+    const step = (t) => {
+      if (id !== m.loopId) return;
+      if (frame(t)) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  /** One frame of playing: false when it stops. */
   function frame(t) {
     if (!m.playing) {
+      m.head = null;
       restride();
-      return;
+      return false;
     }
     // (the playback being replaced after a plan: on once it is)
     if (!m.session || m.swapping) {
       m.last = t;
-      requestAnimationFrame(frame);
-      return;
+      return true;
     }
     const dt = Math.min(0.1, (t - (m.last || t)) / 1000);
     m.last = t;
@@ -1109,7 +1129,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       }
       next = segmentsBy(m.clock);
       // (a run of moves that take no time: one at least each frame)
-      if (next < ts.length && next === m.pos && ts[next] <= timeAt(m.pos)) next++;
+      const from = m.head ?? m.pos;
+      if (next < ts.length && next === from && ts[next] <= timeAt(from)) next++;
       const t0 = timeAt(next), t1 = next < ts.length ? ts[next] : t0;
       m.frac = t1 > t0 ? Math.max(0, Math.min(1, (m.clock - t0) / (t1 - t0))) : 0;
       m.fracAt = next;
@@ -1118,16 +1139,20 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.frac = 0;
     }
     next = Math.min(m.session.segments, next);
-    if (next === m.pos) placeTool();
-    else if (!m.busy) seek(next);
-    if (m.pos >= m.session.segments) {
+    // the playhead goes where the clock is, every frame; the stock follows it (as far as the
+    // engine has got: it catches up in the frames after, never holding the playhead back)
+    m.head = next;
+    if (next !== m.target || (!m.busy && next !== m.pos)) seek(next);
+    placeTool();
+    if (next >= m.session.segments && m.pos >= m.session.segments) {
       m.playing = false;
+      m.head = null;
       $("simPlay").textContent = "Play";
       document.body.dataset.playing = "";
       restride();
-      return;
+      return false;
     }
-    requestAnimationFrame(frame);
+    return true;
   }
 
   // opened again by hand: not open until the new playback is (at the same place)
@@ -1151,7 +1176,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (m.playing) {
       if (m.pos >= m.session.segments) seek(0);
       m.last = 0;
-      restride().then(() => requestAnimationFrame(frame));
+      m.head = null;
+      restride().then(() => m.playing && startLoop());
     }
   });
   $("simStep").addEventListener("click", () => {
@@ -1159,9 +1185,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (m.session) seek(Math.min(m.session.segments, m.pos + 1));
   });
   $("simScrub").addEventListener("input", () => {
-    m.clock = null;
+    const at = +$("simScrub").value;
+    // (playing: the clock goes on from where it was dropped, not from where the stock was)
+    m.clock = m.playing && m.session?.times?.length ? timeAt(at) : null;
+    m.head = m.playing ? at : null;
     m.scrubAt = performance.now();
-    seek(+$("simScrub").value);
+    seek(at);
   });
   $("simEnd").addEventListener("click", () => {
     m.clock = null;
