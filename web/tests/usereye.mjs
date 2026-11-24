@@ -1429,7 +1429,7 @@ try {
     if (stockToggle) await drag(stockToggle, stockToggle, 1);
     await waitFor(() => read("(window.__marcam.state.sim?.stocks || []).length > 0"), "the knurl's simulation", 180000 * SLACK).catch(() => {});
     await settled();
-    const gouges = await read("({ error: document.getElementById('error').textContent, cells: (window.__marcam.state.sim?.stocks || []).map((s) => s.gouge_cells), summary: document.getElementById('summary').textContent.match(/Simulated stock[^\n]*/)?.[0]?.slice(0, 160) || '' })");
+    const gouges = await read("({ error: document.getElementById('error').textContent, cells: (window.__marcam.state.sim?.stocks || []).map((s) => s.gouge_cells), summary: document.getElementById('summary').textContent.split('Simulated stock')[1]?.slice(0, 160) || '' })");
     check("carry-through: the knurl simulated: no gouge reported (the turned OD it never cut is not counted)", gouges.cells.length > 0 && !/gouged/.test(gouges.error) && gouges.cells.every((n) => n === 0), JSON.stringify(gouges));
     if (stockToggle) await drag(stockToggle, stockToggle, 1);
     check("carry-through: the knurl on the OD picked on the part (radius 10, clear of the chuck, behind the turned-down part), planned",
