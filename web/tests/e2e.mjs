@@ -1343,9 +1343,12 @@ try {
       await waitDone("generation of part B", 240000);
       const withB = await scene();
       const gB = await allGcode();
+      // (B's playback may already be open: its plan's toolpaths handed to the simulation, it
+      // opens at once; what it plays is B's, nothing of A's)
+      const playsB = await js("(() => { const s = window.__marcam.state.machining.session; return s ? s.ops.map((o) => o.program).join(',') : ''; })()");
       check("after the reset, importing B shows only B: B's triangles, B's G-code (nothing named after A)",
-        withB.partTris === domeTris && /dome\.stl/.test(withB.meshInfo) && !/knob/i.test(gB) && /dome/i.test(gB) && withB.tabs >= 2 && !withB.machining && !withB.pickMesh,
-        `${withB.partTris} part triangles (B has ${domeTris}); ${withB.meshInfo}; ${withB.tabs} programs`);
+        withB.partTris === domeTris && /dome\.stl/.test(withB.meshInfo) && !/knob/i.test(gB) && /dome/i.test(gB) && withB.tabs >= 2 && !/knob/i.test(playsB) && !withB.pickMesh,
+        `${withB.partTris} part triangles (B has ${domeTris}); ${withB.meshInfo}; ${withB.tabs} programs; G-code knob ${/knob/i.test(gB)} dome ${/dome/i.test(gB)}; playing ${playsB || "nothing"}; picking ${withB.pickMesh}`);
       await shot("14i_only_b");
       // New three times: no growth
       const runs = [];

@@ -1357,9 +1357,11 @@ try {
     // the slider's place for a speed (×10^v, v 0..3)
     const at = (v) => [slider[0] + 8 + ((slider[2] - 16) * v) / 3, slider[1]];
     const thumb = async () => at(+(await read("document.getElementById('simSpeed').value")));
+    // (the playback's machine clock itself, not the move the playhead is on: a move seconds
+    // long held the move number still and the rate read low or high by where it fell)
     // (the clock against the frames' time, each counted to 0.1 s at most as the playback does:
     // a frame held longer slows it, never jumps it; CI's software GL drew few, long frames)
-    const measure = () => read(`(async () => { const m = window.__marcam.state.machining; const tAt = (k) => (k <= 0 ? 0 : m.session.times[Math.min(k, m.session.times.length) - 1]); const h = () => (m.playing && m.head != null ? m.head : m.pos); const w0 = performance.now(), c0 = tAt(h()); let worst = 0, last = w0, capped = 0; await new Promise((r) => { const f = (t) => { worst = Math.max(worst, t - last); capped += Math.min(100, t - last); last = t; if (performance.now() - w0 < 2500) requestAnimationFrame(f); else r(); }; requestAnimationFrame(f); }); const w = capped / 1000; const shown = document.getElementById('simSpeedLabel').textContent; return { shown, factor: Math.pow(10, +document.getElementById('simSpeed').value), rate: (tAt(h()) - c0) / w, worst, lag: h() - m.pos }; })()`);
+    const measure = () => read(`(async () => { const m = window.__marcam.state.machining; const tAt = (k) => (k <= 0 ? 0 : m.session.times[Math.min(k, m.session.times.length) - 1]); const h = () => (m.playing && m.head != null ? m.head : m.pos); const clk = () => (m.playing && m.clock != null ? m.clock : tAt(h())); const w0 = performance.now(), c0 = clk(); let worst = 0, last = w0, capped = 0; await new Promise((r) => { const f = (t) => { worst = Math.max(worst, t - last); capped += Math.min(100, t - last); last = t; if (performance.now() - w0 < 2500) requestAnimationFrame(f); else r(); }; requestAnimationFrame(f); }); const w = capped / 1000; const shown = document.getElementById('simSpeedLabel').textContent; return { shown, factor: Math.pow(10, +document.getElementById('simSpeed').value), rate: (clk() - c0) / w, worst, lag: h() - m.pos }; })()`);
     const runs = [];
     for (const v of [0.3, 2, 0.3]) {
       await drag(await thumb(), at(v), 10);
