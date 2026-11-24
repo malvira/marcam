@@ -1424,10 +1424,14 @@ try {
     check("carry-through: on the 4th axis, an operation's Type list offers Indexed roughing (3+1)", /Indexed roughing \(3\+1\)/.test(idxOpt), idxOpt);
     // (the knurl's simulation: no gouge where the knurl never cut, the carried piece's own
     // resolution on the turned OD was counted as 3340 gouged cells)
-    await click("#simulate");
-    await waitFor(() => read("/Simulated in|failed|not started/.test(document.getElementById('status').textContent)"), "the knurl's simulation", 180000 * SLACK).catch(() => {});
-    const gouges = await read("({ status: document.getElementById('status').textContent, error: document.getElementById('error').textContent, cells: (window.__marcam.state.sim?.stocks || []).map((s) => s.gouge_cells) })");
-    check("carry-through: the knurl simulated: no gouge reported (the turned OD it never cut is not counted)", /Simulated in/.test(gouges.status) && !/gouged/.test(gouges.error) && gouges.cells.every((n) => n === 0), JSON.stringify(gouges));
+    // (as a person does: the view's Simulated stock toggle on, the simulation runs behind)
+    const stockToggle = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return b.getAttribute('aria-pressed') === 'true' ? null : [r.left + r.width / 2, r.top + r.height / 2]; })()");
+    if (stockToggle) await drag(stockToggle, stockToggle, 1);
+    await waitFor(() => read("(window.__marcam.state.sim?.stocks || []).length > 0"), "the knurl's simulation", 180000 * SLACK).catch(() => {});
+    await settled();
+    const gouges = await read("({ error: document.getElementById('error').textContent, cells: (window.__marcam.state.sim?.stocks || []).map((s) => s.gouge_cells), summary: document.getElementById('summary').textContent.match(/Simulated stock[^\n]*/)?.[0]?.slice(0, 160) || '' })");
+    check("carry-through: the knurl simulated: no gouge reported (the turned OD it never cut is not counted)", gouges.cells.length > 0 && !/gouged/.test(gouges.error) && gouges.cells.every((n) => n === 0), JSON.stringify(gouges));
+    if (stockToggle) await drag(stockToggle, stockToggle, 1);
     check("carry-through: the knurl on the OD picked on the part (radius 10, clear of the chuck, behind the turned-down part), planned",
       /Cylinder 20\.00/.test(odBand) && back && front && Math.abs(back[1] - 10) < 0.3 && Math.abs(front[1] - 10) < 0.3 && back[0] > -frame.length + 1.9 && front[0] <= -15 && /OK/.test(k.tab) && !k.error, `${odBand}; ${JSON.stringify(body)} ${JSON.stringify(k)}`);
     // its playback starts from the piece setup 1 left: the boss end narrower than the bar
