@@ -684,16 +684,19 @@ const SCENARIOS = {
     () => A.replaceModel(r0, "oval_grip_one_oval.stl"),
     () => A.generate(),
   ],
-  "an applied operation's type changed, then cancelled: the old one stays": () => [
+  // (forms apply as they change, no Cancel: Undo is the way back)
+  "an applied operation's type changed, then undone: the old one is back": () => [
     () => A.importStl(r0, "bracket.stl", "vise"),
     () => A.select({ pick: (xs) => xs[0] }),
     async () => {
       const before = await js("document.getElementById('job').value");
       await A.changeType(r0, "contour");
-      await A.cancel();
+      await settle(400);
+      const changed = await js("document.getElementById('job').value");
+      await A.histUndo();
       const after = await js("document.getElementById('job').value");
       const t = await js("document.getElementById('opForm')?.elements.__type?.value || ''");
-      return { log: "retype then cancel", extra: before === after && t !== "contour" ? [] : ["cancel did not restore the operation"] };
+      return { log: "retype then undo", extra: changed !== before && before === after && t !== "contour" ? [] : [`undo did not restore the operation (changed ${changed !== before}, restored ${before === after}, form ${t})`] };
     },
   ],
   "an applied operation's type changed and applied: picks it cannot take are cleared": () => [

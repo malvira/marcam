@@ -809,6 +809,10 @@ try {
   await click("#treeAdd");
   await waitFor(() => read("(() => { try { const d = JSON.parse(document.getElementById('job').value); return d.setups[1]?.operations.length === 1 && document.body.dataset.state !== 'busy'; } catch { return false; } })()"), "setup 2's facing", 120000).catch(() => {});
   await controls("setup 2 (continuing)");
+  // (Windows CI: the example list gone here, the page itself gone or another: what it was,
+  // for the log)
+  if (!(await waitFor(() => read("!!document.getElementById('example')"), "the example list", 30000).then(() => true, () => false)))
+    console.log(`  the page after setup 2: ${JSON.stringify(await read("({ url: location.href, ready: document.readyState, title: document.title, body: (document.body?.innerText || '').slice(0, 300) })").catch((e) => String(e)))}`);
   // ---------------------------------------------------------------- Replace model
   // (Mar: "the replace model button doesn't seem to work": the knurled knob example, its
   // Part's Replace model..., another file) the part on the screen changes, the Part line

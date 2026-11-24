@@ -1867,7 +1867,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.edited = t.retype ? new Set(kept) : null;
     }
     renderEditor();
-    await applyForm();
+    // (applied at once: its note stays on the screen, what was kept and what was cleared)
+    await applyForm({ keepNote: true });
   }
 
   /**
@@ -2138,7 +2139,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.doc = result.project;
       t.draft = null;
       t.retype = null;
-      t.typeNote = null;
+      if (!opts.keepNote) t.typeNote = null;
       if (t.picking) endPicking(false);
       const display = !!t.displayOnly;
       t.displayOnly = false;
