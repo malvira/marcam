@@ -1099,6 +1099,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function frame(t) {
     if (!m.playing) {
       m.head = null;
+      // (paused: the tool where the stock is, at the move shown, not part of the way along
+      // the next one; a fresh seek to that place draws the same)
+      placeTool();
       restride();
       return false;
     }

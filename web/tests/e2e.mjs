@@ -2376,6 +2376,8 @@ try {
     await sel("coarse");
     await js("document.getElementById('simulate').click(); true");
     await waitFor(() => js("/Simulated in/.test(document.getElementById('status').textContent)"), "a simulation after the cancel", 120000);
+    // (the tab shown again after it can open its playback, a moment of ring: gone when done)
+    await waitFor(() => js("document.getElementById('simRing').classList.contains('hidden')"), "the ring gone", 60000).catch(() => {});
     const ok2 = await js("({ stocks: window.__marcam.state.sim?.stocks?.length || 0, ring: document.getElementById('simRing').classList.contains('hidden') })");
     check("after a cancel the engine works again (a new simulation runs, the ring gone when done)", ok2.stocks > 0 && ok2.ring, JSON.stringify(ok2));
     await sel("normal");

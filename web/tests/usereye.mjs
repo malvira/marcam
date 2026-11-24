@@ -232,20 +232,6 @@ function handleColours(img, [x0, y0, w, h]) {
     }
   return { n, pts };
 }
-/** The horizontal extent (px) of the stock's outline colour in the view. */
-function stockSpan(img, [x0, y0, w, h]) {
-  let lo = Infinity, hi = -Infinity;
-  for (let y = y0; y < y0 + h; y += 2)
-    for (let x = x0; x < x0 + w; x += 1) {
-      const [r, g, b] = img.at(x, y);
-      // the stock's outline (#a5d0ff) and its tint
-      if (Math.abs(r - 165) < 30 && Math.abs(g - 208) < 30 && b > 225) {
-        lo = Math.min(lo, x);
-        hi = Math.max(hi, x);
-      }
-    }
-  return hi > lo ? hi - lo : 0;
-}
 /** The centroid of the part's colour (#c8ccd2, lit: greys) in the view. */
 function partAt(img, [x0, y0, w, h]) {
   let sx = 0, n = 0;
@@ -331,7 +317,11 @@ try {
   img = await shot("stock_selected");
   hc = handleColours(img, r);
   check("the Stock selected: handles in the view", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
-  const span0 = stockSpan(img, r);
+  // (how wide the stock is drawn, in the view's pixels: its box through the view's camera,
+  // within the view. By its outline's colour the span came out short on CI: software GL draws
+  // thin lines another way, and a long stock's edges were only partly found)
+  const drawnSpan = () => read("(() => { const v = window.__marcam.state.three; const g = v.groups.stock; g.updateMatrixWorld(true); const b = new v.THREE.Box3().setFromObject(g); if (b.isEmpty()) return 0; const el = v.renderer.domElement; const w = el.clientWidth; let lo = Infinity, hi = -Infinity; for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) { const p = new v.THREE.Vector3(x, y, z).project(v.camera); const sx = Math.max(0, Math.min(w, ((p.x + 1) / 2) * w)); lo = Math.min(lo, sx); hi = Math.max(hi, sx); } return Math.round(hi - lo); })()");
+  const span0 = await drawnSpan();
   const field = await where("#stX") || await where("#stLen");
   check("the stock's size is a field in the pane", !!field);
   const spans = [];
@@ -341,7 +331,8 @@ try {
     for (const ch of ["1", "5", "0"]) {
       await type(ch);
       await sleep(900);
-      spans.push(stockSpan(await shot(`typed_${ch}`), r));
+      await shot(`typed_${ch}`);
+      spans.push(await drawnSpan());
     }
     const shown = await read("(document.getElementById('stX') || document.getElementById('stLen')).value");
     check("typing 150 shows 150 and the stock is drawn bigger as it is typed", shown === "150" && spans[2] > spans[0] && spans[2] > span0, `shown ${shown}; spans ${span0} -> ${spans.join(", ")}`);
@@ -647,6 +638,10 @@ try {
     return n;
   };
   const lr = await viewRect();
+  // (the background simulation done first, each time: its stock coming in between two shots
+  // was counted as the toolpath's change, on CI's slower software GL)
+  const quiet = () => waitFor(() => read("!window.__marcam.simLock?.busy && (document.getElementById('simRing')?.classList.contains('hidden') ?? true)"), "the background simulation", 120000 * Number(process.env.MARCAM_PERF_SLACK || 1)).catch(() => {});
+  await quiet();
   const v0 = await shot("pocket_before");
   const sd0 = await read(`document.querySelector('${sdCss}')?.value`);
   await click(sdCss);
@@ -656,6 +651,7 @@ try {
     await sleep(120);
   }
   await settled();
+  await quiet();
   const shownSd = await read(`document.querySelector('${sdCss}')?.value`);
   const focused = await read(`document.activeElement === document.querySelector('${sdCss}')`);
   const v1 = await shot("pocket_step_down_typed");
@@ -667,6 +663,7 @@ try {
   await read("document.activeElement?.blur?.(); true");
   await key("z", 2);
   await settled();
+  await quiet();
   const v2 = await shot("pocket_undone");
   const d2 = diff(v0, v2, lr);
   const back = await read(`document.querySelector('${sdCss}')?.value`);
@@ -685,15 +682,23 @@ try {
       const p = await where("#vtPlay");
       check(`${where_}: the play button is on the screen when the controls are folded`, !!p);
       if (!p) return;
+      // (a person presses it once it is enabled: pressed while disabled it does nothing, and
+      // on CI's software GL the setup's playback can still be opening)
+      await waitFor(() => read("!document.getElementById('vtPlay').disabled"), "the play button enabled", 60000 * Number(process.env.MARCAM_PERF_SLACK || 1)).catch(() => {});
       await click("#vtPlay");
-      await waitFor(() => where("#simPlay"), "the playback's controls", 60000).catch(() => {});
+      // (a setup continuing from another: its stock worked out first, from the setup before,
+      // planned and simulated; slow on CI's software GL, hence its slack)
+      await waitFor(() => where("#simPlay"), "the playback's controls", 60000 * Number(process.env.MARCAM_PERF_SLACK || 1)).catch(() => {});
       await sleep(500);
       // (the play button starts it: paused, to be judged below)
       if (/Pause/.test(await read("document.getElementById('simPlay').textContent"))) await click("#simPlay");
     }
     const seen = {};
     for (const id of ["simPlay", "simStep", "simEnd", "simSpeed", "simScrub"]) seen[id] = !!(await where(`#${id}`));
-    check(`${where_}: Play, Step, the end, the speed and the playhead on the screen`, Object.values(seen).every(Boolean), JSON.stringify(seen));
+    // (not there: what the playback was doing, for CI's log, where its screenshots are not)
+    const why = Object.values(seen).every(Boolean) ? "" : ` ${JSON.stringify(await read("(() => { const m = window.__marcam.state.machining; return { open: m.open, expanded: m.expanded, stock: m.stock, busy: m.busy, session: !!m.session, controls: document.getElementById('simControls').className, playback: document.body.dataset.playback, lock: window.__marcam.simLock?.busy, status: document.getElementById('status').textContent.slice(0, 120), error: document.getElementById('error').textContent.slice(0, 160) }; })()"))}`;
+    if (why) await shot(`controls_missing_${where_.replace(/\W+/g, "_")}`);
+    check(`${where_}: Play, Step, the end, the speed and the playhead on the screen`, Object.values(seen).every(Boolean), JSON.stringify(seen) + why);
     if (!seen.simPlay || !seen.simScrub) return;
     const p0 = await playhead();
     await click("#simPlay");
@@ -1175,6 +1180,17 @@ try {
       await sleep(200);
     }
     const ms = Date.now() - t0;
+    // (Mar: ▶ enabled as soon as the plan lands) the toolpaths handed to the simulating worker,
+    // not planned there again: the play button ready within about a second of the toolpath
+    const l0 = Date.now();
+    let playMs = null;
+    while (Date.now() - l0 < 60000 * SLACK) {
+      if (await read("!document.getElementById('vtPlay').disabled")) {
+        playMs = Date.now() - l0;
+        break;
+      }
+      await sleep(50);
+    }
     const ringAfter = await read(`(${VISIBLE})(document.querySelector('#tree .op-state.planning'))`);
     const gap = await read("(cancelAnimationFrame(window.__eyeRaf), window.__eyeGap)");
     await settled();
@@ -1188,11 +1204,12 @@ try {
       }
     const status = await read("document.getElementById('status').textContent");
     const gcode = await read("(async () => { const t = document.getElementById('gcode').value; const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(b)].slice(0, 8).map((x) => x.toString(16).padStart(2, '0')).join('') + ' ' + t.length; })()");
-    return { tab, ms, gap: Math.round(gap), px, status, gcode, fills, ringAfter };
+    return { tab, ms, playMs, gap: Math.round(gap), px, status, gcode, fills, ringAfter };
   };
   const many = await indexedRun("workers");
   check("Indexed roughing (3+1) on a bladed part: its cuts on the screen within 60 s (the angles found across the workers)", !!many.tab && many.px > 400 && many.ms < 60000 * SLACK, JSON.stringify(many));
   check("the page answers while it plans (no frame held over 1 s)", many.gap < 1000 * SLACK, `${many.gap} ms`);
+  check("the play button (▶) ready within about a second of the plan landing (its toolpaths handed to the simulation, not planned again)", many.playMs != null && many.playMs < 1500 * SLACK, `${many.playMs} ms`);
   const nums = many.fills.filter((f) => typeof f === "number");
   check("while it plans, the operation's progress wheel is on the screen and fills (angle by angle), gone when its toolpath shows",
     nums.length >= 3 && nums.every((f, i) => i === 0 || f > nums[i - 1]) && nums[nums.length - 1] > nums[0] && !many.ringAfter,
