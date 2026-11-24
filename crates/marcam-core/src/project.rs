@@ -617,8 +617,30 @@ impl Project {
         machine: Option<&crate::profiles::MachineProfile>,
         meshes: &dyn Fn(&str) -> Option<crate::Mesh>,
     ) -> Result<Value, String> {
+        self.op_defaults_with(
+            kind, setup, tool, geometry, libraries, machine, meshes, None,
+        )
+    }
+
+    /// [`Project::op_defaults`], with the stock the setup before left (`carried`, when the
+    /// setup takes it: a knurl on a cut piece with no model finds its body there).
+    #[allow(clippy::too_many_arguments)]
+    pub fn op_defaults_with(
+        &self,
+        kind: &str,
+        setup: &str,
+        tool: Option<u32>,
+        geometry: &[crate::geometry::Selection],
+        libraries: &[ToolLibrary],
+        machine: Option<&crate::profiles::MachineProfile>,
+        meshes: &dyn Fn(&str) -> Option<crate::Mesh>,
+        carried: Option<std::sync::Arc<crate::carry::Carried>>,
+    ) -> Result<Value, String> {
         let s = self.setup(setup).ok_or(format!("no setup {setup:?}"))?;
-        let job = self.setup_job_raw(s, libraries)?;
+        let mut job = self.setup_job_raw(s, libraries)?;
+        if carried.is_some() {
+            job.carried = carried;
+        }
         // faces of the part: the mesh model if any, else the profile
         let model = s
             .part

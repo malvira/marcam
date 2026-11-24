@@ -1143,6 +1143,10 @@ pub mod api {
         let rows: Option<Vec<f64>> = job
             .stock_axis
             .map(|_| (0..hm.ny).map(|j| hm.z[j * hm.nx]).collect());
+        // (a bar standing up, or a cut piece carried in: rows are not enough) every cell's top
+        // to start from
+        let stock_start = (job.carried.is_some() || job.stock_axis.is_some())
+            .then(|| f32s(&hm.z.iter().map(|&v| v as f32).collect::<Vec<f32>>()));
         let step = (hm.cell * 0.5).min(0.1);
         let pb = sim3::Playback3::new(hm, tps, &cutters_of(job), step);
         let mut path = Vec::with_capacity(pb.len() * 7);
@@ -1162,6 +1166,7 @@ pub mod api {
             "grid": grid,
             "stock_box": sb,
             "stock_rows": rows,
+            "stock_start": stock_start,
             "segments": pb.len(),
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
@@ -1478,12 +1483,12 @@ pub mod api {
             job.tool(t)
                 .and_then(|d| marcam::cutter_for(t, d.shape).ok())
         };
-        let pb = sim::Playback::new(
-            sim::RadialMap::of_job(grid, &job),
-            &tps,
-            &cutters,
-            (dx * 2.0).min(0.1),
-        );
+        let start = sim::RadialMap::of_job(grid, &job);
+        // (Mar's carry-through: the playback of a setup taking the cut piece of the one before
+        // started from a fresh bar on screen) what it starts from, when not the bar as it
+        // comes: the page's mirror starts from it
+        let stock_start = job.carried.is_some().then(|| f32s(&start.r));
+        let pb = sim::Playback::new(start, &tps, &cutters, (dx * 2.0).min(0.1));
         let mut path = Vec::with_capacity(pb.len() * 7);
         for sg in &pb.segments {
             path.extend_from_slice(&path_point(sg));
@@ -1518,6 +1523,7 @@ pub mod api {
             "grid": {"x0": grid.x0, "dx": grid.dx, "nx": grid.nx, "na": grid.na},
             "stock_radius": job.stock.radius,
             "stock_ring": ring,
+            "stock_start": stock_start,
             "part": f32s(&res.part.center.r),
             "segments": pb.len(),
             "program_starts": first_seg_of_program,
@@ -1894,7 +1900,20 @@ pub mod api {
             (!mesh.is_empty()).then(|| src.mesh(mesh).ok()).flatten()
         };
         let tool = o["tool"].as_u64().map(|t| t as u32);
-        match p.op_defaults(
+        // (Mar's carry-through) a setup taking the cut piece of the one before, with no model:
+        // that piece (the setups before planned and simulated; memoized) for its defaults
+        let carried = held
+            .as_ref()
+            .filter(|x| {
+                x.part.is_empty()
+                    && matches!(x.stock, marcam::project::StockDef::FromPrevious { .. })
+            })
+            .and_then(|_| {
+                let opts = json!({ "setup": setup });
+                with_setup(&opts, || job_any_mesh(doc, &libs, mesh)).ok()
+            })
+            .and_then(|j| j.carried);
+        match p.op_defaults_with(
             kind,
             &setup,
             tool,
@@ -1902,6 +1921,7 @@ pub mod api {
             &libs,
             machine.as_ref(),
             &meshes,
+            carried,
         ) {
             Ok(v) => v,
             Err(e) => err(e),

@@ -2435,7 +2435,8 @@ pub fn sim_grid(job: &Job, mesh: Option<&Mesh>, dx: f64, na: usize) -> Result<si
             let g = RevolvedProfile::new(p, job.stock.radius);
             (g.x_min(), g.x_max())
         }
-        (None, None) => return Err(Error::Invalid("nothing to compare: no part".into())),
+        // (Mar's carry-through: the cut piece of the setup before, no model) the stock's own
+        (None, None) => (-job.stock.length, 0.0),
     };
     Ok(sim::Grid::new(lo - 3.0, hi + 3.0, dx, na))
 }
@@ -2485,7 +2486,13 @@ pub fn simulate_job(
                     Box::new(move |g| sim::Part::from_profile(g, &geom, &p.points)),
                 )
             }
-            (None, None) => return Err(Error::Invalid("nothing to compare: no part".into())),
+            // (Mar's carry-through: the cut piece of the setup before, no model) the stock's
+            // own X range, nothing to compare it with (no material left counted, no gouge)
+            (None, None) => (
+                -job.stock.length,
+                0.0,
+                Box::new(|g| sim::Part::from_mesh(g, &Mesh::default())),
+            ),
         };
     let grid = sim::Grid::new(x_lo - 3.0, x_hi + 3.0, dx, na);
     if grid.len() > sim::MAX_CELLS {

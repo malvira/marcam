@@ -772,7 +772,8 @@ async function generate(opts = {}) {
     if (hadSim && opts.auto) setTimeout(backgroundSimulate, 0);
     // the viewer (the playback) shows the new toolpaths, at the same place
     setTimeout(() => {
-      if (run === state.genRun) window.__marcam.machining?.open({ auto: true });
+      // (nothing planned for this setup: no playback; the one of the setup before stays shut)
+      if (run === state.genRun && result.programs.length) window.__marcam.machining?.open({ auto: true });
     }, 0);
   } catch (e) {
     if (run === state.genRun) {
@@ -1112,6 +1113,17 @@ function renderTabs() {
   });
 }
 
+/** (Mar's carry-through) the setup worked on has no model (a cut piece carried in, say). */
+function noPart() {
+  try {
+    const d = readJob();
+    const s = d.setups?.find((x) => x.id === state.tree?.setup);
+    return !!s && !s.part?.length;
+  } catch {
+    return false;
+  }
+}
+
 function selectTab(i) {
   state.tab = i;
   const p = state.result.programs[i];
@@ -1119,6 +1131,15 @@ function selectTab(i) {
   // (a setup with no operation yet: nothing planned for it)
   if (!p) {
     $("summary").innerHTML = '<div class="muted">This setup has no operations yet: add one in the project tree.</div>';
+    // (Mar's carry-through: the setup before's toolpaths and simulated stock stayed drawn
+    // over this one's, hiding its carried piece) nothing of another setup's left on screen
+    $("gcode").value = "";
+    $("codeInfo").textContent = "";
+    $("download").disabled = true;
+    // (and the playback of the setup before: closed, its session dropped; open, it hid this
+    // setup's own carried piece)
+    window.__marcam.machining?.reset?.();
+    updateView();
     return;
   }
   const g = p.gouge;
@@ -1140,7 +1161,8 @@ function selectTab(i) {
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}
     ${sim && !sim.samples ? `<div class="small muted">Not simulated: its tool has no full shape (a V-bit needs a diameter). The stock shown is from the programs before it.</div>` : ""}
     ${sim && sim.hidden ? `<div class="small muted" id="simHidden">${sim.hidden} operation${sim.hidden === 1 ? "" : "s"} hidden: not simulated (their material is left)</div>` : ""}
-    ${sim ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;
+    ${sim && noPart() ? `<div class="small">Simulated stock: no model in this setup to compare it with; ${sim.rapid_hits} rapid(s) through stock</div>` : ""}
+    ${sim && !noPart() ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;
   $("gcode").value = p.gcode;
   $("codeInfo").textContent = `${p.name}.nc, ${(p.gcode.length / 1024).toFixed(0)} KiB`;
   $("download").disabled = false;
@@ -1713,9 +1735,11 @@ async function updateView() {
   const res = state.result;
   const p = res.programs[state.tab];
   if (!p) {
-    // (a setup with no operation yet: no toolpath, its part and stock as they are)
+    // (a setup with no operation yet: no toolpath, no simulated stock, its part and stock as
+    // they are)
     clear(groups.path);
     clear(groups.tool);
+    clear(groups.sim);
     v.cutLines = v.rapLines = null;
     v.key = null;
     await drawModel();

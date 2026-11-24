@@ -1486,6 +1486,17 @@ export function setupProject(ctx) {
     if (model) doc.models.push(model);
     const s = { id: `setup${n}`, name: cfg.setupName || KINDS[cfg.kind], stock: { shape: "cylinder", radius: 1, length: 1 }, clearance: 3, part: model ? [model.id] : [], spindle_rpm: 12000, operations: [], outputs: [] };
     doc.setups.push(s);
+    // (Mar: "put that cut stock into a 4 axis setup") a bar the setup before held standing up
+    // (or along Y) in the vise goes on the 4th axis along its own axis, the end cut in the vise
+    // to the front: turned so (Stock > More shows it; the handles turn it any other way)
+    if (cfg.carry && cfg.kind === "rotary" && !cfg.carry.rotate?.some((v) => v) && (!cfg.carry.turn || cfg.carry.turn === "none")) {
+      const src = doc.setups.find((x) => x.id === cfg.carry.from) ?? doc.setups[doc.setups.length - 2];
+      const vise = src && (src.kind === "vise" || src.holding?.kind === "vise");
+      const bar = src && ["cylinder", "square", "hex", "rect"].includes(src.stock?.shape);
+      const along = src?.holding?.along;
+      if (vise && bar && along === "z") cfg.carry = { ...cfg.carry, rotate: [0, 90, 0] };
+      else if (vise && bar && along === "y") cfg.carry = { ...cfg.carry, rotate: [0, 0, -90] };
+    }
     const report = await applySetup(doc, s, cfg, tris);
     // (the new setup's Stock shown, its handles in the view)
     if (state.tree) Object.assign(state.tree, { setup: s.id, focus: "stock", selected: null });

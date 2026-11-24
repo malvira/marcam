@@ -93,6 +93,15 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   // it if there is none yet).
   const VIEW_KEY = "marcam.view";
   const VIEW_DEFAULT = { part: true, stock: false, paths: "all", rapids: false, tool: true, only: false };
+  /** The stock shown: its toggle; (Mar's carry-through) or, in a setup with no model (a cut
+   *  piece carried in), the part's toggle: the piece is the part there. */
+  const stockOn = () => {
+    if (view.stock) return true;
+    if (!view.part) return false;
+    const t = state.tree;
+    const s = t?.doc?.setups?.find((x) => x.id === t.setup);
+    return !!s && !s.part?.length;
+  };
   const view = { ...VIEW_DEFAULT };
   try {
     const saved = JSON.parse(recall(VIEW_KEY) || "null");
@@ -177,7 +186,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       if (playing && m.session) $("simPlay").click();
       return;
     }
-    if (view.stock && !state.sim) window.__marcam.statsInBackground?.();
+    if (stockOn() && !state.sim) window.__marcam.statsInBackground?.();
     m.finalKey = null;
     syncFrame();
   }
@@ -197,7 +206,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     applyLayers();
     document.body.dataset.playback = "open";
     renderToggles();
-    if (view.stock && m.session && !m.stock) {
+    if (stockOn() && m.session && !m.stock) {
       m.keepAt = 0;
       m.open = false;
       await open();
@@ -520,10 +529,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     for (const o of m.paths?.cut || []) o.visible = view.paths !== "off";
     for (const o of m.paths?.rapid || []) o.visible = view.paths !== "off" && view.rapids;
     // the stock as the toggle says at once (while the playback is made again without it)
-    if (m.stockMesh) m.stockMesh.visible = view.stock;
-    if (m.ghost) m.ghost.visible = view.stock && $("simGhost").checked;
+    if (m.stockMesh) m.stockMesh.visible = stockOn();
+    if (m.ghost) m.ghost.visible = stockOn() && $("simGhost").checked;
     // at rest with the stock on: the background simulation's stock instead of the part
-    const finalStock = !m.expanded && view.stock && !!v.groups.simFinal?.children.length;
+    const finalStock = !m.expanded && stockOn() && !!v.groups.simFinal?.children.length;
     for (const c of v.groups.work.children) if (c.userData.shared) c.visible = view.part && !finalStock;
   }
 
@@ -559,7 +568,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       v.groups.simFinal = new v.THREE.Group();
       v.groups.machining.add(v.groups.simFinal);
     }
-    const want = !m.expanded && view.stock && state.sim ? state.sim : null;
+    const want = !m.expanded && stockOn() && state.sim ? state.sim : null;
     const key = want ? want : null;
     if (m.finalKey !== key || (want && !v.groups.simFinal.children.length)) {
       m.finalKey = key;
@@ -874,7 +883,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   async function openLocked1(job, opts = {}) {
     // the stock simulated along while playing (Stock on); at rest only the tool and the path
     // (the stock shown then is the background simulation's)
-    let stock = view.stock && !!m.expanded;
+    let stock = stockOn() && !!m.expanded;
     m.note = "";
     if (stock && opts.auto) {
       // opened by itself (after a plan): nothing asked; too long a simulation is not started
@@ -950,6 +959,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       if (!m.xyz && result.stock_ring) for (let i = 0; i < result.grid.nx; i++) m.r.set(result.stock_ring, i * result.grid.na);
       // (a bar lying in the vise: each row from the bar's top there)
       if (m.xyz && result.stock_rows) result.stock_rows.forEach((z, j) => m.r.fill(z, j * result.grid.nx, (j + 1) * result.grid.nx));
+      // (Mar's carry-through: a setup taking the cut piece of the one before, or a bar standing
+      // in the vise) every cell as the stock starts, not a fresh bar
+      if (result.stock_start) {
+        const st = f32(result.stock_start);
+        if (st.length === n) m.r.set(st);
+      }
       m.op = new Uint16Array(n);
       m.stride = strideFor(DISPLAY_MAX);
       // the stock on the GPU when there is one and the engine offers the job to it

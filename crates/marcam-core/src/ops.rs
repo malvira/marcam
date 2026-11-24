@@ -978,6 +978,46 @@ pub fn apply_cutting(
 /// tool size (depths, stepovers), spindle speed and the machine's feed cap (feeds), and the
 /// part / selected geometry (ranges, knurl body, chamfer edge). Every host gets the same
 /// defaults from here.
+/// (Mar's carry-through: a cut piece carried onto the 4th axis, no model) its longest round
+/// stretch along X: `(x0, x1, radius)`, where every angle's radius is within 0.3 mm of the
+/// others and of the stretch's (a piece cut in the vise comes as columns, a staircase round
+/// its outline), the radius the outermost.
+fn carried_body(job: &crate::job::Job) -> Option<(f64, f64, f64)> {
+    let crate::carry::Carried::Bar(m) = job.carried.as_deref()? else {
+        return None;
+    };
+    let g = m.grid;
+    let mut best: Option<(f64, f64, f64)> = None;
+    let mut run: Option<(usize, f32)> = None;
+    let close = |run: Option<(usize, f32)>, end: usize, best: &mut Option<(f64, f64, f64)>| {
+        if let Some((i0, r)) = run {
+            let (a, b) = (g.x(i0) - 0.5 * g.dx, g.x(end - 1) + 0.5 * g.dx);
+            if best.is_none_or(|(x0, x1, _)| b - a > x1 - x0) {
+                *best = Some((a, b, r as f64));
+            }
+        }
+    };
+    for i in 0..g.nx {
+        let row = &m.r[i * g.na..(i + 1) * g.na];
+        let (lo, hi) = row
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| {
+                (a.min(v), b.max(v))
+            });
+        let round = hi > 0.5 && hi - lo < 0.3;
+        match run {
+            Some((_, r)) if round && (hi - r).abs() < 0.3 => {}
+            _ => {
+                close(run, i, &mut best);
+                run = round.then_some((i, hi));
+            }
+        }
+    }
+    close(run, g.nx, &mut best);
+    // (a stretch of a millimetre or more)
+    best.filter(|(a, b, _)| b - a >= 1.0)
+}
+
 pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
     let t = find(kind).ok_or(format!("unknown operation type {kind:?}"))?;
     let job = cx.job;
@@ -1076,20 +1116,43 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("lead_in".into(), json!(0.3));
         }
         "helical_knurl" => {
-            let regions = cx
-                .regions
-                .ok_or("helical_knurl defaults need the part's faces")?;
-            let body = regions
-                .iter()
-                .filter(|r| r.shape == "cone" || r.shape == "cylinder")
-                .max_by(|a, b| a.area.total_cmp(&b.area))
-                .ok_or("the part has no conical or cylindrical body to knurl")?;
-            let (r0, r1) = crate::wizards::radius_at_ends(body, regions);
-            let front = regions
-                .iter()
-                .map(|r| r.x[1])
-                .fold(f64::NEG_INFINITY, f64::max);
-            let (x0, x1) = (body.x[0], body.x[1]);
+            // the part's biggest cone or cylinder; (Mar's carry-through: a cut piece carried in,
+            // no model) else the carried piece's longest round stretch
+            let (x0, x1, r0, r1, front) = match cx.regions {
+                Some(regions) => {
+                    let body = regions
+                        .iter()
+                        .filter(|r| r.shape == "cone" || r.shape == "cylinder")
+                        .max_by(|a, b| a.area.total_cmp(&b.area))
+                        .ok_or("the part has no conical or cylindrical body to knurl")?;
+                    let (r0, r1) = crate::wizards::radius_at_ends(body, regions);
+                    let front = regions
+                        .iter()
+                        .map(|r| r.x[1])
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    (body.x[0], body.x[1], r0, r1, front)
+                }
+                None => {
+                    let (mut a, b, r) = carried_body(job)
+                        .ok_or("helical_knurl defaults need the part's faces (or a round piece carried in)")?;
+                    // (clear of the chuck's jaws, where the piece is held: 2 mm off their face)
+                    // (the jaws' face: the bar's back end plus what they grip, whatever their size)
+                    let grip = job
+                        .fixture
+                        .as_ref()
+                        .and_then(|f| f.grip)
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    a = a.max(-job.stock.length + grip + 2.0);
+                    if b - a < 1.0 {
+                        return Err(
+                            "the piece carried in has no round stretch clear of the chuck to knurl"
+                                .into(),
+                        );
+                    }
+                    (a, b, r, r, b)
+                }
+            };
             let r_at = |x: f64| r0 + (r1 - r0) * (x - x0) / (x1 - x0);
             let r_mean = 0.5 * (r0 + r_at(front));
             // about 2 mm between grooves around the mean circumference

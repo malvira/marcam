@@ -1204,6 +1204,95 @@ try {
   await S("Emulation.setHardwareConcurrencyOverride", { hardwareConcurrency: 8 }).catch(() => {});
   check("with one core (no workers): planned too, the same G-code, on the screen, the page answering", !!one.tab && one.px > 400 && one.gcode === many.gcode && one.gap < 1000 * SLACK, `${JSON.stringify(one)} vs ${many.gcode}`);
   await clean("indexed roughing on one core");
+  // ---------------------------------------------------------------- the cut piece carried on
+  // (Mar: "a standing bar stock in 3axis. mill a square boss with pocket inside it. Then do the
+  // outer diameter with some contours. Next, add a setup where you put that cut stock into a
+  // 4 axis setup and then knurl the OD.") all of it as a person does it, in a fresh page
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await click("#menuFile > summary");
+    await sleep(200);
+    await click("#projectNew");
+    await settled();
+    const pick = (id, v) => read(`(() => { const s = document.getElementById('${id}'); s.value = [...s.options].find((o) => o.value === '${v}')?.value ?? ''; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()`);
+    await pick("treeAddKind", "vise");
+    await click("#treeAddSetup");
+    await settled();
+    // a round bar standing up in the vise
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    await pick("stType", "round");
+    await settled();
+    await pick("stAlong", "z");
+    await settled();
+    const bar = await read("document.querySelector('#tree .tree-setup.active [data-act=stock]')?.textContent || ''");
+    check("carry-through: a round bar standing in the vise (its Stock: Round bar, Axis Z)", /bar/.test(bar) && (await read("document.getElementById('stAlong').value")) === "z", bar.trim());
+    // a square boss (a 2D contour outside a square), a pocket inside it, the OD (contours)
+    const addOp = async (type, lib) => {
+      await pick("treeAddType", type);
+      await click("#treeAdd");
+      if (lib) {
+        const row = await waitFor(() => where("dialog[open] .tp-row", lib), `the library (${lib})`, 30000).catch(() => null);
+        if (row) await click("dialog[open] .tp-row", lib);
+      }
+      await waitFor(() => read("!!document.getElementById('opForm')"), `the ${type} form`, 60000);
+      await settled();
+    };
+    await addOp("contour", "3\\.175 x 12");
+    await typeInto("#opForm [name=path]", "4 4; 16 4; 16 16; 4 16");
+    await typeInto("#opForm [name=depth]", "6");
+    await settled();
+    await addOp("pocket");
+    await typeInto("#opForm [name=rect]", "7, 7, 13, 13");
+    await typeInto("#opForm [name=depth]", "3");
+    await settled();
+    await addOp("contour");
+    const circle = Array.from({ length: 12 }, (_, i) => `${(10 + 9 * Math.cos((i * Math.PI) / 6)).toFixed(2)} ${(10 + 9 * Math.sin((i * Math.PI) / 6)).toFixed(2)}`).join("; ");
+    await typeInto("#opForm [name=path]", circle);
+    await typeInto("#opForm [name=top]", "-6");
+    await typeInto("#opForm [name=depth]", "10");
+    await settled();
+    const s1 = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return { tab: t?.textContent || '', ops: [...document.querySelectorAll('#tree .tree-setup.active .tree-op .tree-label')].map((e) => e.textContent.trim().split(' ')[0]), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    check("carry-through, setup 1: the boss's contour, the pocket, the OD's contour, planned clean", /OK/.test(s1.tab) && s1.ops.length === 3 && !s1.error, JSON.stringify(s1));
+    await shot("carry_setup1");
+    // + Add setup: 4th axis, continuing from setup 1
+    await pick("treeAddKind", "rotary");
+    await pick("treeAddFrom", "carry");
+    await click("#treeAddSetup");
+    await settled();
+    const vr = await viewRect();
+    const img = await shot("carry_setup2_piece");
+    let px = 0;
+    for (let y = vr[1]; y < vr[1] + vr[3]; y += 3)
+      for (let x = vr[0]; x < vr[0] + vr[2]; x += 3) {
+        const q = img.at(x, y);
+        if (q[0] + q[1] + q[2] > 180) px++;
+      }
+    const s2 = await read(`(() => { const vis = ${VISIBLE}; return { error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '', stock: document.querySelector('#tree .tree-setup.active [data-act=stock]')?.textContent.trim() || '', tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).length }; })()`);
+    const frame = await read("window.__marcam.engine('setupFrame', window.__marcam.state.tree.doc, { setup: window.__marcam.state.tree.setup }).then((r) => r.result.stock)");
+    check("carry-through, setup 2 (4th axis, continuing): the cut piece on the screen, lying along A (60 long), no error, nothing of setup 1 drawn over it",
+      !s2.error && /left/.test(s2.stock) && s2.tabs === 0 && px > 2000 && Math.abs(frame.length - 60) < 0.5, `${JSON.stringify(s2)}; ${JSON.stringify(frame)}; ${px} px`);
+    // the knurl on its OD (the library for a V-bit)
+    await addOp("helical_knurl", "90 deg V-bit");
+    const body = await read("[document.querySelector('#opForm [name=body_back]')?.value, document.querySelector('#opForm [name=body_front]')?.value]");
+    const [back, front] = body.map((t) => (t || "").split(",").map(Number));
+    await settled();
+    const k = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return { tab: t?.textContent || '', error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    check("carry-through: the knurl's body on the piece's OD (radius 10, clear of the chuck, behind the turned-down part), planned",
+      back && front && Math.abs(back[1] - 10) < 0.3 && Math.abs(front[1] - 10) < 0.3 && back[0] > -60 && front[0] <= -15 && /OK/.test(k.tab) && !k.error, `${JSON.stringify(body)} ${JSON.stringify(k)}`);
+    // its playback starts from the piece setup 1 left: the boss end narrower than the bar
+    await click("#vtPlay");
+    await waitFor(() => read("!!window.__marcam.state.machining?.r && window.__marcam.state.machining.open"), "the playback", 120000).catch(() => {});
+    await sleep(500);
+    const ends = await read("(() => { const m = window.__marcam.state.machining; const g = m.session.grid; const at = (x) => { const i = Math.round((x - g.x0) / g.dx - 0.5); let mx = 0; for (let j = 0; j < g.na; j++) mx = Math.max(mx, m.r[i * g.na + j]); return +mx.toFixed(2); }; return { boss: at(-3), od: at(-10), bar: at(-40) }; })()");
+    await shot("carry_setup2_playing");
+    check("carry-through: setup 2's playback starts from what setup 1 left (the ring round the boss, the turned-down OD), not a fresh bar",
+      ends.od < ends.bar - 0.5 && ends.bar > 9.5 && ends.bar < 10.5, JSON.stringify(ends));
+    await click("#vtPlay").catch(() => {});
+    await clean("the cut piece carried on");
+  }
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});
