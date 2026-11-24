@@ -1232,7 +1232,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     paintPicked();
     if (t.draft && mode.faces) await refreshDefaults();
     else renderEditor();
-    if (t.draft) await applyForm({ quiet: true });
+    // (a new one picked for the first time joins the project here: picking goes on, more
+    // features may be picked)
+    if (t.draft) await applyForm({ quiet: true, keepPicking: true });
   }
 
   /** Toggle the feature under a canvas point; returns the face region hit (with the feature
@@ -2160,7 +2162,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.draft = null;
       t.retype = null;
       if (!opts.keepNote) t.typeNote = null;
-      if (t.picking) endPicking(false);
+      if (t.picking && !opts.keepPicking) endPicking(false);
       const display = !!t.displayOnly;
       t.displayOnly = false;
       showFormError(null);
