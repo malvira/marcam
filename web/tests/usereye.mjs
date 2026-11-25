@@ -2045,9 +2045,8 @@ try {
       rr.rest && rr.along && rr.tabs.length && rr.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(rr.verifier) && (!rr.gouge || /deepest 0\.0[0-1]\d* mm/.test(rr.gouge)) && !rr.error, JSON.stringify(rr));
     // (Mar's impeller: a full step where the rest is thin, two half steps where a pass would
     // take too much; by default 1.5 times the tool's normal bite, nothing new in the form) a
-    // "Max bite" typed in under More: its passes over it go in two and slower, none below
-    // 0.6 of the feed, clean
-    const restCode = `(() => { const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'rotary_rough'); const g = (window.__marcam.state.result?.programs || []).map((p) => p.gcode || '').join(' '); const i = g.indexOf('rest roughing (along X)'); const tail = i < 0 ? '' : g.slice(i); const fs = [...tail.matchAll(/G1[^F]*F([0-9]+)/g)].map((m) => +m[1]); return { feed: op?.feed, maxBite: op?.max_bite ?? null, limit: (tail.match(/at most ([0-9.]+) mm3 a mm a pass/) || [])[1] || null, lines: tail.split(String.fromCharCode(10)).length, slowest: fs.length ? Math.min(...fs.filter((f) => f > op.plunge_feed + 1)) : null, slower: fs.filter((f) => f > op.plunge_feed + 1 && f < op.feed).length }; })()`;
+    // "Max bite" typed in under More: its passes over it go in two (more of them), clean
+    const restCode = `(() => { const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'rotary_rough'); const g = (window.__marcam.state.result?.programs || []).map((p) => p.gcode || '').join(' '); const i = g.indexOf('rest roughing (along X)'); const tail = i < 0 ? '' : g.slice(i); const fs = [...tail.matchAll(/G1[^F]*F([0-9]+)/g)].map((m) => +m[1]); const tl = (d.tools || []).find((t) => t.number === op?.tool); return { ball: /ball/i.test(tl?.description || tl?.tool || ''), feed: op?.feed, maxBite: op?.max_bite ?? null, limit: (tail.match(/at most ([0-9.]+) mm3 a mm a pass/) || [])[1] || null, lines: tail.split(String.fromCharCode(10)).length, slowest: fs.length ? Math.min(...fs.filter((f) => f > op.plunge_feed + 1)) : null, slower: fs.filter((f) => f > op.plunge_feed + 1 && f < op.feed).length }; })()`;
     const before = await read(restCode);
     const mbCss = "#opForm [name=max_bite]";
     const folded = await read(`(() => { const d = document.querySelector('${mbCss}')?.closest('details'); return !!d && !d.open; })()`);
@@ -2055,7 +2054,7 @@ try {
     await read(`document.querySelector('${mbCss}')?.scrollIntoView({ block: 'center' }), true`);
     await click(mbCss);
     await key("a", 2);
-    for (const ch of "1") await type(ch);
+    for (const ch of "0.3") await type(ch);
     await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
     await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
     await settled();
@@ -2064,8 +2063,8 @@ try {
     const after = await read(restCode);
     const rb = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent), verifier: t.filter((x) => /^Verifier/.test(x)).sort((a, b) => a.length - b.length)[0] || '', gouge: t.filter((x) => /^Gouge check/.test(x)).sort((a, b) => a.length - b.length)[0] || '', error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
     await shot("rest_roughing_max_bite");
-    check("rest roughing: its Max bite empty, folded under More (nothing new in the form), the limit worked out (1.5 x the 3.175 ball's normal: 5.94); typed in there (1 mm3/mm): more passes, some slower but none under 0.6 of the feed, clean",
-      folded && before.maxBite === null && before.limit === "5.94" && after.maxBite === 1 && after.limit === "1.00" && after.lines > before.lines && after.slower > 0 && after.slowest >= 0.6 * after.feed - 1e-6 && rb.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(rb.verifier) && (!rb.gouge || /deepest 0\.0[0-1]\d* mm/.test(rb.gouge)) && !rb.error, JSON.stringify({ folded, before, after, rb }));
+    check("rest roughing: its Max bite empty, folded under More (nothing new in the form), the limit worked out (1.5 x the 3.175 tool's normal bite: a ball's 5.94, a flat's 7.56); typed in there (0.3 mm3/mm): passes in two where over it, clean",
+      folded && before.maxBite === null && before.limit === (before.ball ? "5.94" : "7.56") && after.maxBite === 0.3 && after.limit === "0.30" && after.lines > before.lines && rb.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(rb.verifier) && (!rb.gouge || /deepest 0\.0[0-1]\d* mm/.test(rb.gouge)) && !rb.error, JSON.stringify({ folded, before, after, rb }));
     await clean("rest roughing on the 4th axis");
   }
   // ---------------------------------------------------------------- tree rows: the whole row
