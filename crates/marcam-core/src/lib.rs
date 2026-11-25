@@ -1024,6 +1024,50 @@ fn general_moves(moves: Vec<Move>, start: [f64; 3], a_deg: f64) -> Vec<Move> {
     out
 }
 
+/// The deepest cut into the part of 3-axis moves (more than 0.05 mm): where (x, y), the tip's
+/// Z there and the part's (the lowest tip Z that does not cut it), or None.
+fn gouge_of(moves: &[Move], mesh: &Mesh, c: Cutter) -> Option<(f64, f64, f64, f64)> {
+    // (a tool running along a wall touches it: checked a hair thinner, only what cuts into it)
+    let c = c.grown(-0.05).unwrap_or(c);
+    let dc = strategy::three_axis::DropCutter3::new(mesh, c);
+    let mut worst: Option<(f64, f64, f64, f64)> = None;
+    let mut prev: Option<[f64; 3]> = None;
+    for m in moves {
+        let (p, feed) = match m {
+            Move::Line3 { x, y, z, .. } => ([*x, *y, *z], true),
+            Move::Rapid3 { x, y, z, .. } => (
+                [
+                    x.unwrap_or(prev.map_or(0.0, |p| p[0])),
+                    y.unwrap_or(prev.map_or(0.0, |p| p[1])),
+                    z.unwrap_or(prev.map_or(0.0, |p| p[2])),
+                ],
+                false,
+            ),
+            _ => continue,
+        };
+        if feed {
+            if let Some(q) = prev {
+                // (along the move, every half millimetre)
+                let n = ((p[0] - q[0]).hypot(p[1] - q[1]) / 0.5).ceil().max(1.0) as usize;
+                for k in 1..=n {
+                    let t = k as f64 / n as f64;
+                    let (x, y, z) = (
+                        q[0] + (p[0] - q[0]) * t,
+                        q[1] + (p[1] - q[1]) * t,
+                        q[2] + (p[2] - q[2]) * t,
+                    );
+                    let top = dc.z_at(x, y, -1e9);
+                    if top - z > 0.05 && worst.is_none_or(|w| top - z > w.3 - w.2) {
+                        worst = Some((x, y, z, top));
+                    }
+                }
+            }
+        }
+        prev = Some(p);
+    }
+    worst
+}
+
 /// Operations that work on either setup: flat on a vise, wrapped on a rotary setup.
 pub fn is_surface_op(op: &Operation) -> bool {
     matches!(
@@ -2009,6 +2053,41 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 prog.name,
                 op_name(op)
             )));
+        }
+        // (Mar's knob3: an outside contour 5 mm out and 10 mm down cut 8.9 mm into the knob's
+        // wider body below its picked edge, said only by the simulation's numbers) a vise's
+        // 2.5D cuts checked against the part: one into it is the operation's error, with
+        // where and how deep
+        if three
+            && op.index_a().unwrap_or(0.0) == 0.0
+            && matches!(
+                op,
+                Operation::Contour(_) | Operation::Pocket(_) | Operation::Face(_)
+            )
+        {
+            if let (Some(mesh), Ok(c)) = (ctx.mesh, cutter_for(number, tool.shape)) {
+                if let Some((x, y, z, top)) = gouge_of(&b.moves[op_start..], mesh, c) {
+                    let hint = match op {
+                        Operation::Contour(_) => {
+                            "a smaller boundary offset, or less depth: the part is wider lower down"
+                        }
+                        _ => "less depth, or a smaller region",
+                    };
+                    // (planned on, as asked: it may be meant, a model short of the finished
+                    // part; the app shows it as an error)
+                    // (its number in the plan: the app names it by its id in the project)
+                    let n = b.moves.iter().rev().find_map(|m| match m {
+                        Move::Operation { id, .. } => Some(*id),
+                        _ => None,
+                    });
+                    b.warnings.push(format!(
+                        "GOUGE: {} [op#{}] cuts {:.2} mm into the part at X{x:.2} Y{y:.2}, down to Z{z:.2} where the part is at Z{top:.2}: {hint}",
+                        op_name(op),
+                        n.map_or("?".to_string(), |n| n.to_string()),
+                        top - z
+                    ));
+                }
+            }
         }
         // rotary operations and engravings: smoothed here (3-axis ones above)
         if smooth_tol > 0.0 && !is_three_axis(op) {

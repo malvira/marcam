@@ -1229,7 +1229,8 @@ function selectTab(i) {
         : "Verifier: 0 issues (no fast plunges, no low rapids)"
     }</div>
     ${limitsHtml(p.name, esc)}
-    ${p.warnings?.length ? `<div class="limits" id="toolWarnings">${p.warnings.map((w) => `<div>Warning: ${esc(w)}</div>`).join("")}</div>` : ""}
+    ${p.warnings?.some((w) => /^GOUGE: /.test(w)) ? `<div class="error" id="gougeErrors">${p.warnings.filter((w) => /^GOUGE: /.test(w)).map((w) => `<div>${esc(w.replace(/^GOUGE: /, "Cuts into the part: "))}</div>`).join("")}</div>` : ""}
+    ${p.warnings?.some((w) => !/^GOUGE: /.test(w)) ? `<div class="limits" id="toolWarnings">${p.warnings.filter((w) => !/^GOUGE: /.test(w)).map((w) => `<div>Warning: ${esc(w)}</div>`).join("")}</div>` : ""}
     ${p.time ? `<div class="small" id="timeEst">Estimated time: <strong>${fmtTime(p.time.total_s)}</strong> (cutting ${fmtTime(p.time.feed_s)}, rapids ${fmtTime(p.time.rapid_s)}, tool changes/dwells ${fmtTime(p.time.other_s)})${state.result.programs.length > 1 ? ` &middot; all files ${fmtTime(state.result.time_total_s)}` : ""}</div>` : ""}
     ${collisionHtml(p.collisions)}
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}

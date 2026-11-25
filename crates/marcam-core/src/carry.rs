@@ -469,14 +469,23 @@ fn keep_solid(c: &Carried, m: Mesh) {
 /// the rays).
 pub fn solid_of(c: &Carried) -> Option<std::sync::Arc<Mesh>> {
     let key = c.key();
-    SOLID.with(|s| s.borrow().iter().find(|(k, _)| *k == key).map(|(_, m)| m.clone()))
+    SOLID.with(|s| {
+        s.borrow()
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, m)| m.clone())
+    })
 }
 
 /// A closed mesh's volume (the signed tetrahedra from the origin).
 pub fn mesh_volume(m: &Mesh) -> f64 {
     m.triangles
         .iter()
-        .map(|[a, b, c]| (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0)
+        .map(|[a, b, c]| {
+            (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0]))
+                / 6.0
+        })
         .sum::<f64>()
         .abs()
 }
@@ -484,10 +493,16 @@ pub fn mesh_volume(m: &Mesh) -> f64 {
 /// A carried stock's volume as sampled (a bar's wedges, a block's columns).
 pub fn sampled_volume(c: &Carried) -> f64 {
     match c {
-        Carried::Block { cell, top, bot, .. } => top.iter().zip(bot).map(|(t, b)| (t - b).max(0.0) * cell * cell).sum(),
+        Carried::Block { cell, top, bot, .. } => top
+            .iter()
+            .zip(bot)
+            .map(|(t, b)| (t - b).max(0.0) * cell * cell)
+            .sum(),
         Carried::Bar(m) => {
             let da = std::f64::consts::TAU / m.grid.na as f64;
-            m.r.iter().map(|&r| 0.5 * (r as f64).powi(2) * da * m.grid.dx).sum()
+            m.r.iter()
+                .map(|&r| 0.5 * (r as f64).powi(2) * da * m.grid.dx)
+                .sum()
         }
     }
 }

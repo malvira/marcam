@@ -594,6 +594,18 @@ pub mod api {
                     // what its G-code warns about (tools without a number, one tool twice)
                     // (and cuts that reach the vise's jaws)
                     "warnings": tp.notes.iter().filter(|n| n.starts_with("(Warning")).map(|n| n.trim_start_matches("(Warning: ").trim_end_matches(')').to_string())
+                        // (an operation's number in the plan: its id in the project)
+                        .map(|w| match (w.find("[op#"), op_ids.as_ref()) {
+                            (Some(i), Some(ids)) => {
+                                let rest = &w[i + 4..];
+                                let end = rest.find(']').unwrap_or(0);
+                                match rest[..end].parse::<usize>().ok().and_then(|k| ids.get(k)) {
+                                    Some(id) => format!("{}{id}{}", &w[..i], &rest[end + 1..]),
+                                    None => w,
+                                }
+                            }
+                            _ => w,
+                        })
                         .chain(jaws.iter().filter(|(p, _)| p == &tp.name).map(|(_, w)| w.clone())).collect::<Vec<_>>(),
                     "gcode": gcode,
                     "issues": issues,
@@ -757,18 +769,22 @@ pub mod api {
         // from, when it went on as a mesh: drawn as it is (the samples are for simulating)
         let solid = marcam::carry::solid_of(c);
         let sampled_volume = marcam::carry::sampled_volume(c);
-        let m = if let Some(s) = &solid { (**s).clone() } else { match c {
-            marcam::carry::Carried::Block {
-                x0,
-                y0,
-                cell,
-                nx,
-                ny,
-                top,
-                bot,
-            } => marcam::carry_mesh::block_mesh(*x0, *y0, *cell, *nx, *ny, top, bot),
-            marcam::carry::Carried::Bar(map) => marcam::carry_mesh::bar_mesh(map),
-        } };
+        let m = if let Some(s) = &solid {
+            (**s).clone()
+        } else {
+            match c {
+                marcam::carry::Carried::Block {
+                    x0,
+                    y0,
+                    cell,
+                    nx,
+                    ny,
+                    top,
+                    bot,
+                } => marcam::carry_mesh::block_mesh(*x0, *y0, *cell, *nx, *ny, top, bot),
+                marcam::carry::Carried::Bar(map) => marcam::carry_mesh::bar_mesh(map),
+            }
+        };
         let tri: Vec<f32> = m
             .triangles
             .iter()
@@ -1845,13 +1861,21 @@ pub mod api {
         };
         let Some(m) = p.models.iter().find(|m| m.id == model) else {
             // a carried piece with no model: its faces
-            if let Some(s) = model.is_empty().then(|| carried_only(&p, setup.as_deref())).flatten() {
+            if let Some(s) = model
+                .is_empty()
+                .then(|| carried_only(&p, setup.as_deref()))
+                .flatten()
+            {
                 let piece = match carried_piece(doc, &s.id, mesh) {
                     Ok(m) => m,
                     Err(e) => return err(e),
                 };
                 let (regions, of) = marcam::geometry::face_regions(&piece, 30.0);
-                let tri: Vec<f32> = piece.triangles.iter().flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32))).collect();
+                let tri: Vec<f32> = piece
+                    .triangles
+                    .iter()
+                    .flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32)))
+                    .collect();
                 let idx: Vec<u16> = of.iter().map(|&k| k as u16).collect();
                 return json!({"regions": regions, "triangles": f32s(&tri), "region_of": u16s(&idx), "carried": true});
             }
@@ -1883,22 +1907,39 @@ pub mod api {
     /// it takes, as a mesh in its frame: what is picked on there.
     fn carried_piece(doc: &str, setup: &str, mesh: &[u8]) -> Result<Mesh, String> {
         let libs = libraries(&json!({}))?;
-        let job = with_setup(&json!({ "setup": setup }), || job_any_mesh(doc, &libs, mesh))?;
-        let c = job.carried.as_deref().ok_or("the setup has no part model")?;
+        let job = with_setup(&json!({ "setup": setup }), || {
+            job_any_mesh(doc, &libs, mesh)
+        })?;
+        let c = job
+            .carried
+            .as_deref()
+            .ok_or("the setup has no part model")?;
         Ok(match c {
-            marcam::carry::Carried::Block { x0, y0, cell, nx, ny, top, bot } => marcam::carry_mesh::block_mesh(*x0, *y0, *cell, *nx, *ny, top, bot),
+            marcam::carry::Carried::Block {
+                x0,
+                y0,
+                cell,
+                nx,
+                ny,
+                top,
+                bot,
+            } => marcam::carry_mesh::block_mesh(*x0, *y0, *cell, *nx, *ny, top, bot),
             marcam::carry::Carried::Bar(map) => marcam::carry_mesh::bar_mesh(map),
         })
     }
 
     /// The setup's carried piece when it has no model of its own (None: it has one, or takes
     /// no piece).
-    fn carried_only<'a>(p: &'a marcam::project::Project, setup: Option<&str>) -> Option<&'a marcam::project::Setup> {
+    fn carried_only<'a>(
+        p: &'a marcam::project::Project,
+        setup: Option<&str>,
+    ) -> Option<&'a marcam::project::Setup> {
         let s = match setup {
             Some(id) => p.setups.iter().find(|s| s.id == id)?,
             None => p.setups.first()?,
         };
-        (s.part.is_empty() && matches!(s.stock, marcam::project::StockDef::FromPrevious { .. })).then_some(s)
+        (s.part.is_empty() && matches!(s.stock, marcam::project::StockDef::FromPrevious { .. }))
+            .then_some(s)
     }
 
     /// The setup, its part model as a mesh in the setup's frame, and the recognition frame:
@@ -1910,10 +1951,19 @@ pub mod api {
     ) -> Result<(marcam::project::Project, String, Mesh, pickables::Frame), String> {
         let (p, _) = marcam::project::Project::from_json_any(doc)?;
         // (Mar: "picking ... says no model") a carried piece with no model: picked on itself
-        if let Some(s) = carried_only(&p, o["setup"].as_str()).filter(|_| o["model"].as_str().is_none_or(str::is_empty)) {
+        if let Some(s) = carried_only(&p, o["setup"].as_str())
+            .filter(|_| o["model"].as_str().is_none_or(str::is_empty))
+        {
             let part = carried_piece(doc, &s.id, mesh)?;
             let kind = s.kind.clone().unwrap_or_else(|| "rotary".into());
-            let frame = if kind == "rotary" { pickables::Frame::Rotary } else { pickables::Frame::Xyz { index_a: o["index_a"].as_f64().unwrap_or(0.0), sides: kind == "indexed" } };
+            let frame = if kind == "rotary" {
+                pickables::Frame::Rotary
+            } else {
+                pickables::Frame::Xyz {
+                    index_a: o["index_a"].as_f64().unwrap_or(0.0),
+                    sides: kind == "indexed",
+                }
+            };
             let id = s.id.clone();
             return Ok((p, id, part, frame));
         }
