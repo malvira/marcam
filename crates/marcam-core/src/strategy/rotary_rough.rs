@@ -26,7 +26,7 @@ fn rest_along(
     xs: &[f64],
     seg: f64,
     clg: &[Vec<f64>],
-    st: &[Vec<f64>],
+    _st: &[Vec<f64>],
     levels: &[f64],
     safe_r: f64,
     cl: &dyn Fn(f64, f64) -> f64,
@@ -65,10 +65,13 @@ fn rest_along(
             while i < xs.len() {
                 let c = clg[i][k];
                 let z = level.max(c);
+                // (by what the tool would take there, not the stock's top along a ray alone:
+                // the impeller's hub between the blades, its ray's top on the hub, the stock
+                // left beside it)
                 let here = (x_in0..=x_in1).contains(&xs[i])
                     && c < level - 1e-6
-                    && st[i][k] - z > REST_ALONG_MIN
-                    && takes(xs[i], xs[i], a, a, z) > 0.0;
+                    // (a negative radius: more than a trace of it, see [`StockNear`])
+                    && takes(xs[i], xs[i], a, a, -z) > 0.0;
                 for m in mask.iter_mut().skip(i).take(every) {
                     *m = here;
                 }
@@ -80,36 +83,81 @@ fn rest_along(
                 let zf = |x: f64, a: f64| py_max(level, cl(x, a));
                 // down from just above what stands there: the level above where a pass of it
                 // went, else the stock left
-                let i0 = xs.iter().position(|&x| (x - xa).abs() < 1e-9).unwrap_or(0);
-                // (what stands under the tool's width there: the stock left round it)
-                let wi = (TOOL_R_GUESS / 0.05).ceil() as usize;
-                let wk =
-                    ((TOOL_R_GUESS / level.max(0.5)).asin().to_degrees() / seg).ceil() as i64 + 1;
-                let mut stand = 0.0f64;
-                for i in i0.saturating_sub(wi)..(i0 + wi + 1).min(xs.len()) {
-                    for dk in -wk..=wk {
-                        let kk = (k as i64 + dk).rem_euclid(n_rev as i64) as usize;
-                        let t = if done_above[i][kk] {
-                            (level + op.step_down).min(st[i][kk])
-                        } else {
-                            st[i][kk]
-                        };
-                        stand = stand.max(t);
-                    }
+                // (down by rapid only to where the tool takes nothing: up from the pass a half
+                // mm at a time; the stock's top along a ray alone missed what stood beside it)
+                let mut above = zf(xa, a);
+                while above < safe_r && takes(xa, xa, a, a, above) > 0.0 {
+                    above += 0.5;
                 }
-                let above = stand;
                 let z0 = zf(xa, a);
-                b.rapid_r(safe_r);
-                b.rapid(Some(xa), None, Some(a));
-                b.rapid_r(py_max(above + 0.5, z0 + 0.5).min(safe_r));
-                b.plunge(z0, feeds.1);
-                let n = ((xb - xa).abs() / 0.5).ceil().max(1.0) as usize;
+                let start = py_max(above + 0.5, z0 + 0.5).min(safe_r);
+                // (Mar's impeller: 18,000 rapids up to the safe radius and back between short
+                // passes, 53 min) from the end of the pass before, near here: up to where the
+                // tool takes nothing there and on the way, over at the feed, and down
+                let linked = match (b.x, b.r) {
+                    (Some(px), Some(pr)) if (px - xa).abs() <= LINK_REACH && pr < safe_r - 1e-9 => {
+                        let pa = b.a;
+                        let mut rl = pr.max(start);
+                        let clear = |r: f64| {
+                            (0..=4).all(|t| {
+                                let f = t as f64 / 4.0;
+                                let (x, aa) = (px + (xa - px) * f, pa + (a - pa) * f);
+                                takes(x, x, aa, aa, r) <= 0.0
+                            })
+                        };
+                        while rl < safe_r && !clear(rl) {
+                            rl += 0.5;
+                        }
+                        (rl < safe_r).then_some(rl)
+                    }
+                    _ => None,
+                };
+                let top = match linked {
+                    Some(rl) => {
+                        b.cut(b.x.unwrap_or(xa), rl, b.a, feeds.0, feeds.1);
+                        b.cut(xa, rl, a, feeds.0, feeds.1);
+                        rl
+                    }
+                    None => {
+                        b.rapid_r(safe_r);
+                        b.rapid(Some(xa), None, Some(a));
+                        b.rapid_r(start);
+                        start
+                    }
+                };
+                // (no plunge through what stands there: down a ramp along the pass at the
+                // operation's ramp angle, then back over the ramp at depth)
+                let tan = op.ramp_angle.clamp(2.0, 45.0).to_radians().tan();
+                let len = (xb - xa).abs();
+                let ramp_len = ((top - z0).max(0.0) / tan).min(len);
+                let dir = if xb >= xa { 1.0 } else { -1.0 };
+                if ramp_len > 0.05 && len > 0.5 {
+                    let steps = (ramp_len / 0.25).ceil().max(1.0) as usize;
+                    for j in 1..=steps {
+                        let f = j as f64 / steps as f64;
+                        let x = xa + dir * ramp_len * f;
+                        let r = (top + (z0 - top) * f).max(zf(x, a));
+                        b.cut(x, r, a, feeds.0, feeds.1);
+                    }
+                    // the rest of the way down there, if the ramp ran out of pass
+                    let xe = xa + dir * ramp_len;
+                    b.plunge(zf(xe, a), feeds.1);
+                    // back over the ramp at depth, then the pass
+                    let n = (ramp_len / 0.5).ceil().max(1.0) as usize;
+                    for j in 1..=n {
+                        let x = xe - dir * ramp_len * j as f64 / n as f64;
+                        let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(z0), b.a];
+                        refine(b, &zf, p0, [x, zf(x, a), a], tol, 0, feeds);
+                    }
+                } else {
+                    b.plunge(z0, feeds.1);
+                }
+                let n = (len / 0.5).ceil().max(1.0) as usize;
                 for j in 1..=n {
                     let x = xa + (xb - xa) * j as f64 / n as f64;
                     let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(z0), b.a];
                     refine(b, &zf, p0, [x, zf(x, a), a], tol, 0, feeds);
                 }
-                b.rapid_r(safe_r);
                 forward = !forward;
             }
             for i in 0..xs.len() {
@@ -119,12 +167,12 @@ fn rest_along(
             }
         }
     }
+    b.rapid_r(safe_r);
 }
 
-/// Rest roughing along X: the least stock above the level and the part's allowance worth a
-/// pass (mm): more than the allowance the roughing before left and the in-process stock's own
-/// sampling (its rays a fifth of a mm apart).
-const REST_ALONG_MIN: f64 = 0.6;
+/// Rest roughing along X: the next pass's start this near the last one's end (mm, along X)
+/// is reached at the feed, over the stock, not by way of the safe radius.
+const LINK_REACH: f64 = 3.0;
 /// Rest roughing along X: how far round its pass a tool reaches (mm), for the stock it comes
 /// down over: as wide as the largest ball it is used with (3.175 mm).
 const TOOL_R_GUESS: f64 = 1.6;
@@ -154,7 +202,9 @@ fn intervals(mask: &[bool], xs: &[f64]) -> Vec<(f64, f64)> {
 }
 
 /// The highest stock under a tool moving from X `x0` to `x1` and A `a0` to `a1` (degrees)
-/// with its tip `r` from the axis (its width included): a stock that is not round.
+/// with its tip `r` from the axis (its width included): a stock that is not round. (Rest
+/// roughing on the 3D stock: `r` negative, the tip at `-r`: whether the tool would take more
+/// than a trace there, worth a pass.)
 pub type StockNear<'a> = &'a dyn Fn(f64, f64, f64, f64, f64) -> f64;
 
 /// Returns the lowest tip radius used. `stock_at` gives the bar's largest radius at an X when

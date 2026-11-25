@@ -376,6 +376,16 @@ fn probe_rest_stock() {
         ball: true,
         height: 2.0 * 1.5875 + 0.5,
     };
+    for a in [270.0, 273.0, 276.0] {
+        eprintln!(
+            "x -39.88 a {a}: radial top {:.2}",
+            dx.radial_top(-39.88, 90.0 - a, 25.5, 0.1)
+        );
+        for r in [6.3, 7.0, 8.0, 9.0, 10.0, 12.0] {
+            let (tip, d) = pose(-39.88, 0.0, r, a);
+            eprintln!("   r {r}: in ball {:.2} mm3", dx.inside(&ball, tip, d));
+        }
+    }
     for r in [24.0, 20.0, 17.5, 12.0, 9.0] {
         let mut n = 0;
         let mut tot = 0.0;

@@ -1707,12 +1707,15 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         if r >= job.stock.radius - 1e-9 {
                             return dx.radial_top(x0, 90.0 - a0, job.stock.radius + 0.5, 0.1);
                         }
+                        // (a negative radius: whether more than a trace stands there, worth a
+                        // rest pass: 0.5 mm3, a fifth of a mm round a third of the ball)
+                        let (r, least) = if r < 0.0 { (-r, 0.5) } else { (r, 0.05) };
                         let any = [(x0, a0), (x1, a1), (0.5 * (x0 + x1), 0.5 * (a0 + a1))]
                             .iter()
                             .any(|&(x, a)| {
                                 let (tip, dir) = dexel::pose(x, 0.0, r, a);
                                 // (more than the stock's sampling round the part)
-                                dx.inside(&t, tip, dir) > 0.05
+                                dx.inside(&t, tip, dir) > least
                             });
                         return if any { r } else { 0.0 };
                     }
