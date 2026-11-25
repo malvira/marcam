@@ -1159,6 +1159,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const list = [...new Set(mode.kinds.map((k) => names[k] || k.replace(/_/g, " ")))];
     const what = list.length > 1 ? `${list.slice(0, -1).join(", ")} or ${list[list.length - 1]}` : list[0];
     const typed = ty.params.some((p) => TYPED_GEOMETRY.has(p.name) && (Array.isArray(op[p.name]) ? op[p.name].length : op[p.name] != null));
+    // (Mar's knob4: rotary roughing planned under "Nothing picked. Pick ...") an operation
+    // that needs no pick works on the whole part meanwhile: said so, the pick only limits it
+    if (!NEEDS_PICK.has(op.type)) return `Nothing picked: it works on the whole part${typed ? " (as far as the coordinates under Advanced say)" : ""}. Pick ${what} to limit it.`;
     const meanwhile = unpicked(op) ? "" : typed ? " (meanwhile: the coordinates under Advanced)" : mode.faces || mode.legacy ? " (meanwhile: the whole part)" : "";
     return `Nothing picked. Pick ${what} on the part${meanwhile}.`;
   }
