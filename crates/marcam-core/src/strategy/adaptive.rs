@@ -98,6 +98,8 @@ pub enum Step {
 #[derive(Debug, Clone, Default)]
 pub struct Cleared {
     pub steps: Vec<Step>,
+    /// The cells the tool swept at this level (cut down to it).
+    pub cut: Vec<bool>,
     /// Plunges into the material (no room for a helix).
     pub plunges: usize,
     /// Cells of material the tool could reach but left (crumbs too small to go after).
@@ -897,6 +899,7 @@ pub fn clear_level(
             open[c] = false;
         }
     }
+    out.cut = cut;
     out
 }
 

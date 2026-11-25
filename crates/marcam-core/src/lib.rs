@@ -1167,6 +1167,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             }
         })
     });
+    // (a bar on the 4th axis: the stock along all its length, past the part's ends)
+    let bar_x = job.stock_box.is_none().then(|| [-job.stock.length, 0.0]);
     // safe radius above the rotary axis, or safe Z above the block
     let safe_r = match (three, stock_box) {
         (true, Some(b)) => b.max[2] + job.clearance,
@@ -1702,6 +1704,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         &|x, y| hm.at(x, y),
                         &bottom,
                         &sb,
+                        bar_x,
                         safe_r,
                         &oi,
                     )
@@ -1967,6 +1970,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                     &|x, y| hm.at(x, y),
                                     &bottom,
                                     sb,
+                                    bar_x,
                                     safe_r,
                                     o,
                                 )

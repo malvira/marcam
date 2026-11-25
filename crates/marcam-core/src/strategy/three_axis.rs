@@ -2137,7 +2137,7 @@ fn emit_adaptive(
     b: &mut Builder,
     cl: &crate::strategy::adaptive::Cleared,
     z: f64,
-    z_top: f64,
+    entry: &dyn Fn(f64, f64, f64) -> f64,
     safe: f64,
     feed: f64,
     plunge: f64,
@@ -2145,11 +2145,28 @@ fn emit_adaptive(
     climb: bool,
 ) {
     use crate::strategy::adaptive::Step;
-    let z_start = z_top.max(z) + 0.5;
+    // (each way in from just above what is there: the level above, or, where that level
+    // never reached, the material still standing under the tool)
     for st in &cl.steps {
         match st {
-            Step::Down(q) => enter(b, safe, q[0], q[1], z_start, z, plunge),
-            Step::Plunge(q) => enter(b, safe, q[0], q[1], z_start, z, plunge),
+            Step::Down(q) => enter(
+                b,
+                safe,
+                q[0],
+                q[1],
+                entry(q[0], q[1], 0.0).max(z + 0.5),
+                z,
+                plunge,
+            ),
+            Step::Plunge(q) => enter(
+                b,
+                safe,
+                q[0],
+                q[1],
+                entry(q[0], q[1], 0.0).max(z + 0.5),
+                z,
+                plunge,
+            ),
             Step::Helix {
                 centre,
                 radius,
@@ -2163,6 +2180,7 @@ fn emit_adaptive(
                         [centre[0] + radius * a.dcos(), centre[1] + radius * a.dsin()]
                     })
                     .collect();
+                let z_start = entry(centre[0], centre[1], *radius).max(z + 0.5);
                 let (k, _) = ramp_along(b, safe, &lp, 0, z_start, z, ramp, feed, plunge);
                 // a whole turn at depth, on round to the start
                 for i in 1..=(n + (n - k) % n) {
@@ -2251,11 +2269,13 @@ fn adaptive_pocket(
         }
         let cl = clear_level(g, &allowed, &inside, &mut open, params, None);
         plunges += cl.plunges;
+        // (a pocket's every level is the same area: in from just above the one before)
+        let above = z_top;
         emit_adaptive(
             b,
             &cl,
             z,
-            z_top,
+            &|_, _, _| above + 0.5,
             safe,
             op.feed,
             op.plunge_feed,
@@ -2292,7 +2312,9 @@ fn adaptive_pocket(
 /// left for the finish), coming down a helix (or plunging) where nothing is open, linking at
 /// depth across what it has cleared. `stock_top` is the material's top at a point (the stock,
 /// or what the operations before left), `stock_bottom` its bottom (a block carried over from
-/// an earlier setup: cut from its other side).
+/// an earlier setup: cut from its other side). `stock_x`: where along X the stock really is
+/// when `stock` is only the box round the part (a bar on the 4th axis, indexed: it goes on
+/// past the part's ends, towards the chuck).
 #[allow(clippy::too_many_arguments)]
 pub fn adaptive_rough(
     b: &mut Builder,
@@ -2300,6 +2322,7 @@ pub fn adaptive_rough(
     stock_top: &dyn Fn(f64, f64) -> f64,
     stock_bottom: &dyn Fn(f64, f64) -> f64,
     stock: &StockBox,
+    stock_x: Option<[f64; 2]>,
     safe: f64,
     op: &Raster3d,
 ) -> Result<(), String> {
@@ -2338,8 +2361,11 @@ pub fn adaptive_rough(
         let p = g.point(c);
         let in_range =
             p[0] >= x0 - 1e-9 && p[0] <= x1 + 1e-9 && p[1] >= y0 - 1e-9 && p[1] <= y1 + 1e-9;
-        let inside_block = p[0] >= stock.min[0]
-            && p[0] <= stock.max[0]
+        // (the overhang fixture's 3+1 roughing: the bar past the part's end, towards the chuck,
+        // taken for air: the tool came in from the side there and rapids went into it)
+        let [sx0, sx1] = stock_x.unwrap_or([stock.min[0], stock.max[0]]);
+        let inside_block = p[0] >= sx0.min(stock.min[0])
+            && p[0] <= sx1.max(stock.max[0])
             && p[1] >= stock.min[1]
             && p[1] <= stock.max[1];
         // beside the range only off the stock (within the tool's radius of the range)
@@ -2375,7 +2401,11 @@ pub fn adaptive_rough(
     let mut open = vec![true; n];
     b.comment("--- 3D roughing (adaptive) ---");
     let mut plunges = 0;
-    let mut z_top = top;
+    // (the overhang fixture's 3+1 roughing: 26 rapids down to "just above the level before"
+    // where that level had not reached, into the stock) the material's top in each cell as
+    // the levels cut it: a way in comes down by rapid only to just above what stands under
+    // the tool there
+    let mut mat_top: Vec<f64> = top_at.clone();
     for z in levels(top, floor, op.step_down.max(d * 0.05)) {
         if crate::budget::over() {
             break;
@@ -2391,18 +2421,45 @@ pub fn adaptive_rough(
             .collect();
         let cl = clear_level(g, &allowed, &stock_here, &mut open, params, None);
         plunges += cl.plunges;
+        let standing = |x: f64, y: f64, extra: f64| -> f64 {
+            // the cells under the tool (and a helix's circle), a cell more for the grid
+            let rr = r + extra + g.h;
+            let (i0, i1) = (
+                ((x - rr - g.x0) / g.h).floor().max(0.0) as usize,
+                (((x + rr - g.x0) / g.h).ceil().max(0.0) as usize).min(g.nx - 1),
+            );
+            let (j0, j1) = (
+                ((y - rr - g.y0) / g.h).floor().max(0.0) as usize,
+                (((y + rr - g.y0) / g.h).ceil().max(0.0) as usize).min(g.ny - 1),
+            );
+            let mut hi = f64::NEG_INFINITY;
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    let c = j * g.nx + i;
+                    let p = g.point(c);
+                    if (p[0] - x).dhypot(p[1] - y) <= rr {
+                        hi = hi.max(mat_top[c]);
+                    }
+                }
+            }
+            hi + 0.5
+        };
         emit_adaptive(
             b,
             &cl,
             z,
-            z_top,
+            &standing,
             safe,
             op.feed,
             op.plunge_feed,
             op.ramp_angle,
             climb,
         );
-        z_top = z;
+        for (c, &cut) in cl.cut.iter().enumerate() {
+            if cut {
+                mat_top[c] = mat_top[c].min(z);
+            }
+        }
     }
     if plunges > 0 {
         b.warnings.push(format!(
