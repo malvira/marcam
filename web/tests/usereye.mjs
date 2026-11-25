@@ -1783,6 +1783,9 @@ try {
     };
     const onSlot = await blueNear(20, 8), inPocket = await blueNear(44, 24);
     check("a custom toolpath: its path on the screen (its cuts drawn at the slot and in the pocket)", onSlot > 3 && inPocket > 3, JSON.stringify({ onSlot, inPocket, view: vr }));
+    // (its program's rows: the estimated time and the verifier's, for the program it is in)
+    const rows = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { time: t.filter((x) => /^Estimated time: /.test(x)).sort((a, b) => a.length - b.length)[0] || '', verifier: t.find((x) => /^Verifier: /.test(x)) || '', tree: [...document.querySelectorAll('#tree .tree-op')].map((e) => e.textContent).find((x) => /Custom/.test(x))?.replace(/\\s+/g, ' ').slice(0, 80) || '' }; })()`);
+    check("a custom toolpath: its estimated time and the verifier's line shown, its time in the tree", /Estimated time: .*\d/.test(rows.time) && /Verifier: /.test(rows.verifier) && /\d+ (s|min)/.test(rows.tree), JSON.stringify(rows));
     // simulated: the stock as the program leaves it, on the screen (the view's Simulated stock
     // toggle on, as a person does)
     // (left on by a section before: off, then on, as a person does to see it again)
@@ -1814,6 +1817,49 @@ try {
     // (left as it was)
     if (!simState.on) await drag(simToggle, simToggle, 1);
     await clean("a custom toolpath");
+  }
+  // ---------------------------------------------------------------- facing to the stock's edge
+  // (Mar's knob3: the bar's corners left at the top when facing round the part) the plate on
+  // the vise: Facing added, its "clear to stock" and "outward only" ticked as a person ticks
+  // them; its path reaches out to the block's corners, round the dome, nothing cut into it
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'face'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    const lib = await waitFor(() => where("dialog[open] .tp-row", "3\\.175"), "the library", 15000).catch(() => null);
+    if (lib) await click("dialog[open] .tp-row", "3\\.175");
+    await waitFor(() => where("#opForm [name=clear_to_stock]"), "the facing's form", 60000);
+    await settled();
+    await click("#opForm [name=clear_to_stock]");
+    await settled();
+    await click("#opForm [name=outward_only]");
+    await settled();
+    const op = await read("(() => { const st = window.__marcam.state; const s = st.tree.doc.setups.find((x) => x.id === st.tree.setup); return s.operations.find((o) => o.id === st.tree.selected) || null; })()");
+    // its program's tab, as a person clicks it (its time, verifier and gouge check)
+    const tabAt = await read("(() => { const st = window.__marcam.state; const k = st.result.programs.findIndex((p) => (p.toolpath?.ops || []).some((o) => o.id === st.tree.selected)); return k; })()");
+    if (tabAt >= 0) await click(`#tabs button:nth-child(${tabAt + 1})`);
+    await settled();
+    // the block's corners (a tool's width in, just under its top) on the screen, from the top
+    await read("window.__marcam.setView('top', {})");
+    await sleep(2500);
+    const pts = await read("(async () => { const st = window.__marcam.state, v = st.three; const sb = (await window.__marcam.engine('setupFrame', st.tree.doc, { setup: st.tree.setup })).result.stock_box; const r = v.renderer.domElement.getBoundingClientRect(); const z = sb.max[2] - 0.3, k = 2.2; return [[sb.min[0] + k, sb.min[1] + k], [sb.max[0] - k, sb.min[1] + k], [sb.min[0] + k, sb.max[1] - k], [sb.max[0] - k, sb.max[1] - k]].map(([x, y]) => { const p = new v.THREE.Vector3(x, y, z).project(v.camera); return [r.left + (p.x + 1) / 2 * r.width, r.top + (1 - p.y) / 2 * r.height]; }); })()");
+    const shown = await shot("facing_clear_to_stock");
+    // its path: what its eye shows and hides there (the view only)
+    await click(`#tree .tree-op[data-op="${op?.id}"] [data-act=eye]`);
+    await sleep(1500);
+    const hidden = await shot("facing_clear_to_stock_hidden");
+    await click(`#tree .tree-op[data-op="${op?.id}"] [data-act=eye]`);
+    await settled();
+    const at = pts.map(([x, y]) => { let n = 0; for (let dy = -8; dy <= 8; dy++) for (let dx = -8; dx <= 8; dx++) { const q = shown.at(Math.round(x + dx), Math.round(y + dy)), w = hidden.at(Math.round(x + dx), Math.round(y + dy)); if (q && w && Math.abs(q[0] - w[0]) + Math.abs(q[1] - w[1]) + Math.abs(q[2] - w[2]) > 60) n++; } return n; });
+    const res = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { gouge: t.filter((x) => /^Gouge check/.test(x)).sort((a, b) => a.length - b.length)[0] || '', red: t.filter((x) => /GOUGE/.test(x)).slice(0, 2), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    check("facing ticked \"clear to stock\" and \"outward only\" (clicks, no typing): its path out at all four corners of the block, round the dome, no gouge",
+      op?.type === "face" && op.clear_to_stock === true && op.outward_only === true && at.every((n) => n >= 4) && (!res.gouge || /deepest 0\.0+ mm/.test(res.gouge)) && !res.red.length && !res.error, JSON.stringify({ op: op && { clear: op.clear_to_stock, outward: op.outward_only, depth: op.depth }, at, res }));
+    await clean("facing to the stock's edge");
   }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
