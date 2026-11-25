@@ -1838,6 +1838,17 @@ pub mod api {
             _ => (model.trim().to_string(), None),
         };
         let Some(m) = p.models.iter().find(|m| m.id == model) else {
+            // a carried piece with no model: its faces
+            if let Some(s) = model.is_empty().then(|| carried_only(&p, setup.as_deref())).flatten() {
+                let piece = match carried_piece(doc, &s.id, mesh) {
+                    Ok(m) => m,
+                    Err(e) => return err(e),
+                };
+                let (regions, of) = marcam::geometry::face_regions(&piece, 30.0);
+                let tri: Vec<f32> = piece.triangles.iter().flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32))).collect();
+                let idx: Vec<u16> = of.iter().map(|&k| k as u16).collect();
+                return json!({"regions": regions, "triangles": f32s(&tri), "region_of": u16s(&idx), "carried": true});
+            }
             return err(format!("no model {model:?}"));
         };
         let held = setup
@@ -1862,6 +1873,28 @@ pub mod api {
         json!({"regions": regions, "triangles": f32s(&tri), "region_of": u16s(&idx)})
     }
 
+    /// (a setup that takes what a setup before left, with no model of its own) the cut piece
+    /// it takes, as a mesh in its frame: what is picked on there.
+    fn carried_piece(doc: &str, setup: &str, mesh: &[u8]) -> Result<Mesh, String> {
+        let libs = libraries(&json!({}))?;
+        let job = with_setup(&json!({ "setup": setup }), || job_any_mesh(doc, &libs, mesh))?;
+        let c = job.carried.as_deref().ok_or("the setup has no part model")?;
+        Ok(match c {
+            marcam::carry::Carried::Block { x0, y0, cell, nx, ny, top, bot } => marcam::carry_mesh::block_mesh(*x0, *y0, *cell, *nx, *ny, top, bot),
+            marcam::carry::Carried::Bar(map) => marcam::carry_mesh::bar_mesh(map),
+        })
+    }
+
+    /// The setup's carried piece when it has no model of its own (None: it has one, or takes
+    /// no piece).
+    fn carried_only<'a>(p: &'a marcam::project::Project, setup: Option<&str>) -> Option<&'a marcam::project::Setup> {
+        let s = match setup {
+            Some(id) => p.setups.iter().find(|s| s.id == id)?,
+            None => p.setups.first()?,
+        };
+        (s.part.is_empty() && matches!(s.stock, marcam::project::StockDef::FromPrevious { .. })).then_some(s)
+    }
+
     /// The setup, its part model as a mesh in the setup's frame, and the recognition frame:
     /// `opts` = {setup?, model?, index_a?}.
     fn pick_context(
@@ -1870,6 +1903,14 @@ pub mod api {
         mesh: &[u8],
     ) -> Result<(marcam::project::Project, String, Mesh, pickables::Frame), String> {
         let (p, _) = marcam::project::Project::from_json_any(doc)?;
+        // (Mar: "picking ... says no model") a carried piece with no model: picked on itself
+        if let Some(s) = carried_only(&p, o["setup"].as_str()).filter(|_| o["model"].as_str().is_none_or(str::is_empty)) {
+            let part = carried_piece(doc, &s.id, mesh)?;
+            let kind = s.kind.clone().unwrap_or_else(|| "rotary".into());
+            let frame = if kind == "rotary" { pickables::Frame::Rotary } else { pickables::Frame::Xyz { index_a: o["index_a"].as_f64().unwrap_or(0.0), sides: kind == "indexed" } };
+            let id = s.id.clone();
+            return Ok((p, id, part, frame));
+        }
         let (setup, part, frame) = pickables::setup_part(
             &p,
             o["setup"].as_str(),

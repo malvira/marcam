@@ -1316,14 +1316,19 @@ try {
       await waitFor(() => read("!!document.getElementById('opForm')"), `the ${type} form`, 60000);
       await settled();
     };
-    // a feature picked as a person does: Pick on the model, a click on it in the 3D view
-    // (turned to the iso view first if it cannot be seen), Done picking
+    // a feature picked as a person does: (Mar: no "Done picking": picking is on while the
+    // operation is selected) a click on it in the 3D view (turned to the iso view first if it
+    // cannot be seen), nothing pressed after: its path planned and drawn on its own
     const faceAt = (pred) => `(() => { const t = window.__marcam.state.tree, v = window.__marcam.state.three; const target = t.pick?.list.find(${pred}); if (!target) return null; const want = new Set(target.faces); const tri = t.regions.tri; const el = v.renderer.domElement, rc = el.getBoundingClientRect(); const ray = new v.THREE.Raycaster(); for (let k = 0; k < t.regions.of.length; k++) { if (!want.has(t.regions.list[t.regions.of[k]].id)) continue; for (const w of [[1/3, 1/3, 1/3], [0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]) { const c = new v.THREE.Vector3(...[0, 1, 2].map((d) => w[0] * tri[9*k+d] + w[1] * tri[9*k+3+d] + w[2] * tri[9*k+6+d])); const p = c.clone().project(v.camera); if (Math.abs(p.x) > 0.9 || Math.abs(p.y) > 0.9) continue; const sx = ((p.x + 1) / 2) * rc.width, sy = ((1 - p.y) / 2) * rc.height; const on = (dx, dy) => { ray.setFromCamera(new v.THREE.Vector2(((sx + dx) / rc.width) * 2 - 1, -((sy + dy) / rc.height) * 2 + 1), v.camera); const h = ray.intersectObject(t.pickMesh)[0]; return h && want.has(t.regions.list[t.regions.of[h.faceIndex]].id) ? h : null; }; const hit = on(0, 0); if (!hit || hit.point.distanceTo(c) > 0.05) continue; if (![[3, 0], [-3, 0], [0, 3], [0, -3]].every(([dx, dy]) => on(dx, dy))) continue; return [Math.round(rc.left + sx), Math.round(rc.top + sy)]; } } return null; })()`;
     // (the view still: a turn of the camera animates; aimed mid-turn, the click landed where
     // the part had been)
     const still = () => waitFor(async () => { const a = await read("window.__marcam.state.three.camera.position.toArray().map((x) => x.toFixed(3)).join()"); await sleep(250); return a === (await read("window.__marcam.state.three.camera.position.toArray().map((x) => x.toFixed(3)).join()")); }, "the view still", 20000).catch(() => {});
+    // the selected operation's path as planned: its points (none: not planned)
+    const opPath = "(() => { const st = window.__marcam.state, id = st.tree.selected; for (const p of st.result?.programs || []) { const ops = (p.toolpath?.ops || []).filter((o) => o.start != null).sort((a, b) => a.start - b.start); const k = ops.findIndex((o) => o.id === id); if (k < 0) continue; const end = k + 1 < ops.length ? ops[k + 1].start : p.toolpath.points.length / 4; return [...p.toolpath.points.slice(4 * ops[k].start, 4 * end)].map((x) => +x.toFixed(3)).join(); } return ''; })()";
+    const pathChanges = [];
     const pickOn = async (pred, what) => {
-      await click("#pickFaces");
+      const path0 = await read(opPath);
+      const pressed0 = await read("document.querySelectorAll('#opEditor button').length");
       await waitFor(() => read("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick?.list?.length"), `${what}: picking`, 60000);
       // (aimed once the view is still, as a person does: a plan landing meanwhile (the new
       // operation's) can frame the view again, and the point aimed at was then empty)
@@ -1367,9 +1372,22 @@ try {
         const diag = at ? await read(`(async () => { const v = window.__marcam.state.three, t = window.__marcam.state.tree; const e = document.elementFromPoint(${at[0]}, ${at[1]}); const r = v.renderer.domElement.getBoundingClientRect(); const pr = await window.__marcam.tree.pickAt(${at[0]} - r.left, ${at[1]} - r.top); const sel = [...t.pick.sel].length; if (sel) t.pick.sel.clear(); return { under: e ? (e.tagName + '#' + e.id + (e === v.renderer.domElement ? '(the view)' : '')) : 'none', notes: t.pick.notes, direct: pr ? (pr.pickable?.label || 'a face, nothing to pick') : 'no face', picking: !!t.picking, n: t.pick.list.length }; })()`) : { at: "no point of it seen" };
         console.log(`  ${what}: the click picked nothing: ${JSON.stringify(diag)}; aimed at ${JSON.stringify(at)} with ${JSON.stringify(aimed)}; now ${JSON.stringify(await read(scene))}; aimed now ${JSON.stringify(await read(faceAt(pred)))}`);
       }
-      await click("#pickFaces");
-      await waitFor(() => read("!window.__marcam.state.tree.pickMesh"), `${what}: done picking`, 60000).catch(() => {});
+      // nothing pressed: planned again on its own, its new path drawn
+      await waitFor(async () => { const p = await read(opPath); return p && p !== path0; }, `${what}: planned again`, 120000 * SLACK).catch(() => {});
       await settled();
+      const path1 = await read(opPath);
+      // on the screen: the operation's own colour where its new path is
+      const drawnAt = await read("(() => { const st = window.__marcam.state, v = st.three, id = st.tree.selected; const s = st.tree.doc.setups.find((x) => x.id === st.tree.setup); const PAL = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#a855f7', '#14b8a6', '#e11d48', '#84cc16']; const i0 = s.operations.findIndex((o) => o.id === id); const hex = s.operations[i0]?.color || PAL[i0 % PAL.length]; const p = st.result.programs[st.tab]; const ops = (p?.toolpath?.ops || []).filter((o) => o.start != null).sort((a, b) => a.start - b.start); const k = ops.findIndex((o) => o.id === id); if (k < 0) return { hex, pts: [] }; const end = k + 1 < ops.length ? ops[k + 1].start : p.toolpath.points.length / 4; const r = v.renderer.domElement.getBoundingClientRect(); const pts = []; const P = p.toolpath.points; for (let i = ops[k].start + 1; i < end && pts.length < 40; i += Math.max(1, Math.floor((end - ops[k].start) / 40))) { if (!(P[4 * i + 3] % 2)) continue; const q = new v.THREE.Vector3(P[4 * i], P[4 * i + 1], P[4 * i + 2]).project(v.camera); if (Math.abs(q.x) < 0.95 && Math.abs(q.y) < 0.95) pts.push([r.left + (q.x + 1) / 2 * r.width, r.top + (1 - q.y) / 2 * r.height]); } return { hex, pts }; })()");
+      const img = await shot(`carry_picked_${what.replace(/\W+/g, "_")}`);
+      const hs = ([r, g, b]) => { const mx = Math.max(r, g, b), d = mx - Math.min(r, g, b); if (!d) return [0, 0]; const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return [(h * 60 + 360) % 360, d / mx]; };
+      const [h0] = hs([1, 3, 5].map((k) => parseInt(drawnAt.hex.slice(k, k + 2), 16)));
+      let seen = 0;
+      for (const [x, y] of drawnAt.pts) {
+        let ok = false;
+        for (let dy = -3; dy <= 3 && !ok; dy++) for (let dx = -3; dx <= 3 && !ok; dx++) { const q = img.at(Math.round(x + dx), Math.round(y + dy)); if (!q) continue; const [h, sat] = hs(q); if (sat > 0.2 && Math.min(Math.abs(h - h0), 360 - Math.abs(h - h0)) < 22) ok = true; }
+        if (ok) seen++;
+      }
+      pathChanges.push({ seen: drawnAt.pts.length ? +(seen / drawnAt.pts.length).toFixed(2) : 0, n: drawnAt.pts.length, what, before: path0.length, after: path1.length, changed: !!path1 && path1 !== path0, picking: await read("!!window.__marcam.state.tree.picking"), buttons: [pressed0, await read("document.querySelectorAll('#opEditor button').length")] });
       return picked;
     };
     const val = (name) => read(`document.getElementById('opForm')?.elements['${name}']?.value ?? null`);
@@ -1393,6 +1411,21 @@ try {
       JSON.stringify({ bossPick, bossDepth, pocketPick, pocketDepth, odPick, odDepth }));
     const s1 = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return { tab: t?.textContent || '', ops: [...document.querySelectorAll('#tree .tree-setup.active .tree-op .tree-label')].map((e) => e.textContent.trim().split(' ')[0]), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
     check("carry-through, setup 1: the boss's contour, the pocket, the OD's contour, planned clean", /OK/.test(s1.tab) && s1.ops.length === 3 && !s1.error, JSON.stringify(s1));
+    // (Mar: "I don't want a done picking button ... as you pick the toolpaths should update")
+    check("live picking: no Done picking button; each pick planned again with nothing pressed, its new path drawn in its colour",
+      !(await read("!!document.getElementById('pickFaces')")) && pathChanges.length === 3 && pathChanges.every((c) => c.changed && c.picking && c.buttons[1] <= c.buttons[0] + 1 && c.n >= 3 && c.seen >= 0.4), JSON.stringify(pathChanges));
+    // deselected (Escape): picking ends; a click on the part picks nothing more
+    const before2 = await read("JSON.stringify(window.__marcam.state.tree.doc.setups.find((s) => s.id === window.__marcam.state.tree.setup).operations.map((o) => o.picks || []))");
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await settled();
+    const vr0 = await viewRect();
+    const mid = [Math.round(vr0[0] + vr0[2] / 2), Math.round(vr0[1] + vr0[3] / 2)];
+    await drag(mid, mid, 1);
+    await settled();
+    const after2 = await read("JSON.stringify(window.__marcam.state.tree.doc.setups.find((s) => s.id === window.__marcam.state.tree.setup).operations.map((o) => o.picks || []))");
+    const off = await read("({ picking: !!window.__marcam.state.tree.picking, selected: window.__marcam.state.tree.selected, form: !!document.getElementById('opForm') })");
+    check("live picking: Escape deselects the operation; picking off, a click on the part changes no picks", !off.picking && !off.selected && !off.form && before2 === after2, JSON.stringify(off));
     await shot("carry_setup1");
     // + Add setup: 4th axis, continuing from setup 1
     await pick("treeAddKind", "rotary");
@@ -1528,14 +1561,12 @@ try {
     // picking for the pocket: the same colours (were all op1's blue)
     await click('#tree .tree-op[data-op="op2"] [data-act="select"]');
     await settled();
-    await click("#pickFaces");
+    // (picking is on while it is selected)
     await waitFor(() => read("!!window.__marcam.state.tree.picking"), "picking", 30000).catch(() => {});
     await read("window.__marcam.setView('top', {})");
     await sleep(1500);
     const picking = await coloursSeen("picking");
     check("the view while picking: each operation's path still in its own swatch colour (not all op1's)", picking.filter((o) => o.at >= 3).every((o) => o.seen >= 0.5) && picking.length === normal.length, JSON.stringify(picking));
-    await click("#pickFaces");
-    await settled();
     // the pocket's step-down and its colour changed: both on the screen, nothing toggled
     await read("window.__marcam.setView('iso', {})");
     await sleep(1200);

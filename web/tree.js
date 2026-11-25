@@ -55,6 +55,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (t.picking) endPicking(false);
       t.selected = null;
     }
+    // (an undo, a redo, a plan) picking on: what the operation has picked now
+    if (t.picking && t.pick) {
+      const op = opById(t.selected);
+      if (op) {
+        t.pick.sel = new Set(initialSel(op, t.pick.list, t.pick.mode));
+        paintPicked();
+      }
+    }
+    t.pickFailed = null;
     render();
   }
 
@@ -819,11 +828,13 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     t.keepEd = null;
     const op = t.selected && opById(t.selected);
     if (!op) {
+      if (t.picking) endPicking(false);
       ed.innerHTML = "";
       ed.__html = "";
       dropOverlay();
       return;
     }
+    autoPick(op);
     const ty = typeOf(op.type);
     let typeOpts = t.types
       .filter((x) => fits(x, setup()) || x.kind === op.type)
@@ -925,12 +936,15 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const mode = pickModeOf(ty);
     if (mode) {
       const pk = t.picking ? t.pick : null;
-      html += `<div class="row small"><button type="button" id="pickFaces" title="Pick ${esc(mode.kinds.map((k) => k.replace(/_/g, " ")).join(", "))} on the 3D view">${t.picking ? "Done picking" : "Pick on the model"}</button>
+      // (Mar: "I don't want a done picking button ... as you pick the toolpaths should
+      // update") picking is on while the operation is selected: a click on the part picks or
+      // unpicks, each one applied (one undo step) and planned again
+      html += `<div class="row small" id="pickRow" title="Click ${esc(mode.kinds.map((k) => k.replace(/_/g, " ")).join(", "))} on the part in the 3D view to pick or unpick">
         ${pk && pk.sel.size && !mode.single ? '<button type="button" id="pickSimilar" title="Add every feature like the ones picked">Select all similar</button>' : ""}
         <span id="pickInfo">${esc(pickInfoText(op, mode))}</span>
         ${mode.faces && faces ? '<button type="button" id="clearFaces">Clear</button>' : ""}</div>`;
       // nothing picked: said in one line (what to pick, or what it uses meanwhile)
-      if (!pk && !op.picks?.length && !faces) html += `<div class="small muted" id="pickNone">${esc(nothingPicked(op, ty, mode))}</div>`;
+      if (!op.picks?.length && !faces && !pk?.sel.size) html += `<div class="small muted" id="pickNone">${esc(nothingPicked(op, ty, mode))}</div>`;
       // what it uses (when not picking): a row per pick, × to remove it, hover to see it
       if (!pk && op.picks?.length) {
         const missing = (label) => op.error && op.error.includes(label);
@@ -1140,6 +1154,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   /** Which of `list` the operation already uses (its faces, or its fields). */
   function initialSel(op, list, mode) {
+    // its picks, as it keeps them (each feature's signature)
+    if (op.picks?.length) {
+      const keys = new Set(op.picks.map((sg) => JSON.stringify(sg)));
+      const hit = list.filter((x) => x.signature && keys.has(JSON.stringify(x.signature))).map((x) => x.id);
+      if (hit.length) return hit;
+    }
     if (mode.faces) {
       const f = op.geometry?.find((g) => g.kind === "faces");
       if (!f) return [];
@@ -1157,9 +1177,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     return s.part.find((id) => t.doc.models.find((m) => m.id === id)?.kind === "mesh") || s.part[0];
   }
 
-  async function startPicking() {
+  async function startPicking(quiet = false) {
     const v = await getThree();
-    if (!v || v.failed) return showError("Picking needs the 3D view");
+    if (!v || v.failed) return quiet ? null : showError("Picking needs the 3D view");
     const s = setup();
     const op = opById(t.selected);
     const mode = pickModeOf(typeOf(op.type));
@@ -1173,7 +1193,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         engine("pickables", t.doc, { setup: s.id, model, index_a: op.index_a ?? 0 }, state.mesh),
       ]);
     } catch (e) {
-      return showError(`Picking: ${e.message}`);
+      t.pickFailed = sel;
+      return quiet ? null : showError(`Picking: ${e.message}`);
     }
     // the project was replaced meanwhile (New, Open, an example), or another operation or
     // setup selected (a plan landing meanwhile only reads the same project again)
@@ -1185,7 +1206,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const byFace = new Map();
     for (const x of list) for (const f of x.faces) (byFace.get(f) || byFace.set(f, []).get(f)).push(x);
     for (const l of byFace.values()) l.sort((p, q) => mode.kinds.indexOf(p.kind) - mode.kinds.indexOf(q.kind));
-    t.pick = { mode, list, byFace, sel: new Set(initialSel(op, list, mode)), hover: null, notes: [] };
+    if (t.picking) return;
+    t.pick = { mode, list, byFace, sel: new Set(initialSel(op, list, mode)), hover: null, notes: [], opId: op.id };
     const { THREE } = v;
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(t.regions.tri, 3));
@@ -1210,6 +1232,33 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     dropOverlay();
     paintPicked();
     renderEditor();
+  }
+
+  /** Picking follows the selection: on while an operation that takes picks is selected (its
+   *  own picks shown), off for anything else. */
+  function autoPick(op) {
+    const mode = pickModeOf(typeOf(op.type));
+    const same = t.pick && t.pick.opId === op.id && mode && t.pick.mode.kinds.join() === mode.kinds.join();
+    if (t.picking && !same) endPicking(false);
+    if (!mode || t.picking || t.pickStarting === op.id || t.pickFailed === op.id || t.tabMode) return;
+    t.pickStarting = op.id;
+    queueMicrotask(async () => {
+      try {
+        if (t.selected === op.id && !t.picking) await startPicking(true);
+      } finally {
+        if (t.pickStarting === op.id) t.pickStarting = null;
+      }
+    });
+  }
+
+  /** Nothing selected (Escape, a click on empty space): picking ends with it. */
+  function deselect() {
+    if (!t.selected && !t.picking) return;
+    if (t.picking) endPicking(false);
+    t.selected = null;
+    t.draft = null;
+    t.retype = null;
+    render();
   }
 
   function stopPicking() {
@@ -1307,9 +1356,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         pk.notes = [e.message];
       }
     }
-    // written once, when picking is done (each pick here only marks the features)
-    if (!t.draft) t.pickedChanged = true;
     paintPicked();
+    // each pick an edit of its own (one undo step), planned again as it is made
+    if (!t.draft) {
+      const what = pk.sel.size ? `${pk.sel.size} picked` : "nothing picked";
+      await commit({ label: `Picked for ${op.id} (${what}).` });
+    }
     if (t.draft && mode.faces) await refreshDefaults();
     else renderEditor();
     // (a new one picked for the first time joins the project here: picking goes on, more
@@ -1478,6 +1530,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   // ------------------------------------------------------------ events
   $("tree").addEventListener("click", async (ev) => {
+    // empty space of the tree (no row, no form): the operation deselected, picking ended
+    if (t.selected && ev.target.matches?.("#tree, .tree-list, .tree-setupbody, .tree-setup")) return deselect();
     // (a line's grey text is part of its label: a click there is a click on the line; the
     // Stock and Part lines did nothing clicked on their sizes or file name, as a person does)
     // (Mar: "the setup line is hard to click on ... different than the other lines in the
@@ -1693,7 +1747,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "geomClear") return removeUse(null);
     if (el.dataset?.ungeom != null) return removeUse(Number(el.dataset.ungeom));
-    if (el.id === "pickFaces") return t.picking ? stopPicking() : startPicking();
+
     if (el.id === "placeTabs") {
       t.tabMode = !t.tabMode;
       return renderEditor();
@@ -1756,6 +1810,16 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (t.selected === id) t.selected = null;
       await commit({ label: `Deleted ${id}.` });
     }
+  });
+  // Escape: the operation deselected (picking ends with it)
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const tg = ev.target;
+    if (tg && (tg.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName))) return;
+    if (document.querySelector("dialog[open]:not(.embedded)")) return;
+    if (!t.selected) return;
+    ev.preventDefault();
+    deselect();
   });
   // (Mar) Ctrl+D: the selected operation duplicated (not while typing, not with a dialog up)
   document.addEventListener("keydown", (ev) => {
@@ -2280,7 +2344,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.draft = null;
       t.retype = null;
       if (!opts.keepNote) t.typeNote = null;
-      if (t.picking && !opts.keepPicking) endPicking(false);
+      if (t.picking && !opts.keepPicking && t.pick?.opId !== op.id) endPicking(false);
       const display = !!t.displayOnly;
       t.displayOnly = false;
       showFormError(null);
@@ -2333,6 +2397,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     if (down && Math.hypot(ev.clientX - down[0], ev.clientY - down[1]) > 4) return;
     const r = state.three.renderer.domElement.getBoundingClientRect();
     if (t.tabMode) return tabAt(ev.clientX - r.left, ev.clientY - r.top);
+    // (off the part: empty space, the operation deselected)
+    if (!regionAt(ev.clientX - r.left, ev.clientY - r.top)) {
+      if (ev.target === state.three.renderer.domElement) deselect();
+      return;
+    }
     pickAt(ev.clientX - r.left, ev.clientY - r.top);
   });
 
