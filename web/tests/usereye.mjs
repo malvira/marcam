@@ -1428,8 +1428,14 @@ try {
     // simulation runs behind)
     if (await where("#simClose")) await click("#simClose");
     await settled();
-    const stockToggle = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return b.getAttribute('aria-pressed') === 'true' ? null : [r.left + r.width / 2, r.top + r.height / 2]; })()");
-    if (stockToggle) await drag(stockToggle, stockToggle, 1);
+    const stockBtn = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2, b.getAttribute('aria-pressed') === 'true']; })()");
+    // (on already: off and on again, its simulation started)
+    if (stockBtn[2]) {
+      await drag(stockBtn, stockBtn, 1);
+      await sleep(500);
+    }
+    await drag(stockBtn, stockBtn, 1);
+    const stockToggle = stockBtn[2] ? null : stockBtn;
     await waitFor(() => read("(window.__marcam.state.sim?.stocks || []).length > 0"), "the knurl's simulation", 180000 * SLACK).catch(() => {});
     await settled();
     const gouges = await read("({ error: document.getElementById('error').textContent, cells: (window.__marcam.state.sim?.stocks || []).map((s) => s.gouge_cells), summary: document.getElementById('summary').textContent.split('Simulated stock')[1]?.slice(0, 160) || '' })");
