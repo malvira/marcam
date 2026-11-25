@@ -85,11 +85,12 @@ fn input(field: &str, reason: impl Into<String>) -> Error {
 }
 
 /// The operation types the plugin plans: all but those that only work from a revolved
-/// profile (`rotary_turning`), since the plugin gets the part as a mesh.
+/// profile (`rotary_turning`), since the plugin gets the part as a mesh, and a custom
+/// toolpath (its G-code is its own program, not made from the part).
 pub fn offered() -> Vec<ops::OperationType> {
     ops::registry()
         .into_iter()
-        .filter(|t| t.geometry != ["profile"])
+        .filter(|t| t.geometry != ["profile"] && t.kind != "custom")
         .collect()
 }
 

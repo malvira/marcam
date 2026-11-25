@@ -76,12 +76,12 @@ fn manifest_fits_solidcraft_rules() {
         assert_eq!(e["effect"], "read");
         assert_eq!(e["input_schema"]["type"], "object");
     }
-    // plan: every operation but turning from a profile
+    // plan: every operation but turning from a profile and a custom toolpath (its own program)
     let plan = &entries[0]["input_schema"];
     let kinds: Vec<&str> = marcam::ops::registry()
         .iter()
         .map(|t| t.kind)
-        .filter(|k| *k != "rotary_turning")
+        .filter(|k| *k != "rotary_turning" && *k != "custom")
         .collect();
     assert_eq!(plan["properties"]["operation"]["enum"], json!(kinds));
     assert_eq!(plan["properties"]["bodies"]["type"], "array");
