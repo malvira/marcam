@@ -2959,6 +2959,23 @@ pub fn simulate_job(
         collisions.push(rep);
         after.push(stock.r.clone());
     }
+    // (the radial map keeps only the stock's highest point along each ray from the axis: a
+    // rapid beside or under what stands over it, in a pocket an indexed 3+1 roughing cut from
+    // the side or under a blade, reads as through stock when it is not; Mar's impeller showed
+    // 9 in red. The rapids it flags are confirmed on the 3D stock, a tri-dexel of the bar cut
+    // by every move before them, and only those it confirms are counted.)
+    if job.carried.is_none() {
+        if let Some(last) = programs.iter().rposition(|p| !p.1.rapid_hits.is_empty()) {
+            let mut solid = dexel::Dexel::bar(job.stock.radius, job.stock.length, DEXEL_H);
+            for (k, tp) in tps.iter().enumerate().take(last + 1) {
+                let segs = sim::segments(std::slice::from_ref(tp));
+                let r = dexel::replay(&mut solid, &segs, &|t| tool_solid(job, t), 0.25, 0.15);
+                let through: std::collections::HashSet<usize> =
+                    r.rapid_hits.iter().map(|h| h.1).collect();
+                programs[k].1.rapid_hits.retain(|i| through.contains(i));
+            }
+        }
+    }
     Ok(JobSim {
         stock,
         part,
