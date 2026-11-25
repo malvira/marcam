@@ -10,6 +10,7 @@ pub mod carry;
 pub mod carry_mesh;
 pub mod collision;
 pub mod det;
+pub mod dexel;
 pub mod dropcutter;
 pub mod engrave;
 pub mod estimate;

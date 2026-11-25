@@ -222,3 +222,53 @@ fn indexed_roughing_round_the_overhang_fixture_rapids_only_through_air() {
         1
     );
 }
+
+/// The same roughing replayed through the 3D in-process stock (tri-dexel): no rapid through
+/// the stock, as the voxel replay says; and each operation's biggest bite (stock per mm of
+/// travel) reported against a normal step (its stepover times its step-down).
+#[test]
+fn the_overhang_fixture_replayed_through_the_dexel_stock() {
+    use marcam::dexel::{replay, Dexel, ToolSolid};
+    let dir = root().join("tests/fixtures");
+    let v = json!({
+        "schema_version": "0.2",
+        "name": "overhang",
+        "models": [{"id": "part", "name": "overhang_ledge.stl", "kind": "mesh", "file": "overhang_ledge.stl", "axis": "x", "translate": [-20.0, 0.0, 0.0]}],
+        "tools": [{"number": 1, "library": "makera-starter", "tool": "spiral-o-metal-3.175x12"}],
+        "setups": [{
+            "id": "setup1", "name": "Setup 1", "machine": "makera-z1-4axis", "kind": "rotary",
+            "clearance": 3.0, "part": ["part"], "spindle_rpm": 12000,
+            "stock": {"shape": "cylinder", "radius": 13.0, "length": 35.0},
+            "holding": {"kind": "rotary_chuck", "tailstock": false},
+            "operations": [{"id": "op1", "type": "rough3d", "tool": 1, "index_a": 0.0, "index_count": 6,
+                "x_range": [-20.0, 0.0], "y_range": [-12.0, 12.0], "stepover": 1.25, "sample": 0.32,
+                "step_down": 1.6, "floor": 0.0, "leave_z": 0.25, "tolerance": 0.005, "angle": 0.0,
+                "pattern": "adaptive", "direction": "climb", "scallop": 0.0, "feed": 300.0,
+                "plunge_feed": 60.0, "ramp_angle": 30.0, "smoothing": 0.01}],
+            "outputs": [{"name": "rough", "title": "rough", "operations": ["op1"]}]
+        }]
+    });
+    let js = jobs(&v, &dir);
+    let job = &js[0].1;
+    let mesh = marcam::load_mesh(job, &dir).unwrap();
+    let tps = marcam::plan_with_mesh(job, mesh.as_ref()).unwrap();
+    let segs = marcam::sim::segments(&tps);
+    let mut dx = Dexel::bar(13.0, 35.0, 0.1);
+    let v0 = dx.volume();
+    let t1 = ToolSolid {
+        radius: 3.175 / 2.0,
+        ball: false,
+        height: 12.0,
+    };
+    let r = replay(&mut dx, &segs, &|_| Some(t1), 0.25, 0.15);
+    assert!(
+        r.rapid_hits.is_empty(),
+        "{:?}",
+        &r.rapid_hits[..r.rapid_hits.len().min(5)]
+    );
+    assert!(dx.volume() < v0);
+    let normal = 1.25 * 1.6;
+    for (op, bite, at) in &r.worst_bite {
+        eprintln!("op tag {op}: worst bite {bite:.2} mm3/mm at move {at} ({:.1}x a normal step of {normal:.2})", bite / normal);
+    }
+}
