@@ -1684,6 +1684,46 @@ try {
     if (!simState.on) await drag(simToggle, simToggle, 1);
     await clean("a custom toolpath");
   }
+  // ---------------------------------------------------------------- tree rows: the whole row
+  // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
+  // is different than the other lines in the tree where you can click anywhere on the row")
+  // the plate: an operation selected, then each row clicked in its empty right-hand part (not
+  // on its words): what it is for shown
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    // a point of the row right of its words (and left of its buttons), and what is there
+    const emptyOf = (css) => read(`(() => { const row = document.querySelector(${JSON.stringify(css)}); if (!row) return null; row.scrollIntoView({ block: 'nearest' }); const r = row.getBoundingClientRect(); let right = r.right - 6; for (const b of row.querySelectorAll('button')) { const q = b.getBoundingClientRect(); if (q.width && q.left > r.left + r.width / 2) right = Math.min(right, q.left - 6); } let words = r.left; for (const e of row.querySelectorAll('.tree-label, .muted')) { const q = e.getBoundingClientRect(); for (const rr of e.getClientRects()) if (Math.abs(rr.top + rr.height / 2 - (r.top + r.height / 2)) < r.height / 2) words = Math.max(words, rr.right); } const x = Math.round((words + right) / 2), y = Math.round(r.top + r.height / 2); const hit = document.elementFromPoint(x, y); return { at: [x, y], room: Math.round(right - words), hit: hit ? hit.className || hit.tagName : null, onWords: !!hit?.closest('.tree-label') && hit.closest('.tree-label') !== hit.closest('.tree-op .tree-label') }; })()`);
+    const rows = [
+      ["the setup's line", ".tree-setup.active > .tree-setuphead", "!!document.querySelector('#setupDialog.embedded') && document.querySelector('#setupDialog.embedded').getBoundingClientRect().height > 0"],
+      ["Stock", ".tree-stock[data-node=stock]", "!!document.getElementById('stockPane')?.getBoundingClientRect().height"],
+      ["Part", ".tree-stock[data-node=part]", "!!document.getElementById('partPane')?.getBoundingClientRect().height"],
+      ["Fixture", ".tree-stock[data-node=fixture]", "!!document.getElementById('fixturePane')?.getBoundingClientRect().height"],
+      ["a tool", ".tree-tool", "!!document.querySelector('.tool-details')?.getBoundingClientRect().height"],
+      ["the Tool library", ".tree-lib > .tree-setuphead", "!!document.querySelector('.tree-lib.sel')"],
+    ];
+    for (const [what, css, shown] of rows) {
+      // (an operation selected first: its form shown, not this row's details)
+      await click(".tree-op .tree-label");
+      await settled();
+      const before = await read(shown);
+      const e = await emptyOf(css);
+      if (!e) {
+        check(`tree rows: ${what} clicked right of its words: its details shown`, false, `no ${css}`);
+        continue;
+      }
+      await drag(e.at, e.at, 1);
+      await settled();
+      const after = await read(shown);
+      check(`tree rows: ${what} clicked right of its words (not on them): what it is for shown`, !before && after && e.room > 20 && !e.onWords, JSON.stringify({ before, after, ...e }));
+    }
+    await shot("tree_row_clicked");
+    await clean("tree rows");
+  }
   // ---------------------------------------------------------------- playback: one clock
   // (Mar: "the simulation sliders [are] not very consistent. changing the speed ... causes
   // visual bugs and the wrong playback speed"; chunky when fast) the knob playing with its

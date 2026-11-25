@@ -91,7 +91,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; }
 .tree-list { max-height: 48vh; overflow: auto; }
 .tree-setup { margin: 2px 0; }
 .tree-setuphead { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 4px; font-weight: 600; }
-.tree-setuphead .tree-label { cursor: pointer; }
+.tree-setuphead, .tree-setuphead .tree-label { cursor: pointer; }
 .tree-setuphead .muted { font-weight: 400; }
 .tree-setup.sel > .tree-setuphead { background: var(--bg); outline: 1px solid var(--accent); }
 .tree-setupbody { margin-left: 14px; }

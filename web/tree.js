@@ -1480,7 +1480,13 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   $("tree").addEventListener("click", async (ev) => {
     // (a line's grey text is part of its label: a click there is a click on the line; the
     // Stock and Part lines did nothing clicked on their sizes or file name, as a person does)
-    const label = !ev.target.closest?.("button, input, select, textarea, a") && ev.target.closest?.(".tree-label[data-act]");
+    // (Mar: "the setup line is hard to click on ... different than the other lines in the
+    // tree where you can click anywhere on the row") a click anywhere on a row (a setup, the
+    // Tool library, Stock, Part, Fixture, a tool, an operation), not on one of its controls,
+    // is a click on its label
+    const control = ev.target.closest?.("button, input, select, textarea, a");
+    const rowEl = !control && ev.target.closest?.(".tree-setuphead, .tree-stock, .tree-tool, .tree-op");
+    const label = !control && (ev.target.closest?.(".tree-label[data-act]") || rowEl?.querySelector(".tree-label[data-act]"));
     const el = label || ev.target;
     if (el.id === "treeAdd") {
       const picked = $("treeAddType").value;
