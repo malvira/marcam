@@ -1939,6 +1939,60 @@ try {
       chuck?.shown && !chuck.on && pressed === "true" && diffC > seenC * 0.01 && tail && !tail.shown, JSON.stringify({ tg, pressed, diffC, seenC }));
     await clean("roughing round a flat piece");
   }
+  // ---------------------------------------------------------------- under an overhang
+  // (Mar's impeller: 1700 "gouged" cells 10.7 mm deep where the gouge check found none) a
+  // hub with two ledges standing out past a gap (tests/fixtures/overhang_ledge.py) on the 4th
+  // axis; a ball finish round the hub beside the ledges; simulated: the stock map cannot hold
+  // the gap under a ledge, and a cut beside it is no gouge: none said, none in red
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; return true; })()");
+    await click("#menuFile");
+    await click("#menuFile button, #menuFile [role=menuitem], #menuFile li, #menuFile a", "^New");
+    await settled();
+    {
+      const doc = await S("DOM.getDocument");
+      const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#importStlFile" });
+      await S("DOM.setFileInputFiles", { files: [join(root, "tests", "fixtures", "overhang_ledge.stl")], nodeId });
+    }
+    await settled();
+    // on the 4th axis (its card), the bar fitted to the part
+    await click("#tree .tree-setup.active [data-act=setup]");
+    await settled();
+    if (await where("#treeDetails [data-setkind=rotary]")) {
+      await click("#treeDetails [data-setkind=rotary]");
+      await settled();
+    }
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    if (await where("button", "^Fit to part$")) {
+      await click("button", "^Fit to part$");
+      await settled();
+    }
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'rotary_finish'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    const lib = await waitFor(() => where("dialog[open] .tp-row", "Ball nose 3\.175 x 22"), "the library", 15000).catch(() => null);
+    if (lib) await click("dialog[open] .tp-row", "Ball nose 3\.175 x 22");
+    await waitFor(() => read("JSON.parse(document.getElementById('job').value).setups[0].operations.some((o) => o.type === 'rotary_finish')"), "the finish added", 60000);
+    await settled();
+    // the simulated stock on (off first if a section before left it on), as a person does
+    const simB = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return { on: b.getAttribute('aria-pressed') === 'true', at: [r.left + r.width / 2, r.top + r.height / 2] }; })()");
+    if (simB.on) {
+      await drag(simB.at, simB.at, 1);
+      await settled();
+    }
+    await drag(simB.at, simB.at, 1);
+    await waitFor(() => read("/Simulated stock:/.test(document.getElementById('summary').textContent)"), "the simulation", 180000 * SLACK).catch(() => {});
+    await settled();
+    const ov = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); const sim = window.__marcam.state.sim?.stocks?.[0]; return { summary: t.filter((x) => /^Simulated stock:/.test(x)).sort((a, b) => a.length - b.length)[0] || '', gc: t.filter((x) => /^Gouge check/.test(x)).sort((a, b) => a.length - b.length)[0] || '', cells: sim?.gouge_cells ?? null, red: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '', tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent) }; })()`);
+    await shot("overhang_sim");
+    check("under an overhang: a ball finish beside the ledges, simulated: no gouge said (0 cells, under 0.02 mm), none in red, the gouge check's too",
+      +((ov.summary.match(/deepest gouge ([\d.]+) mm/) || [])[1] ?? 9) < 0.02 && ov.cells === 0 && !/gouge/i.test(ov.red) && /deepest 0\.0[0-1]\d* mm/.test(ov.gc) && ov.tabs.some((x) => /OK/.test(x)), JSON.stringify(ov));
+    if (!simB.on) await drag(simB.at, simB.at, 1);
+    await clean("under an overhang");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")
