@@ -1768,6 +1768,13 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                 t3::contour(&mut b, d, sb, safe_r, &one).map_err(err)?
                             }
                         }
+                        // (Mar) everything of the stock at its depth, round the part
+                        Operation::Face(o) if o.clear_to_stock => {
+                            let mesh = ctx.mesh.ok_or_else(|| err("facing to the stock's edges needs the part's model (to go round it)".to_string()))?;
+                            let c = cutter_for(o.tool, shape).map_err(|e| err(e.to_string()))?;
+                            let dc = t3::DropCutter3::new(mesh, c);
+                            t3::face_clear(&mut b, d, sb, safe_r, o, &dc).map_err(err)?
+                        }
                         Operation::Face(o) => t3::face(&mut b, d, sb, safe_r, o).map_err(err)?,
                         Operation::Pocket(o) => {
                             t3::pocket(&mut b, d, sb, safe_r, o).map_err(err)?

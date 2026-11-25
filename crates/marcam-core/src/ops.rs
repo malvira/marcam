@@ -403,6 +403,8 @@ fn types() -> Vec<OperationType> {
                 p("paths", "paths", "mm", "Where to face: closed outlines, even-odd (a picked flat face's outline and its openings); the tool stays a radius inside. Empty: the whole stock top.").opt(json!([])),
                 p("regions", "regions", "", "Several picked features worked in turn, each with its own outline and depth (set by picking; empty: the fields above).").opt(json!([])),
                 p("boundary_offset", "number", "mm", "Grow the faced area this far past its boundary (the picked faces' outlines, or the stock's); negative: shrink it.").opt(json!(0.0)),
+                p("outward_only", "boolean", "", "The boundary offset grows the picked outline outward only, not into its openings (where the part stands inside them).").opt(json!(false)),
+                p("clear_to_stock", "boolean", "", "Face everything of the stock at this depth, out to its edges (its corners too), round what of the part stands above it.").opt(json!(false)),
                 feed(),
                 plunge(),
             ],

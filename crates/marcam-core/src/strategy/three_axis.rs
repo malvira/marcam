@@ -120,6 +120,122 @@ fn zigzag(b: &mut Builder, area: [f64; 4], z: f64, stepover: f64, feed: f64) {
     }
 }
 
+/// (Mar: "a way to clear all the remaining stock") facing everything of the stock at each
+/// level down to the face's depth, out to the stock's edges: zigzag rows across the stock,
+/// broken (up and over) where the part stands above the level (`dc`: the part, with the tool).
+pub fn face_clear(
+    b: &mut Builder,
+    d: f64,
+    stock: &StockBox,
+    safe: f64,
+    op: &Face,
+    dc: &DropCutter3,
+) -> Result<(), String> {
+    let r = d / 2.0;
+    let top = stock.max[2];
+    let bottom = top - op.depth;
+    let (x0, x1) = (stock.min[0] - r * 0.5, stock.max[0] + r * 0.5);
+    let (y0, y1) = (stock.min[1] + r * 0.5, stock.max[1] - r * 0.5);
+    if x1 <= x0 || y1 <= y0 {
+        return Err("facing: the stock is narrower than the tool".into());
+    }
+    b.comment("--- facing to the stock's edges ---");
+    let step = op.stepover * d;
+    let n = (((y1 - y0) / step.max(1e-3)).ceil() as usize).max(1);
+    let m = (((x1 - x0) / 0.25).ceil() as usize).max(1);
+    let mut any = false;
+    for z in levels(top, bottom, op.step_down) {
+        let mut down = false;
+        for k in 0..=n {
+            if crate::budget::over() {
+                break;
+            }
+            let y = y0 + (y1 - y0) * k as f64 / n as f64;
+            let xs: Vec<f64> = (0..=m)
+                .map(|i| x0 + (x1 - x0) * i as f64 / m as f64)
+                .collect();
+            let xs: Vec<f64> = if k % 2 == 0 {
+                xs
+            } else {
+                xs.into_iter().rev().collect()
+            };
+            // the row's stretches where the tool at this level stays clear of the part
+            let mut run: Vec<f64> = Vec::new();
+            let flush = |run: &mut Vec<f64>, b: &mut Builder, down: &mut bool| {
+                if run.len() >= 2 {
+                    let (xa, xb) = (run[0], run[run.len() - 1]);
+                    if !*down {
+                        enter(b, safe, xa, y, z + 1.0, z, op.plunge_feed);
+                        *down = true;
+                    } else {
+                        // over the part (or to the next row's start): up clear, across, down
+                        b.rapid3(None, None, Some(safe));
+                        b.rapid3(Some(xa), Some(y), None);
+                        b.line3(xa, y, z, UP, op.plunge_feed);
+                    }
+                    b.line3(xb, y, z, UP, op.feed);
+                }
+                run.clear();
+            };
+            for &x in &xs {
+                if dc.z_at(x, y, f64::NEG_INFINITY) <= z + 0.01 {
+                    run.push(x);
+                } else {
+                    flush(&mut run, b, &mut down);
+                }
+            }
+            flush(&mut run, b, &mut down);
+        }
+        if down {
+            any = true;
+            leave(b, safe);
+        }
+    }
+    if !any {
+        return Err(
+            "facing to the stock's edges: the part stands above the whole stock at that depth"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// `paths` (even-odd: an outline and its openings) with the outline alone grown by `g`
+/// (outward), the openings as they are.
+fn grow_outline_only(paths: &[Vec<[f64; 2]>], g: f64) -> Vec<Vec<[f64; 2]>> {
+    let area = |p: &Vec<[f64; 2]>| {
+        let n = p.len();
+        (0..n)
+            .map(|i| p[i][0] * p[(i + 1) % n][1] - p[(i + 1) % n][0] * p[i][1])
+            .sum::<f64>()
+            .abs()
+            / 2.0
+    };
+    let Some(k) = (0..paths.len()).max_by(|&a, &b| area(&paths[a]).total_cmp(&area(&paths[b])))
+    else {
+        return paths.to_vec();
+    };
+    let field = crate::offset::DistanceField::padded(
+        &paths[k..k + 1],
+        POCKET_FIELD_CELL,
+        f64::INFINITY,
+        g + 1.0,
+    );
+    let grown = field.loops(-g);
+    if grown.len() != 1 {
+        return paths.to_vec();
+    }
+    let mut out = grown;
+    out.extend(
+        paths
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != k)
+            .map(|(_, p)| p.clone()),
+    );
+    out
+}
+
 pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> Result<(), String> {
     if !op.paths.is_empty() {
         // bounded by a face: cleared like a shaped pocket from the stock top down
@@ -143,6 +259,14 @@ pub fn face(b: &mut Builder, d: f64, stock: &StockBox, safe: f64, op: &Face) -> 
             leave_z: 0.0,
         };
         b.comment("--- facing (bounded by a face) ---");
+        // (outward only: the outline grown, its openings as they are)
+        if op.outward_only && op.boundary_offset > 0.0 && op.paths.len() > 1 {
+            let p = Pocket {
+                paths: grow_outline_only(&op.paths, op.boundary_offset),
+                ..p
+            };
+            return path_pocket(b, d, stock, safe, &p, 0.0);
+        }
         return path_pocket(b, d, stock, safe, &p, op.boundary_offset);
     }
     let r = d / 2.0;

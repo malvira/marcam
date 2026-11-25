@@ -916,6 +916,15 @@ pub struct Face {
     /// Several faces, each faced in turn to its own depth (then `paths`/`depth` are unused).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<Region>,
+    /// (Mar: "a way to clear all the remaining stock") face everything of the stock at its
+    /// depth, out to the stock's edges (its corners too), around what of the part stands above
+    /// that level (checked against the part, never into it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_to_stock: bool,
+    /// (Mar: "a boundary offset in only one direction") the boundary offset grows the picked
+    /// outline outward only, not into its openings (what of the part stands inside them).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outward_only: bool,
     /// Grow the faced area this far past its boundary (mm; the picked faces' outlines, or the
     /// stock's), or shrink it (negative).
     #[serde(default, skip_serializing_if = "is_zero_f64")]

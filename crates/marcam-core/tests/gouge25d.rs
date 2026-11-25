@@ -76,3 +76,12 @@ fn a_contour_sunk_into_the_part_is_said_so_the_plates_own_are_not() {
         "{g}"
     );
 }
+
+#[test]
+fn facing_to_the_stocks_edges_goes_round_the_part_and_clears_the_rest() {
+    // the plate's dome stands up out of the block: facing to 1 mm down, round it
+    let notes = plate_notes(Some(
+        json!([{"id": "op9", "type": "face", "tool": 1, "depth": 1.0, "step_down": 0.5, "stepover": 0.6, "feed": 400.0, "plunge_feed": 100.0, "clear_to_stock": true}]),
+    ));
+    assert!(!notes.iter().any(|n| n.contains("GOUGE")), "{notes:?}");
+}
