@@ -2969,7 +2969,9 @@ pub fn simulate_job(
             let mut solid = dexel::Dexel::bar(job.stock.radius, job.stock.length, DEXEL_H);
             for (k, tp) in tps.iter().enumerate().take(last + 1) {
                 let segs = sim::segments(std::slice::from_ref(tp));
-                let r = dexel::replay(&mut solid, &segs, &|t| tool_solid(job, t), 0.25, 0.15);
+                // (clear of it by more than the dexel's own spacing: its rays are that far
+                // apart, and a rapid passing within it of stock it only grazes read as in it)
+                let r = dexel::replay(&mut solid, &segs, &|t| tool_solid(job, t), 0.25, DEXEL_H);
                 let through: std::collections::HashSet<usize> =
                     r.rapid_hits.iter().map(|h| h.1).collect();
                 programs[k].1.rapid_hits.retain(|i| through.contains(i));
