@@ -8,6 +8,7 @@ import { setupToolDialogs } from "./tooldialog.js";
 import { splitter } from "./splitters.js";
 import { setupTree } from "./tree.js";
 import { jawGrip, lyingBar, meshFileOf, setupProject } from "./project.js";
+import { CHUCK_D } from "./stockpane.js";
 import { setupHandles } from "./handles.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
 import { color, colorNum, colorRgb, COLOR_DEFAULTS, COLOR_LABELS, onColorsChange, resetColors, setColor } from "./colors.js";
@@ -1795,8 +1796,52 @@ async function drawModel() {
       groups.jaws.add(jaw);
     }
   }
-  // (Mar: the chuck and the tailstock are not drawn on the 4th axis; the tool is checked
-  // against them all the same)
+  // (Mar: the chuck and the tailstock on the 4th axis, each with a view toggle, off by
+  // default; the tool is checked against them whether drawn or not)
+  for (const k of ["chuck", "tailstock"]) {
+    if (!groups[k]) {
+      groups[k] = new THREE.Group();
+      groups[k].userData.fixture = k;
+      v.scene.add(groups[k]);
+    }
+    clear(groups[k]);
+  }
+  // (a 0.1 job: one 4th-axis setup, its holding the job's)
+  const held = v2 ? setup : doc;
+  const rotaryHeld = !!held && !(held.kind === "vise" || held.holding?.kind === "vise" || held.stock?.shape === "box") && !sb && v.bounds;
+  if (rotaryHeld) {
+    const hd = held.holding || {};
+    const back = v.bounds.xmin + 1, front = v.bounds.xmax - 1, R = v.bounds.R;
+    const steel = () => new THREE.MeshStandardMaterial({ color: colorNum("fixture"), metalness: 0.55, roughness: 0.5 });
+    const edges = (geo) => new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), new THREE.LineBasicMaterial({ color: colorNum("fixtureEdge") }));
+    // the chuck: its jaws round the bar's back end (what they grip, at least a little), its
+    // body behind them (Fixture: chuck Ø, chuck length, jaw grip)
+    const grip = Math.max(hd.chuck || 0, 6), face = back + (hd.chuck || 0);
+    const bodyR = Math.max((hd.chuck_diameter > 0 ? hd.chuck_diameter : CHUCK_D) / 2, R + 8), bodyL = hd.chuck_length > 0 ? hd.chuck_length : 30;
+    const body = new THREE.CylinderGeometry(bodyR, bodyR, bodyL, 64);
+    body.rotateZ(Math.PI / 2);
+    body.translate(face - grip - bodyL / 2, 0, 0);
+    groups.chuck.add(new THREE.Mesh(body, steel()), edges(body));
+    for (let k = 0; k < 3; k++) {
+      const jaw = new THREE.BoxGeometry(grip, Math.min(10, bodyR - R), Math.max(6, R * 0.6));
+      jaw.translate(face - grip / 2, R + Math.min(10, bodyR - R) / 2, 0);
+      jaw.rotateX((k * 2 * Math.PI) / 3);
+      groups.chuck.add(new THREE.Mesh(jaw, steel()), edges(jaw));
+    }
+    // the tailstock: its centre in the bar's front (Fixture: tailstock at X), its quill behind
+    if (hd.tailstock) {
+      const tx = hd.tailstock_x != null ? hd.tailstock_x : front;
+      const cone = new THREE.ConeGeometry(8, 12, 48);
+      cone.rotateZ(Math.PI / 2);
+      cone.translate(tx + 6, 0, 0);
+      const quill = new THREE.CylinderGeometry(12, 12, 40, 48);
+      quill.rotateZ(Math.PI / 2);
+      quill.translate(tx + 12 + 20, 0, 0);
+      groups.tailstock.add(new THREE.Mesh(cone, steel()), edges(cone), new THREE.Mesh(quill, steel()), edges(quill));
+    }
+  }
+  window.__marcam.renderViewToggles?.();
+  legacyLayers();
   // frame the view when the stock changes; keep the person's orbit otherwise
   if (fitKey && v.fitted !== fitKey && v.fitted !== "picking") {
     if (sb) {
@@ -2020,6 +2065,9 @@ function legacyLayers() {
   groups.path.visible = paths;
   if (v.rapLines) v.rapLines.visible = rapids;
   groups.tool.visible = tool;
+  // (the 4th axis's chuck and tailstock: their toggles, off by default)
+  if (groups.chuck) groups.chuck.visible = !!view?.chuck;
+  if (groups.tailstock) groups.tailstock.visible = !!view?.tailstock;
   // (an operation's live preview: while it is being made, not after)
   if (groups.draft) groups.draft.visible = paths && !!state.tree?.draft;
   // the playback shown (not stepped aside for picking or a new operation): it draws them

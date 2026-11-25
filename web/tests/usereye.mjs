@@ -1888,6 +1888,29 @@ try {
     await shot("rough_flat_piece");
     check("rotary roughing round a flat carried piece: planned clean, its time shown, the air round it crossed at a feed above its own (in its G-code)",
       rr.fast > 20 && rr.feeds > rr.fast && /Estimated time: .*\d/.test(rr.time) && rr.tabs.some((x) => /OK/.test(x)) && !rr.error, JSON.stringify(rr));
+    // (Mar) the chuck and the tailstock: view toggles of a 4th-axis setup, off by default; the
+    // chuck's drawn round the piece's back end when its toggle is pressed, gone again after
+    await read("window.__marcam.setView('iso', {})");
+    await sleep(1500);
+    const tg = await read("[...document.querySelectorAll('#viewToggles button[data-v]')].filter((b) => ['chuck', 'tailstock'].includes(b.dataset.v)).map((b) => ({ v: b.dataset.v, shown: !b.hidden && b.getBoundingClientRect().width > 0, on: b.getAttribute('aria-pressed') === 'true' }))");
+    const vrC = await viewRect();
+    const off = await shot("chuck_off");
+    await click("#viewToggles button[data-v=chuck]");
+    await sleep(1500);
+    const on = await shot("chuck_on");
+    let diffC = 0, seenC = 0;
+    for (let y = vrC[1]; y < vrC[1] + vrC[3]; y += 4)
+      for (let x = vrC[0]; x < vrC[0] + vrC[2]; x += 4) {
+        const a = off.at(x, y), b = on.at(x, y);
+        seenC++;
+        if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 60) diffC++;
+      }
+    const pressed = await read("document.querySelector('#viewToggles button[data-v=chuck]').getAttribute('aria-pressed')");
+    await click("#viewToggles button[data-v=chuck]");
+    await sleep(800);
+    const chuck = tg.find((t) => t.v === "chuck"), tail = tg.find((t) => t.v === "tailstock");
+    check("the 4th axis's chuck: a view toggle, off by default, drawn when pressed (the view changes); no tailstock toggle without a tailstock",
+      chuck?.shown && !chuck.on && pressed === "true" && diffC > seenC * 0.01 && tail && !tail.shown, JSON.stringify({ tg, pressed, diffC, seenC }));
     await clean("roughing round a flat piece");
   }
   // ---------------------------------------------------------------- tree rows: the whole row

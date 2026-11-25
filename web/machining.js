@@ -92,7 +92,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   // for them, except the stock, which shows the background simulation's result (and runs
   // it if there is none yet).
   const VIEW_KEY = "marcam.view";
-  const VIEW_DEFAULT = { part: true, stock: false, paths: "all", rapids: false, tool: true, only: false };
+  const VIEW_DEFAULT = { part: true, stock: false, paths: "all", rapids: false, tool: true, only: false, chuck: false, tailstock: false };
   /** The stock shown: its toggle; (Mar's carry-through) or, in a setup with no model (a cut
    *  piece carried in), the part's toggle: the piece is the part there. */
   const stockOn = () => {
@@ -126,7 +126,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     { k: "rapids", key: "r", title: "Rapid moves", svg: '<path d="M3 10h9 M3 10h1 M6 10h2 M10 10h2 M12 6l5 4-5 4" stroke-dasharray="2 2"/>' },
     { k: "tool", key: "c", title: "The tool (during playback)", svg: '<path d="M8 2h4v8H8z M9 10h2v6l-1 2-1-2z"/>' },
     { k: "only", key: "o", title: "Only the selected operation's toolpath (others dimmed when off)", svg: '<circle cx="10" cy="10" r="6"/><circle cx="10" cy="10" r="2"/>' },
+    // (Mar) the 4th axis's holding: off by default, shown on a 4th-axis setup only
+    { k: "chuck", key: "k", title: "The chuck (4th axis)", rotary: true, svg: '<path d="M3 4h6v12H3z M9 6h4v2H9z M9 12h4v2H9z M13 9h4v2h-4z"/>' },
+    { k: "tailstock", key: "l", title: "The tailstock (4th axis, when the setup has one)", rotary: true, tail: true, svg: '<path d="M17 6v8h-6l-4-4 4-4z M3 10h4"/>' },
   ];
+  (window.__marcam ||= {}).renderViewToggles = () => renderToggles();
   function renderToggles() {
     let bar = $("viewToggles");
     const host = $("view3d");
@@ -146,6 +150,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         if (b.id === "vtPlay") return playButton();
         toggle(b.dataset.v);
       });
+    }
+    // (the chuck and tailstock toggles: on a 4th-axis setup; the tailstock's when it has one)
+    const t0 = state.tree;
+    const s0 = t0?.doc?.setups?.find((x) => x.id === t0.setup);
+    const rotarySetup = !!s0 && !(s0.kind === "vise" || s0.holding?.kind === "vise" || s0.stock?.shape === "box");
+    for (const b of bar.querySelectorAll("button[data-v]")) {
+      const tg = TOGGLES.find((x) => x.k === b.dataset.v);
+      b.hidden = !!tg?.rotary && (!rotarySetup || (tg.tail && !s0?.holding?.tailstock));
     }
     for (const b of bar.querySelectorAll("button[data-v]")) {
       const k = b.dataset.v;
@@ -261,6 +273,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
     const tg = TOGGLES.find((x) => x.key === key);
     if (!tg) return;
+    // (the chuck's and tailstock's only where their buttons are shown)
+    if (tg.rotary && document.querySelector(`#viewToggles button[data-v="${tg.k}"]`)?.hidden) return;
     ev.preventDefault();
     toggle(tg.k);
   });
