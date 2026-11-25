@@ -1122,6 +1122,10 @@ pub fn phase(what: &str) {
     }
 }
 
+/// How far past the part's ends an indexed operation's box takes in the bar (mm): more than
+/// a tool's radius beside the part.
+const INDEXED_REACH: f64 = 5.0;
+
 fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Toolpath, Error> {
     let job = ctx.job;
     // a vise setup (box stock) runs only 3-axis operations; a rotary setup runs both, the
@@ -1161,6 +1165,13 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 (Some(p), None) => (p.x_min(), p.x_max()),
                 _ => (-job.stock.length, 0.0),
             };
+            // (the impeller past its nose: the bar there, a tool's reach from the part, left
+            // out of the box, was taken for what the indexes before had left at its edge, and
+            // slotted 6-11 mm deep) a little of the bar past each end of the part too
+            let (xlo, xhi) = (
+                (xlo - INDEXED_REACH).max(-job.stock.length),
+                (xhi + INDEXED_REACH).min(0.0),
+            );
             job::StockBox {
                 min: [xlo, -rad, -rad],
                 max: [xhi, rad, rad],

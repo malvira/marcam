@@ -2370,7 +2370,11 @@ pub fn adaptive_rough(
             && p[1] <= stock.max[1];
         // beside the range only off the stock (within the tool's radius of the range)
         let near_range = (p[0] - p[0].clamp(x0, x1)).dhypot(p[1] - p[1].clamp(y0, y1)) <= r;
-        if in_range || (near_range && !inside_block) {
+        // (the impeller past its nose: the tool kept inside the range reached the stock there
+        // only late, beside the blades, and slotted it 6-9 mm deep) within a tool's radius of
+        // the range the tool may stand over the stock too, where it misses the part: that
+        // stock is cleared a level at a time
+        if in_range || near_range {
             surf[c] = dc.z_at(p[0], p[1], op.floor) + op.leave_z;
         }
         if inside_block {
