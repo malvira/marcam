@@ -1424,7 +1424,10 @@ try {
     check("carry-through: on the 4th axis, an operation's Type list offers Indexed roughing (3+1)", /Indexed roughing \(3\+1\)/.test(idxOpt), idxOpt);
     // (the knurl's simulation: no gouge where the knurl never cut, the carried piece's own
     // resolution on the turned OD was counted as 3340 gouged cells)
-    // (as a person does: the view's Simulated stock toggle on, the simulation runs behind)
+    // (as a person does: the playback folded, the view's Simulated stock toggle on, the
+    // simulation runs behind)
+    if (await where("#simClose")) await click("#simClose");
+    await settled();
     const stockToggle = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return b.getAttribute('aria-pressed') === 'true' ? null : [r.left + r.width / 2, r.top + r.height / 2]; })()");
     if (stockToggle) await drag(stockToggle, stockToggle, 1);
     await waitFor(() => read("(window.__marcam.state.sim?.stocks || []).length > 0"), "the knurl's simulation", 180000 * SLACK).catch(() => {});
@@ -1461,16 +1464,26 @@ try {
     await sleep(1500);
     // each operation's swatch colour, at points along its own path (projected to the screen)
     const opsAt = `(() => { const st = window.__marcam.state, v = st.three; const p = st.result.programs[st.tab]; const pts = p.toolpath.points, n = pts.length / 4; const starts = (p.toolpath.ops || []).filter((o) => o.id && o.start != null).sort((a, b) => a.start - b.start); const setup = st.tree.doc.setups.find((s) => s.id === st.tree.setup); const PAL = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"]; const r = v.renderer.domElement.getBoundingClientRect(); return starts.map((o, k) => { const end = k + 1 < starts.length ? starts[k + 1].start : n; const i0 = setup.operations.findIndex((x) => x.id === o.id); const hex = setup.operations[i0]?.color || PAL[i0 % PAL.length]; const at = []; for (let i = o.start + 1; i < end && at.length < 40; i += Math.max(1, Math.floor((end - o.start) / 40))) { if (!(pts[4 * i + 3] % 2)) continue; const q = new v.THREE.Vector3(pts[4 * i], pts[4 * i + 1], pts[4 * i + 2]).project(v.camera); if (Math.abs(q.x) < 0.95 && Math.abs(q.y) < 0.95) at.push([r.left + (q.x + 1) / 2 * r.width, r.top + (1 - q.y) / 2 * r.height]); } return { id: o.id, hex, at }; }); })()`;
+    // a colour's hue (degrees) and saturation: a path under the stock's light tint keeps its
+    // hue, paler
+    const hueSat = ([r, g, b]) => {
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+      if (!d) return [0, 0];
+      const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      return [(h * 60 + 360) % 360, d / mx];
+    };
     const near = (img, hex, at) => {
-      const c = [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+      const [h0] = hueSat([parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)]);
       let hit = 0;
       for (const [x, y] of at) {
         let ok = false;
         for (let dy = -3; dy <= 3 && !ok; dy++)
           for (let dx = -3; dx <= 3 && !ok; dx++) {
             const q = img.at(Math.round(x + dx), Math.round(y + dy));
-            // the swatch's hue: the same channels lead (dimmed or not)
-            if (q && Math.abs(q[0] - c[0]) + Math.abs(q[1] - c[1]) + Math.abs(q[2] - c[2]) < 120) ok = true;
+            if (!q) continue;
+            const [h, sat] = hueSat(q);
+            const dh = Math.min(Math.abs(h - h0), 360 - Math.abs(h - h0));
+            if (sat > 0.2 && dh < 22) ok = true;
           }
         if (ok) hit++;
       }
@@ -1569,7 +1582,7 @@ try {
     };
     await typeSwitch("carried", "3-axis vise", "rotary");
     // the plate's first setup: a part and operations
-    await click("#tree .tree-setup:first-child [data-act=setup]");
+    await click('#tree .tree-setup[data-setup="vise1"] [data-act=setup]');
     await settled();
     await typeSwitch("a part, operations", "3-axis vise", "rotary");
     await typeSwitch("back", "4th axis", "vise");
