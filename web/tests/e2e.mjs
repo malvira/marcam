@@ -578,7 +578,8 @@ try {
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAdd').click(); true`);
     await waitFor(() => js(`!!document.getElementById('opForm') && ${SEL}?.type === '${kind}'`), `the ${kind} form`, 60000);
     // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
-    const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
+    // (an optional setting under More whose empty means "worked out": rest roughing's max bite)
+    const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length) || (p.default === null && !p.required && p.advanced)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
     // (Mar's picking rule) the types whose geometry is a placeholder until a pick: not added,
     // the one-line prompt shown instead (the next Add replaces the draft)
     if (["contour", "pocket", "drill", "chamfer", "thread_mill", "bore", "custom"].includes(kind)) {
