@@ -1720,6 +1720,11 @@ pub struct RotaryRough {
     /// [`crate::smoothing`]); None: the type's default; 0: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing: Option<f64>,
+    /// Rest roughing on the 4th axis: only where the operations before it in the setup left
+    /// material (simulated), angle by angle; round the rest at the air feed (Mar's impeller:
+    /// the hub under the blades, which no index of the roughing reached).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rest: bool,
 }
 
 fn default_rough_sample_deg() -> f64 {

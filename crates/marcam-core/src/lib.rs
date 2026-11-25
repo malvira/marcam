@@ -1586,14 +1586,33 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 check_flute(tool, job.stock.radius, r_min)?;
             }
             (Operation::RotaryRough(o), _) => {
+                // (Mar's impeller: the hub under the blades, which no index of the roughing
+                // reached) rest roughing: the bar as the operations before left it, simulated
+                let rest_bar = o.rest.then(|| {
+                    let mut map = indexed_bar(job, &ctx.prior);
+                    let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
+                    let tp = bar_toolpath(job, &b.moves);
+                    for seg in sim::segments(std::slice::from_ref(&tp)) {
+                        let cut = seg.tool.and_then(cutter_of);
+                        sim::apply_segment(
+                            &mut map,
+                            &seg,
+                            cut.as_ref(),
+                            indexed_step(cut.as_ref()),
+                        );
+                    }
+                    map
+                });
                 let mesh = ctx.surface(&prog.name)?;
                 let c = grown_for(cutter.expect("set above"), o.leave_axial, &prog.name)?;
                 let dc = DropCutter::new(mesh, c);
                 // a bar carried from an earlier setup: where it is turned down already
-                let column = job.carried.as_deref().and_then(|c| match c {
-                    carry::Carried::Bar(m) => Some(m),
-                    _ => None,
-                });
+                let column = rest_bar
+                    .as_ref()
+                    .or(job.carried.as_deref().and_then(|c| match c {
+                        carry::Carried::Bar(m) => Some(m),
+                        _ => None,
+                    }));
                 let tops: Option<Vec<f64>> = column.map(|m| {
                     (0..m.grid.nx)
                         .map(|i| {

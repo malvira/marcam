@@ -13,6 +13,9 @@ const AIR_FEED: f64 = 2000.0;
 /// Through the air round the axis: at most this many mm/min per mm from it (about 3,400
 /// degrees a minute, under the 4,000 the Z1's controller takes).
 const AIR_TURN: f64 = 60.0;
+/// Rest roughing: the least stock above a level worth going round for (mm); less is the
+/// allowance the operations before left on the part.
+const REST_MIN: f64 = 0.25;
 /// How far clear of the stock a move must stay to count as in the air (mm).
 const AIR_GAP: f64 = 0.2;
 
@@ -71,14 +74,25 @@ pub fn rotary_rough(
     let xs: Vec<f64> = (0..=m)
         .map(|i| x_lo + (x_hi - x_lo) * i as f64 / m as f64)
         .collect();
-    let need: Vec<f64> = xs
+    let clg: Vec<Vec<f64>> = xs
         .iter()
-        .map(|&x| {
-            (0..n_rev)
-                .map(|k| cl(x, k as f64 * seg))
-                .fold(f64::INFINITY, f64::min)
-        })
+        .map(|&x| (0..n_rev).map(|k| cl(x, k as f64 * seg)).collect())
         .collect();
+    let need: Vec<f64> = clg
+        .iter()
+        .map(|row| row.iter().copied().fold(f64::INFINITY, f64::min))
+        .collect();
+    // (rest roughing: the stock as the operations before left it, at each x and angle)
+    let rest_stock: Option<Vec<Vec<f64>>> = (op.rest && stock_near.is_some()).then(|| {
+        let f = stock_near.expect("checked");
+        xs.iter()
+            .map(|&x| {
+                (0..n_rev)
+                    .map(|k| f(x, x, k as f64 * seg, k as f64 * seg, stock_r))
+                    .collect()
+            })
+            .collect()
+    });
     let z_min = need.iter().copied().fold(f64::INFINITY, f64::min);
     // the bar's largest radius at each x (round from end to end: the stock's)
     let top: Vec<f64> = xs
@@ -115,19 +129,36 @@ pub fn rotary_rough(
         if crate::budget::over() {
             break;
         }
-        // material to remove at this level: the part below it, the bar above it
-        let mask: Vec<bool> = need
-            .iter()
-            .zip(&top)
-            .map(|(&z, &t)| z < level - 1e-6 && t > level + 1e-6)
-            .collect();
+        // material to remove at this level: the part below it, the bar above it; (rest
+        // roughing) at some angle more of it than a trace, not the allowance the operations
+        // before left on the part
+        let mask: Vec<bool> = match &rest_stock {
+            Some(st) => (0..xs.len())
+                .map(|i| {
+                    (0..n_rev).any(|k| {
+                        let c = clg[i][k];
+                        c < level - 1e-6 && st[i][k] - level.max(c) > REST_MIN
+                    })
+                })
+                .collect(),
+            None => need
+                .iter()
+                .zip(&top)
+                .map(|(&z, &t)| z < level - 1e-6 && t > level + 1e-6)
+                .collect(),
+        };
         for (mut xa, mut xb) in intervals(&mask, &xs) {
             if direction < 0.0 {
                 std::mem::swap(&mut xa, &mut xb);
             }
             // (never above the bar: where the part with what it leaves stands higher, along the
             // bar's top, not round the air above it)
-            let zf = |x: f64, a: f64| py_max(level, cl(x, a).min(top_at(x) + 0.5));
+            // (and never below the part itself: a simulated stock's top can be under a blade
+            // that leans over the hub)
+            let zf = |x: f64, a: f64| {
+                let c = cl(x, a);
+                py_max(level, c.min(top_at(x) + 0.5).max(c - op.leave_radial))
+            };
             let go = |b: &mut Builder, x: f64, r: f64, a: f64| {
                 let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(r), b.a];
                 // (the tip nowhere lower than the lower end: nothing of the stock up to it)
@@ -148,7 +179,13 @@ pub fn rotary_rough(
             let zs = py_max(prev + 0.5, zf(xa, a0));
             b.rapid_r(safe_r);
             b.rapid_x(xa);
-            b.plunge(zs, op.plunge_feed);
+            // (rest roughing: down by rapid where nothing stands under the tool, else at the
+            // plunge feed)
+            if stock_near.is_some_and(|f| f(xa, xa, a0, a0, zs) < zs - AIR_GAP) {
+                b.rapid_r(zs);
+            } else {
+                b.plunge(zs, op.plunge_feed);
+            }
             for i in 1..=n_rev {
                 let a = a0 + direction * seg * i as f64;
                 let target = zf(xa, a);
