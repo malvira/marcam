@@ -1562,6 +1562,38 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         _ => job.stock.radius,
                     }
                 };
+                // (a carried piece is not round about the axis: where round a level there is
+                // none of it, under the tool's width) the highest of it in a window
+                let stock_near = |x0: f64, x1: f64, a0: f64, a1: f64, r: f64| -> f64 {
+                    let Some(m) = column else {
+                        return job.stock.radius;
+                    };
+                    let g = &m.grid;
+                    let i0 = ((x0 - tr - g.x0) / g.dx - 0.5).floor().max(0.0) as usize;
+                    let i1 =
+                        (((x1 + tr - g.x0) / g.dx - 0.5).ceil().max(0.0) as usize).min(g.nx - 1);
+                    if i0 > i1 || i0 >= g.nx {
+                        return 0.0;
+                    }
+                    // the tool at A meets the part's angle 90 - A; its half width there
+                    let half = if r <= tr {
+                        90.0
+                    } else {
+                        (tr / r).asin().to_degrees()
+                    };
+                    let (p0, p1) = (90.0 - a1 - half, 90.0 - a0 + half);
+                    let d = 360.0 / g.na as f64;
+                    let (j0, j1) = ((p0 / d - 0.5).floor() as i64, (p1 / d - 0.5).ceil() as i64);
+                    let span = (j1 - j0 + 1).min(g.na as i64);
+                    let mut hi = 0.0f32;
+                    for i in i0..=i1 {
+                        let row = &m.r[i * g.na..(i + 1) * g.na];
+                        for k in 0..span {
+                            hi = hi.max(row[(j0 + k).rem_euclid(g.na as i64) as usize]);
+                        }
+                    }
+                    hi as f64
+                };
                 let r_min = strategy::rotary_rough(
                     &mut b,
                     &dc,
@@ -1569,6 +1601,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     safe_r,
                     o,
                     Some(&stock_at as &dyn Fn(f64) -> f64),
+                    column.map(|_| &stock_near as strategy::StockNear),
                 )
                 .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;

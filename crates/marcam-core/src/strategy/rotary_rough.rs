@@ -8,6 +8,14 @@ use crate::job::RotaryRough;
 use crate::numeric::py_max;
 use crate::toolpath::{Builder, Move};
 
+/// The fastest a move through the air goes (mm/min), at most five times the cutting feed.
+const AIR_FEED: f64 = 2000.0;
+/// Through the air round the axis: at most this many mm/min per mm from it (about 3,400
+/// degrees a minute, under the 4,000 the Z1's controller takes).
+const AIR_TURN: f64 = 60.0;
+/// How far clear of the stock a move must stay to count as in the air (mm).
+const AIR_GAP: f64 = 0.2;
+
 fn intervals(mask: &[bool], xs: &[f64]) -> Vec<(f64, f64)> {
     let mut out = Vec::new();
     let mut start = None;
@@ -27,9 +35,15 @@ fn intervals(mask: &[bool], xs: &[f64]) -> Vec<(f64, f64)> {
     out
 }
 
+/// The highest stock under a tool moving from X `x0` to `x1` and A `a0` to `a1` (degrees)
+/// with its tip `r` from the axis (its width included): a stock that is not round.
+pub type StockNear<'a> = &'a dyn Fn(f64, f64, f64, f64, f64) -> f64;
+
 /// Returns the lowest tip radius used. `stock_at` gives the bar's largest radius at an X when
 /// it is not round from end to end (a bar carried from an earlier setup, turned down in
-/// places): a level is cut only along X where the bar stands above it.
+/// places): a level is cut only along X where the bar stands above it. `stock_near` (a stock
+/// not round about the axis: a carried piece) says where round a level there is none: those
+/// stretches are crossed at the air feed.
 pub fn rotary_rough(
     b: &mut Builder,
     dc: &DropCutter,
@@ -37,6 +51,7 @@ pub fn rotary_rough(
     safe_r: f64,
     op: &RotaryRough,
     stock_at: Option<&dyn Fn(f64) -> f64>,
+    stock_near: Option<StockNear>,
 ) -> Result<f64, String> {
     if op.step_down <= 0.0 || op.step_x <= 0.0 || op.sample_deg <= 0.0 {
         return Err("step_down, step_x and sample_deg must be > 0".into());
@@ -90,6 +105,9 @@ pub fn rotary_rough(
 
     let tol = op.tolerance.max(1e-4);
     let feeds = (op.feed, op.plunge_feed);
+    // (Mar's knob4: a bar laid across A, its rough round the whole turn at every level, 4 h
+    // of it in the air) where the tool meets no stock: crossed faster, at the air feed
+    let air_feed = op.feed.max((5.0 * op.feed).min(AIR_FEED));
     let mut prev = stock_r;
     let mut direction = 1.0;
     b.comment("--- mesh roughing ---");
@@ -112,7 +130,18 @@ pub fn rotary_rough(
             let zf = |x: f64, a: f64| py_max(level, cl(x, a).min(top_at(x) + 0.5));
             let go = |b: &mut Builder, x: f64, r: f64, a: f64| {
                 let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(r), b.a];
-                refine(b, &zf, p0, [x, r, a], tol, 0, feeds);
+                // (the tip nowhere lower than the lower end: nothing of the stock up to it)
+                let low = p0[1].min(r);
+                let air = stock_near.is_some_and(|f| {
+                    f(p0[0].min(x), p0[0].max(x), p0[2].min(a), p0[2].max(a), low) < low - AIR_GAP
+                });
+                // (turning, not cutting: no faster round the axis than the controller's cap)
+                let f = if air {
+                    (air_feed.min(AIR_TURN * low).max(op.feed), feeds.1)
+                } else {
+                    feeds
+                };
+                refine(b, &zf, p0, [x, r, a], tol, 0, f);
             };
             let a0 = b.a;
             // enter above the previous level (already cleared here), then ramp down over a turn

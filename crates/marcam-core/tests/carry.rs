@@ -546,3 +546,69 @@ fn a_knurl_on_the_step_next_to_the_base_keeps_off_the_base() {
     );
     assert!((hi - (-10.5 + 0.6)).abs() < 0.01, "{hi}");
 }
+
+/// (Mar's knob4: a rough round a carried piece that is not round, most of each turn in the
+/// air, 4 h of it) the plate carried on as a bar (40 x 10 across: flat): where the tool meets
+/// none of it, round a level, it goes at the air feed; never at that feed into the stock, and
+/// nothing cut into the part
+#[test]
+fn rotary_roughing_round_a_flat_carried_piece_crosses_the_air_faster() {
+    let dir = root().join("examples/plate");
+    let mut v = plate_three_setups();
+    v["setups"][1]["stock"] = json!({"shape": "from_previous"});
+    v["setups"][1]["kind"] = json!("rotary");
+    v["setups"][1]["holding"] = json!({"kind": "rotary_chuck", "tailstock": false});
+    v["setups"][1]["operations"] = json!([]);
+    v["setups"][1]["outputs"] = json!([]);
+    v["setups"].as_array_mut().unwrap().truncate(2);
+    let libs = marcam::profiles::builtin_libraries();
+    let (p, _) = Project::from_json_any(&v.to_string()).unwrap();
+    let mut op = p
+        .op_defaults("rotary_rough", "vise2", None, &[], &libs, None, &|_| None)
+        .unwrap();
+    op["id"] = json!("rr");
+    op["step_down"] = json!(1.5);
+    // (the T1 flutes: 11 mm deep from the corners at most)
+    op["min_radius"] = json!(10.0);
+    let feed = op["feed"].as_f64().unwrap();
+    v["setups"][1]["operations"] = json!([op]);
+    v["setups"][1]["outputs"] = json!([{"name": "rough", "title": "rough", "operations": ["rr"]}]);
+    let mut js = jobs(&v, &dir);
+    let meshes = |j: &Job| marcam::load_mesh(j, &dir).ok().flatten();
+    carry_stock(&mut js, &meshes, None).unwrap();
+    let mesh = meshes(&js[1].1);
+    let tps = marcam::plan_with_mesh(&js[1].1, mesh.as_ref()).unwrap();
+    let Some(Carried::Bar(m)) = js[1].1.carried.as_deref() else {
+        panic!("no bar carried")
+    };
+    let g = m.grid;
+    // the stock at the tool's tip: the cell the tip faces (the tool at A meets angle 90 - A)
+    let stock = |x: f64, a: f64| {
+        let i = (((x - g.x0) / g.dx) as usize).min(g.nx - 1);
+        let phi = (90.0 - a).rem_euclid(360.0);
+        let j = ((phi / 360.0 * g.na as f64) as usize).min(g.na - 1);
+        m.r[i * g.na + j] as f64
+    };
+    let (mut air, mut cut, mut into) = (0, 0, 0);
+    for t in &tps {
+        for mv in &t.moves {
+            if let marcam::Move::Cut {
+                x, r, a, feed: f, ..
+            } = *mv
+            {
+                if f > feed * 1.01 {
+                    air += 1;
+                    if r < stock(x, a) - 0.05 {
+                        into += 1;
+                    }
+                } else {
+                    cut += 1;
+                }
+            }
+        }
+    }
+    assert!(air > 50 && cut > 50, "air {air}, cut {cut}");
+    assert_eq!(into, 0, "{into} air moves into the stock");
+    let gc = marcam::gouge_check(&js[1].1, &tps, mesh.as_ref()).unwrap();
+    assert!(gc.iter().all(|r| r.max_depth < 0.02), "{gc:?}");
+}
