@@ -2751,7 +2751,8 @@ try {
         play: !document.getElementById('vtPlay').classList.contains('hidden'), segs: m.session.segments }; })()`;
     const calm = await js(look);
     await shot("29a_viewer_calm_knob");
-    const key = (k) => js(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true })); true`);
+    // (the view's letters: pressed over the view)
+    const key = (k) => js(`document.querySelector('#view3d canvas').dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true })); true`);
     const seen = {};
     await key("p"); seen.partOff = (await js(look)).part; await key("p"); seen.partOn = (await js(look)).part;
     await key("r"); seen.rapidsOn = (await js(look)).rapids; await key("r");
@@ -2897,7 +2898,8 @@ try {
     const after = { look: await jawsLook(), warnings: await js("window.__marcam.state.result.programs.flatMap((p) => p.warnings || [])"), grip: await js("JSON.parse(document.getElementById('job').value).setups[0].holding.jaws"), shown: await js("document.getElementById('toolWarnings')?.textContent || ''") };
     await shot("31_vise_jaws");
     // hidden with the part and the stock
-    const key = (k) => js(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true })); true`);
+    // (the view's letters: pressed over the view)
+    const key = (k) => js(`document.querySelector('#view3d canvas').dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true })); true`);
     const view0 = await js("JSON.stringify(window.__marcam.state.machining.view)");
     await js("(() => { const v = window.__marcam.state.machining.view; if (v.stock) window.__marcam.machining.toggle('stock'); if (v.part) window.__marcam.machining.toggle('part'); return true; })()");
     await sleep(200);
@@ -3505,7 +3507,7 @@ try {
     }
     await clickGenerate();
     await waitDone("the knob on end planned", 240000);
-    await js("if (!window.__marcam.machining.state.view.stock) document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true })); window.__marcam.machining.expand?.(); true");
+    await js("if (!window.__marcam.machining.state.view.stock) document.querySelector('#view3d canvas').dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true })); window.__marcam.machining.expand?.(); true");
     await waitFor(() => js("!!window.__marcam.machining.state.session?.segments && !window.__marcam.machining.state.busy && !window.__marcam.machining.state.swapping"), "the knob's playback", 120000);
     await js(`(() => { const M = window.__marcam, m = M.machining.state, v = M.state.three; window.__scrubFrames = []; const r0 = v.renderer.render.bind(v.renderer); window.__scrubR0 = r0; v.renderer.render = (s, c) => { if (s === v.scene) { const g = m.stockMesh?.geometry; let top = -1e9; if (g) { const p = g.attributes.position.array; for (let i = 2; i < p.length; i += 9) top = Math.max(top, p[i]); } window.__scrubFrames.push([m.pos, top, v.groups.work.rotation.x, document.querySelectorAll('#view3d canvas').length]); } return r0(s, c); }; return true; })()`);
     const segs = await js("window.__marcam.machining.state.session.segments");

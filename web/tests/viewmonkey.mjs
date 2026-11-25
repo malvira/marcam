@@ -201,7 +201,11 @@ function actions(r, app) {
   };
   const center = async () => js("(() => { const b = document.querySelector('#view3d canvas').getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()");
   return [
-    { name: "toggle", w: 6, may: ["view"], run: async () => { const k = r.pick(["p", "s", "t", "r", "c", "o"]); await key(k); return k; } },
+    // (a view's letter, the pointer over the view, as a person does)
+    { name: "toggle", w: 6, may: ["view"], run: async () => { const k = r.pick(["p", "s", "t", "r", "c", "o"]); const [x, y] = await center(); await S("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }); await key(k); return k; } },
+    // (Mar's vanished paths and part) letters typed with the pointer off the view and no field
+    // focused (a form drawn again under the caret): nothing may change
+    { name: "straykeys", w: 2, may: [], run: async () => { await js("(() => { document.activeElement?.blur?.(); return true; })()"); await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: 3, y: 3 }); const ks = [0, 1, 2].map(() => r.pick(["p", "s", "t", "r", "c", "o"])); for (const k of ks) await key(k); return ks.join(""); } },
     { name: "play", w: 3, may: ["pos", "playing", "expanded"], run: async () => { const b = await js("!!document.getElementById('vtPlay') && !document.getElementById('vtPlay').disabled && !document.getElementById('vtPlay').classList.contains('hidden')"); await click(b ? "document.getElementById('vtPlay')" : "document.getElementById('simPlay')"); return b ? "vtPlay" : "simPlay"; } },
     { name: "scrub", w: 3, may: ["pos"], run: async () => { const f = r.f(); await js(`(() => { const s = document.getElementById('simScrub'); if (s.offsetParent === null) return false; s.value = String(Math.round(+s.max * ${f})); s.dispatchEvent(new Event('input')); return true; })()`); return f.toFixed(2); } },
     { name: "scrubfast", w: 2, may: ["pos"], run: async () => {

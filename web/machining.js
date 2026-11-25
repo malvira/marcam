@@ -108,6 +108,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (saved && typeof saved === "object") for (const k of Object.keys(VIEW_DEFAULT)) if (k in saved && typeof saved[k] === typeof VIEW_DEFAULT[k]) view[k] = saved[k];
   } catch {}
   if (!["all", "playhead", "off"].includes(view.paths)) view.paths = "all";
+  // (Only hides every other operation's path: a view of the moment, never brought back from
+  // an earlier visit)
+  view.only = false;
   m.view = view;
   // (the older switches stay as the state the rest of the app reads)
   const syncInputs = () => {
@@ -237,10 +240,17 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     showRange();
     syncFrame();
   }
+  // (Mar: "all the other toolpaths disappeared", "the part is gone and I can't get it back":
+  // a form drawn again under the caret left the page focused, and the letters typed next
+  // switched Only on and the part off) the view's letters act with the pointer over the view
+  let overView = false;
+  $("view3d")?.addEventListener("pointerenter", () => (overView = true));
+  $("view3d")?.addEventListener("pointerleave", () => (overView = false));
   document.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const t = ev.target;
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (!overView && !t?.closest?.("#view3d")) return;
     if (document.querySelector("dialog[open]:not(.embedded)")) return;
     const key = ev.key.toLowerCase();
     if (key === " " && (!t || t === document.body || t.closest?.("#view3d"))) {
@@ -551,7 +561,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (m.stockMesh) m.stockMesh.visible = stockOn();
     if (m.ghost) m.ghost.visible = stockOn() && $("simGhost").checked;
     // at rest with the stock on: the background simulation's stock instead of the part
-    const finalStock = !m.expanded && stockOn() && !!v.groups.simFinal?.children.length;
+    const finalStock = !m.expanded && stockOn() && !!v.groups.simFinal?.children.length && !m.editing;
     for (const c of v.groups.work.children) if (c.userData.shared) c.visible = view.part && !finalStock;
   }
 
@@ -1329,8 +1339,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const editing = !!(t && (t.picking || t.draft || t.tabMode));
     // the part and stock as they are (the playback steps aside), and back after (each
     // frame: other views set these too; while a new playback is built as well)
+    const was = m.editing;
     m.editing = editing;
     showMachining(!editing);
+    // (the part stands in for the simulated stock while that steps aside: as the toggles say)
+    if (was !== editing) applyLayers();
     // (a new playback being built: the old one shown as it is meanwhile)
     if (m.swapping || !m.session) return;
     // at rest the part stands at A0 (the whole toolpath drawn on it); playing, it turns

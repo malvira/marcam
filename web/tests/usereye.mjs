@@ -1502,6 +1502,29 @@ try {
     };
     const normal = await coloursSeen("normal");
     check("the view: each operation's path drawn in its own swatch colour, where its path is", normal.length >= 3 && normal.filter((o) => o.at >= 3).every((o) => o.seen >= 0.5), JSON.stringify(normal));
+    // (Mar: "all the other toolpaths disappeared when I made this last one"; "the part is gone
+    // and I can't get it back") letters typed with the page focused, the pointer off the view
+    // (a form drawn again under the caret): the view's toggles stay as they are
+    const view0 = await read("JSON.stringify(window.__marcam.state.machining.view)");
+    await read("(() => { document.activeElement?.blur?.(); return true; })()");
+    await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5 });
+    for (const ch of "optsr") await type(ch);
+    await settled();
+    const view1 = await read("JSON.stringify(window.__marcam.state.machining.view)");
+    check("the view: letters typed off the view (o, p, t, s, r) toggle nothing", view0 === view1, `${view0} -> ${view1}`);
+    // a new operation added (on another tool than some): every operation's path still drawn in
+    // its own colour (none hidden by it being selected)
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'face'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    const libRow = await waitFor(() => where("dialog[open] .tp-row", "3\.175"), "the library", 8000).catch(() => null);
+    if (libRow) await click("dialog[open] .tp-row", "3\.175");
+    await waitFor(() => read("!window.__marcam.state.tree.draft"), "the facing added", 60000).catch(() => {});
+    await settled();
+    await read("window.__marcam.setView('top', {})");
+    await sleep(1500);
+    const added = await coloursSeen("added");
+    const tools = await read("[...new Set(window.__marcam.state.tree.doc.setups[0].operations.map((o) => o.tool))].length");
+    check("the view: a new operation added and selected, ops on several tools: every operation's path still in its own colour at its path", tools >= 2 && added.length === normal.length + 1 && added.filter((o) => o.at >= 3).every((o) => o.seen >= 0.5), JSON.stringify({ tools, added }));
     // picking for the pocket: the same colours (were all op1's blue)
     await click('#tree .tree-op[data-op="op2"] [data-act="select"]');
     await settled();
