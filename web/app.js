@@ -831,6 +831,14 @@ async function generate(opts = {}) {
       state.planError = { doc: job, message: e.message };
       showError(e.message);
       setStatus("Failed", "error");
+      // (Mar's knob4: the piece turned onto A, its roughing then failed, and the 4 h drum
+      // of the plan before still stood there as if it were this one's) the last good results
+      // stay, marked out of date
+      if (state.result) {
+        state.stale = true;
+        document.body.classList.add("stale");
+        selectTab(state.tab);
+      }
     }
   } finally {
     if (run === state.genRun) {

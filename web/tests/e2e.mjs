@@ -625,15 +625,16 @@ try {
   const probs = await waitFor(() => js("document.getElementById('opErrors')?.textContent || ''"), "the missing-field message", 60000);
   // (Mar: no typed coordinates) then the edge picked on the part, as a person does: a click
   // in the 3D view on the chamfer just behind the front edge (X0, Ø14.4)
-  await js("document.getElementById('pickFaces').click(); true");
+  // (live picking: on while the operation is selected, no button to press)
   await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking the edge", 60000);
   await js("window.__marcam.setView('iso', {})");
   await sleep(300);
   const edgeAt = await js("(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(-0.1, -7.3, 0).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()");
   const edgeHit = await js(`await window.__marcam.tree.pickAt(${edgeAt[0]}, ${edgeAt[1]}).then((r) => r?.pickable?.label || 'nothing')`);
   await sleep(300);
-  await js("document.getElementById('pickFaces').click(); true");
-  await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), "done picking the edge", 60000);
+  // (each pick an edit of its own: the form shows it once planned again)
+  await waitFor(() => js("document.getElementById('opForm')?.elements.edge.value === '0, 7.2'"), "the edge picked", 60000).catch(() => {});
+  await settle();
   const edgePicked = await js("document.getElementById('opForm').elements.edge.value");
   check("a round edge picked on the part fills the chamfer's edge (over the one typed blank)", /X0\.00/.test(edgeHit) && edgePicked === "0, 7.2", `${edgeHit}; edge ${edgePicked}`);
   await js("const f = document.getElementById('opForm'); f.elements.tip_offset.value = '0.8'; f.elements.passes.value = '0'; f.elements.feed.value = '200'; f.elements.plunge_feed.value = '60'; f.requestSubmit(); true");
@@ -668,13 +669,13 @@ try {
   await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('knob.stl') && document.querySelectorAll('#tree .tree-op').length === 3"), "the mesh project", 60000);
   await gen();
   await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
-  await js("document.getElementById('pickFaces').click(); true");
+  // (live picking: on while the operation is selected; no button)
   await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "pick mode", 60000);
   await js("window.__marcam.setView('iso', {})");
   const picked = await js(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(-7.5, 0, -9.0).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
   const region = String(await js(`const pr = await window.__marcam.tree.pickAt(${picked[0]}, ${picked[1]}); pr ? pr.shape + ' ' + pr.x.map(x => x.toFixed(1)).join('..') : 'none'`));
   await shot("13_pick_faces");
-  await js("document.getElementById('pickFaces').click(); true");
+  await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
   await settle();
   const fin = await gen();
   const along = await js("window.__marcam.state.result.programs.find(p => p.name === 'knob_4_finish_along').gcode");
@@ -915,13 +916,13 @@ try {
     await js("document.getElementById('example').value = 'plate'; document.getElementById('loadExample').click(); true");
     await waitFor(() => js("document.getElementById('meshInfo').textContent.includes('dome.stl') && !!document.querySelector('#tree .tree-op[data-op=\"op5\"]')"), "the plate again", 60000);
     await js("document.querySelector('#tree .tree-op[data-op=\"op5\"] [data-act=\"select\"]').click(); true");
-    await waitFor(() => js("!!document.getElementById('pickFaces')"), "the raster's face picker", 60000);
-    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "the raster's face picker", 60000);
+    // (live picking: on while the operation is selected; no button)
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "pick mode on the plate", 60000);
     await js("window.__marcam.setView('iso', {})");
     const at = await js(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(46, 20, -0.6).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
     const capPick = String(await js(`const pr = await window.__marcam.tree.pickAt(${at[0]}, ${at[1]}); pr ? pr.id + ' ' + pr.shape : 'none'`));
-    await js("document.getElementById('pickFaces').click(); true");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
     await sleep(400);
     const faces = await js("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.find(o => o.id === 'op5').geometry || [])");
     await clickGenerate();
@@ -1360,9 +1361,9 @@ try {
       await waitFor(() => js("!!window.__marcam.state.machining?.open && document.body.dataset.state !== 'busy'"), "the playback of A", 120000);
       await js("document.getElementById('simClose').click(); true");
       await js("document.querySelectorAll('#tree .tree-op [data-act=\"select\"]')[1].click(); true");
-      const canPick = await js("!!document.getElementById('pickFaces')");
+      const canPick = await js("!!window.__marcam.state.tree.pickMesh");
       if (canPick) {
-        await js("document.getElementById('pickFaces').click(); true");
+        // (live picking: on while the operation is selected; no button)
         await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "picking on A", 60000);
       }
       const withA = await scene();
@@ -1532,8 +1533,8 @@ try {
       drill.type === "drill" && drill.tool === 1 && drill.points.length === 4 && drill.top === 0 && drill.depth === 12.5 && drill.peck === 5, JSON.stringify(drill));
     // picking mode on it: the four holes picked as chips
     // the new operation is selected: its editor offers picking
-    await waitFor(() => js("window.__marcam.state.tree.selected === 'op1' && !!document.getElementById('pickFaces')"), "the drilling editor", 60000);
-    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("window.__marcam.state.tree.selected === 'op1' && !!window.__marcam.state.tree.pickMesh"), "the drilling editor", 60000);
+    // (live picking: on while the operation is selected; no button)
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && document.querySelectorAll('#pickChips .pick-chip').length === 4"), "picking on the drill", 30000);
     await sleep(400);
     // a canvas point that hits the feature `pred` picks (by its pickable), found by casting a
@@ -1580,7 +1581,7 @@ try {
     const refused = await js("document.getElementById('pickNotes')?.textContent || ''");
     check("hovering a hole shows its label; clicking it toggles it; a face drilling cannot take is refused with a note",
       /Hole 5\.00 mm through/.test(hovered) && picked === "hole" && (await chips()) === 3 && /not a hole/.test(refused), `${hovered} | ${picked} | ${refused}`);
-    await js("document.getElementById('pickFaces').click(); true");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
     await sleep(400);
     check("done picking writes the picks once: three points", (await doc()).setups[0].operations[0].points.length === 3 && !(await js("!!window.__marcam.state.tree.pickMesh")));
     // the blind 6 mm hole: no 6 mm tool, so it is bored (with the largest that fits: 5 mm)
@@ -1589,8 +1590,8 @@ try {
     const bored = (await doc()).setups[0].operations[1];
     // a drilling picked on it says use Bore instead, and becomes a bore
     await js("document.getElementById('treeAddType').value = 'drill'; document.getElementById('treeAdd').click(); true");
-    await waitFor(() => js(`${SEL}?.type === 'drill' && !!document.getElementById('pickFaces')`), "the drilling", 60000);
-    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js(`${SEL}?.type === 'drill' && !!window.__marcam.state.tree.pickMesh`), "the drilling", 60000);
+    // (live picking: on while the operation is selected; no button)
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking for the draft", 30000);
     await sleep(300);
     const blindAt = await screenOf("(x) => x.kind === 'hole' && !x.data.through");
@@ -1654,14 +1655,14 @@ try {
     async function pickFor(k, pred, what) {
       const id = await js(`document.querySelectorAll('#tree .tree-op')[${k}].dataset.op`);
       if ((await js("window.__marcam.state.tree.selected")) !== id) await js(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="select"]').click(); true`);
-      await waitFor(() => js(`window.__marcam.state.tree.selected === '${id}' && !!document.getElementById('pickFaces')`), `${what}: its editor`, 60000);
-      await js("document.getElementById('pickFaces').click(); true");
+      await waitFor(() => js(`window.__marcam.state.tree.selected === '${id}' && !!window.__marcam.state.tree.pickMesh`), `${what}: its editor`, 60000);
+      // (live picking: on while the operation is selected; no button)
       await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), `${what}: picking`, 30000);
       await sleep(300);
       const at = await screenOf(pred);
       if (!at) throw new Error(`${what}: the feature is not visible`);
       const got = await js(`const pr = await window.__marcam.tree.pickAt(${at[2]}, ${at[3]}); pr && pr.pickable ? pr.pickable : null`);
-      await js("document.getElementById('pickFaces').click(); true");
+      await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
       await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), `${what}: done`, 60000);
       await sleep(300);
       const s = (await doc()).setups.find((x) => x.operations.some((o) => o.id === id));
@@ -1696,15 +1697,15 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(file)}, "bracket_indexed.marcam.json").then(() => true)`);
     await settle();
     await js("document.getElementById('treeAddType').value = 'face'; document.getElementById('treeAdd').click(); true");
-    await waitFor(() => js(`${SEL}?.type === 'face' && !!document.getElementById('pickFaces')`), "the facing", 60000);
-    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js(`${SEL}?.type === 'face' && !!window.__marcam.state.tree.pickMesh`), "the facing", 60000);
+    // (live picking: on while the operation is selected; no button)
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking a side face", 30000);
     // orbit underneath to see the underside
     await js("(() => { const v = window.__marcam.state.three; v.camera.position.set(30, -50, -70); v.controls.target.set(30, 20, -6); v.controls.update(); v.renderer.render(v.scene, v.camera); return true; })()");
     await sleep(300);
     const sideAt = await screenOf("(x) => x.kind === 'side_face' && Math.abs(Math.abs(x.data.index_a) - 180) < 1e-6");
     const side = sideAt ? await js(`const pr = await window.__marcam.tree.pickAt(${sideAt[2]}, ${sideAt[3]}); pr && pr.pickable ? pr.pickable.kind : "none"`) : "not visible";
-    await js("document.getElementById('pickFaces').click(); true");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
     await sleep(400);
     await js("document.getElementById('opForm').requestSubmit(); true");
     await waitFor(async () => (await doc()).setups[0].operations.some((o) => o.type === "face"), "the facing applied", 60000);
@@ -1898,15 +1899,15 @@ try {
     const doc = async () => JSON.parse(await js("document.getElementById('job').value"));
     async function pickFor(id, pred, what) {
       await js(`document.querySelector('#tree .tree-op[data-op="${id}"] [data-act="select"]').click(); true`);
-      await waitFor(() => js(`window.__marcam.state.tree.selected === '${id}' && !!document.getElementById('pickFaces')`), `${what}: its editor`, 60000);
-      await js("document.getElementById('pickFaces').click(); true");
+      await waitFor(() => js(`window.__marcam.state.tree.selected === '${id}' && !!window.__marcam.state.tree.pickMesh`), `${what}: its editor`, 60000);
+      // (live picking: on while the operation is selected; no button)
       await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), `${what}: picking`, 30000);
       await sleep(300);
       const at = await screenOf(pred);
       if (!at) throw new Error(`${what}: the feature is not visible`);
       const got = await js(`const pr = await window.__marcam.tree.pickAt(${at[0]}, ${at[1]}); pr && pr.pickable ? pr.pickable.kind : null`);
       await shot(`19_grip_pick_${what}`);
-      await js("document.getElementById('pickFaces').click(); true");
+      await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
       await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), `${what}: done`, 60000);
       await sleep(300);
       return { op: (await doc()).setups[0].operations.find((o) => o.id === id), got };
@@ -1986,13 +1987,13 @@ try {
     check("saved and reopened, the pocket is still in error", /not on the new model/.test(r3.err) && r3.warn === 1, JSON.stringify(r3));
     // picked again (the left oval, which this part has): the error goes, it plans
     await js("document.querySelector('#tree .tree-op[data-op=\"op2\"] [data-act=\"select\"]').click(); true");
-    await waitFor(() => js("window.__marcam.state.tree.selected === 'op2' && !!document.getElementById('pickFaces')"), "the pocket's editor", 60000);
-    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("window.__marcam.state.tree.selected === 'op2' && !!window.__marcam.state.tree.pickMesh"), "the pocket's editor", 60000);
+    // (live picking: on while the operation is selected; no button)
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking for the pocket", 30000);
     await sleep(300);
     const at = await screenOf("(x) => x.kind === 'pocket'");
     const repicked = await js(`await window.__marcam.tree.pickAt(${at[0]}, ${at[1]}).then((r) => (r && r.pickable ? r.pickable.id : "nothing")) + " | sel " + [...window.__marcam.state.tree.pick.sel].join(",") + " | " + (document.getElementById('pickNotes')?.textContent || "")`);
-    await js("document.getElementById('pickFaces').click(); true");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
     await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), "done picking", 60000);
     await settle(300);
     const cleared = await waitFor(() => js("!JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.id === 'op2').error"), "the pocket's error cleared by the new pick", 10000).then(() => true, () => false);
@@ -2008,8 +2009,8 @@ try {
     await js(`await window.__marcam.project.openText(${JSON.stringify(file)}, "oval_grip2.marcam.json").then(() => true)`);
     await settle();
     if ((await js("window.__marcam.state.tree.selected")) !== "op1") await js(`document.querySelector('#tree .tree-op[data-op="op1"] [data-act="select"]').click(); true`);
-    await waitFor(() => js("window.__marcam.state.tree.selected === 'op1' && !!document.getElementById('pickFaces')"), "the facing's editor (multi)", 60000);
-    await js("document.getElementById('pickFaces').click(); true");
+    await waitFor(() => js("window.__marcam.state.tree.selected === 'op1' && !!window.__marcam.state.tree.pickMesh"), "the facing's editor (multi)", 60000);
+    // (live picking: on while the operation is selected; no button)
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking for the facing", 30000);
     await sleep(300);
     const flatAt = (left) => screenOf(`(x) => x.kind === 'flat_face' && x.data.z < -1.4 && (x.data.cx < 30) === ${left}`);
@@ -2021,7 +2022,7 @@ try {
     await js(`await window.__marcam.tree.pickAt(${a2[0]}, ${a2[1]}).then(() => true)`);
     const chips1 = await js("document.querySelectorAll('#pickChips .pick-chip').length");
     await js(`await window.__marcam.tree.pickAt(${a2[0]}, ${a2[1]}).then(() => true)`);
-    await js("document.getElementById('pickFaces').click(); true");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
     await waitFor(() => js("!window.__marcam.state.tree.pickMesh"), "done picking (multi)", 60000);
     await settle();
     const f2 = (await doc()).setups[0].operations.find((o) => o.id === "op1");
@@ -2352,7 +2353,7 @@ try {
     await waitFor(() => js("!!document.getElementById('opForm')"), "the parting form", 60000);
     const x0 = await js("document.getElementById('opForm').elements.x.value");
     // pick: a click on the taper, mid-way (not near its ends)
-    await js("document.getElementById('pickFaces').click(); true");
+    // (live picking: on while the operation is selected; no button)
     await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "pick mode for the parting", 60000);
     await js("window.__marcam.setView('iso', {})");
     const at = await js(`(() => { const v = window.__marcam.state.three; const p = new v.THREE.Vector3(-7.5, 0, -9.0).project(v.camera); const el = v.renderer.domElement; return [(p.x + 1) / 2 * el.clientWidth, (1 - p.y) / 2 * el.clientHeight]; })()`);
@@ -2361,7 +2362,7 @@ try {
     const hitX = parseFloat(String(hit).split(" at ")[1]);
     const picked = await js("({ x: +document.getElementById('opForm').elements.x.value, notes: [...document.querySelectorAll('#opNotes, .pick-notes')].map((e) => e.textContent).join(' ') })");
     await shot("21c_parting_pick");
-    await js("document.getElementById('pickFaces').click(); true");
+    await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true"); // done picking: Escape deselects
     await sleep(300);
     // a groove down to 7 mm (the knob's T1 cannot reach the axis), then applied
     await js("const f = document.getElementById('opForm'); f.elements.stop_radius.value = '7'; f.requestSubmit(); true");

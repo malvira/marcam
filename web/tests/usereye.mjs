@@ -911,7 +911,7 @@ try {
   await settled();
   await click("#tree .tree-setup.active [data-act=setup]");
   await settled();
-  await click("#setupHost .sd-kind[data-kind=vise]");
+  await click("#treeDetails [data-setkind=vise]");
   await settled();
   check("a setup made a vise is named as one (it was 'Rotary 4th axis')", /vise/i.test(await read("JSON.parse(document.getElementById('job').value).setups[0].name")));
   await click("#tree .tree-setup.active [data-act=stock]");
@@ -962,7 +962,7 @@ try {
   check("a 4th-axis setup added from the tree (+ Add setup, 4th axis)", /4th axis|Rotary/i.test(await read("document.querySelector('#tree .tree-setup.active')?.textContent || ''")));
   await click("#tree .tree-setup.active [data-act=setup]");
   await settled();
-  await click("#setupHost .sd-kind[data-kind=vise]");
+  await click("#treeDetails [data-setkind=vise]");
   await settled();
   check("made 3-axis in its details", /vise/i.test(await read("document.querySelector('#tree .tree-setup.active')?.textContent || ''")));
   await click("#tree .tree-setup.active [data-act=fixture]");
@@ -988,7 +988,7 @@ try {
   await clean("the Vise's opening");
   await click("#tree .tree-setup.active [data-act=setup]");
   await settled();
-  await click("#setupHost .sd-kind[data-kind=rotary]");
+  await click("#treeDetails [data-setkind=rotary]");
   await settled();
   await click("#tree .tree-setup.active [data-act=fixture]");
   await settled();
@@ -1387,7 +1387,7 @@ try {
         for (let dy = -3; dy <= 3 && !ok; dy++) for (let dx = -3; dx <= 3 && !ok; dx++) { const q = img.at(Math.round(x + dx), Math.round(y + dy)); if (!q) continue; const [h, sat] = hs(q); if (sat > 0.2 && Math.min(Math.abs(h - h0), 360 - Math.abs(h - h0)) < 22) ok = true; }
         if (ok) seen++;
       }
-      pathChanges.push({ seen: drawnAt.pts.length ? +(seen / drawnAt.pts.length).toFixed(2) : 0, n: drawnAt.pts.length, what, before: path0.length, after: path1.length, changed: !!path1 && path1 !== path0, picking: await read("!!window.__marcam.state.tree.picking"), buttons: [pressed0, await read("document.querySelectorAll('#opEditor button').length")] });
+      pathChanges.push({ seen: drawnAt.pts.length ? +(seen / drawnAt.pts.length).toFixed(2) : 0, n: drawnAt.pts.length, what, before: path0.length, after: path1.length, changed: !!path1 && path1 !== path0, picking: await read("!!window.__marcam.state.tree.picking"), buttons: [pressed0, await read("document.querySelectorAll('#opEditor button').length")], done: await read("[...document.querySelectorAll('#opEditor button, #treeDetails button')].filter((b) => b.offsetWidth && /^(done|apply|finish)/i.test(b.textContent.trim())).map((b) => b.textContent.trim())") });
       return picked;
     };
     const val = (name) => read(`document.getElementById('opForm')?.elements['${name}']?.value ?? null`);
@@ -1413,7 +1413,7 @@ try {
     check("carry-through, setup 1: the boss's contour, the pocket, the OD's contour, planned clean", /OK/.test(s1.tab) && s1.ops.length === 3 && !s1.error, JSON.stringify(s1));
     // (Mar: "I don't want a done picking button ... as you pick the toolpaths should update")
     check("live picking: no Done picking button; each pick planned again with nothing pressed, its new path drawn in its colour",
-      !(await read("!!document.getElementById('pickFaces')")) && pathChanges.length === 3 && pathChanges.every((c) => c.changed && c.picking && c.buttons[1] <= c.buttons[0] + 1 && c.n >= 3 && c.seen >= 0.4), JSON.stringify(pathChanges));
+      !(await read("!!document.getElementById('pickFaces')")) && pathChanges.length === 3 && pathChanges.every((c) => c.changed && c.picking && !c.done.length && c.n >= 3 && c.seen >= 0.4), JSON.stringify(pathChanges));
     // deselected (Escape): picking ends; a click on the part picks nothing more
     const before2 = await read("JSON.stringify(window.__marcam.state.tree.doc.setups.find((s) => s.id === window.__marcam.state.tree.setup).operations.map((o) => o.picks || []))");
     await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
@@ -1455,6 +1455,15 @@ try {
     const buttons = await read("[...document.querySelectorAll('#carryQuick button')].map((b) => b.textContent.trim())");
     check("carried onto the 4th axis: the piece centred on A (Y, Z), its length along X, nothing else drawn as stock; the A axis and its ends labelled; plain-word buttons, typed coordinates folded away",
       onAxis(p0.piece) && p0.extra === 0 && p0.guide && buttons.some((b) => /Flip end for end/.test(b)) && buttons.some((b) => /Turn 90/.test(b)) && !(await read("document.getElementById('stTyped')?.open")), JSON.stringify({ p0, buttons }));
+    // (Mar: the carried piece "drawn as striped slabs") at the Fine grid too: one opaque solid,
+    // drawn from the solid it was sampled from, the samples holding the same material (1%)
+    await read("(() => { const s = document.getElementById('simRes'); s.value = 'fine'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await settled();
+    const fine = await read("(async () => { const v = window.__marcam.state.three; const ms = v.groups.stock.children.filter((c) => c.userData.carried); const mats = []; for (const c of ms) c.traverse((o) => { if (o.isMesh) mats.push(o.material); }); const t = window.__marcam.state.tree; const r = (await window.__marcam.engine('carriedMesh', t.doc, { setup: t.setup, res: 'fine' }, window.__marcam.state.mesh)).result; return { pieces: ms.length, meshes: mats.length, opaque: mats.every((m) => !m.transparent && m.opacity === 1), solid: r.solid, vol: r.volume }; })()");
+    check("the carried piece at the Fine grid: one opaque solid (not slabs), its samples within 1% of its volume",
+      fine.pieces === 1 && fine.meshes >= 1 && fine.opaque && fine.solid && Math.abs(fine.vol.simulated - fine.vol.drawn) <= 0.01 * fine.vol.drawn, JSON.stringify(fine));
+    await read("(() => { const s = document.getElementById('simRes'); s.value = 'normal'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await settled();
     const imgA = await shot("carry_orient_before");
     await click("#carryQuick button", "Flip end for end");
     await settled();
@@ -1473,8 +1482,11 @@ try {
       }
     // (the part goes with it: end for end, its end at the other end of X)
     const midX = (b) => (b[0][0] + b[1][0]) / 2;
+    // (a part as long as the piece moves little: its place along the piece mirrored, its ends
+    // swapped, rather than a fixed distance)
+    const flipped = (a, b) => { const len = a.piece[1][0] - a.piece[0][0], f0 = midX(a.part) - a.piece[0][0], f1 = midX(b.part) - b.piece[0][0]; return Math.abs(f1 - (len - f0)) < 1 && (Math.abs(f0 - len / 2) < 0.5 || Math.abs(f1 - f0) > 0.5); };
     check("the carried piece's quick buttons: Flip end for end puts the part at the other end, Turn 90° about A turns it, the piece stays on A, the view changes",
-      onAxis(p1.piece) && onAxis(p2.piece) && p0.part && p1.part && Math.abs(midX(p1.part) - midX(p0.part)) > 5 && changed > seen * 0.01, JSON.stringify({ p0: p0.part, p1: p1.part, p2: p2.part, changed, seen }));
+      onAxis(p1.piece) && onAxis(p2.piece) && p0.part && p1.part && flipped(p0, p1) && changed > seen * 0.01, JSON.stringify({ p0, p1, p2: p2.part, changed, seen }));
     // back as it was (the knurl after this is picked on the part where it was)
     await click("#carryQuick button", "Turn 90");
     await settled();

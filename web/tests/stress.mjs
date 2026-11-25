@@ -371,9 +371,8 @@ const A = {
     return `tool ${v}`;
   },
   async pick(r) {
-    if (!(await js("!!document.getElementById('pickFaces')"))) return null;
-    await js("document.getElementById('pickFaces').click(); true");
-    const ok = await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking", 30000).then(() => true, () => false);
+    // (live picking: on while an operation that takes picks is selected)
+    const ok = await waitFor(() => js("!!window.__marcam.state.tree.pickMesh && !!window.__marcam.state.tree.pick"), "picking", 3000).then(() => true, () => false);
     if (!ok) return "pick (no picker)";
     await sleep(200);
     const n = await js("window.__marcam.state.tree.pick.list.length");
@@ -396,7 +395,7 @@ const A = {
     }
     await sleep(200);
     const invPicking = await js(`await ${INVARIANTS}`);
-    await js("document.getElementById('pickFaces')?.click(); true");
+    // (no Done picking: each pick is an edit of its own; picking stays on)
     await sleep(300);
     return { log: `pick ${what}`, extra: invPicking };
   },
@@ -606,7 +605,6 @@ const SCENARIOS = {
     () => A.importStl(r0, "bracket.stl", "vise"),
     () => A.addOp(r0, "bore"),
     async () => {
-      await js("document.getElementById('pickFaces').click(); true");
       await waitFor(() => js("!!window.__marcam.state.tree.pickMesh"), "picking for the bore", 30000);
       return "start picking for the bore";
     },
