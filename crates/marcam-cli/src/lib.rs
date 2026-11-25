@@ -1034,6 +1034,14 @@ fn cmd_left3d(o: &Opts) -> Result<ExitCode, String> {
             "inside corners a {reach} mm ball cannot reach: {} points over 0.05 mm, deepest {:.3} mm",
             l.unreachable, l.max_unreachable
         );
+        println!(
+            "faces no tool square to X reaches (under an overhang): {} points over 0.05 mm, deepest {:.3} mm{}",
+            l.undercut,
+            l.max_undercut,
+            l.undercut_at
+                .map(|a| format!(" at X {:.2}, radius {:.2}, part angle {:.1}", a[0], a[1], a[2]))
+                .unwrap_or_default()
+        );
         for w in l.worst.iter().take(10) {
             println!(
                 "  {:.3} mm at X {:.2}, radius {:.2}, part angle {:.1}",

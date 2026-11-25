@@ -29,6 +29,14 @@ pub struct Left3d {
     /// nearest face): the tri-dexel's rays end there where a tool only grazed another family
     /// of them, not stock left (a gouge would show in the gouge check).
     pub inside: usize,
+    /// Points left more than 0.05 mm where no tool square to X reaches (the shank above the
+    /// ball meets the part: under an overhang): a 4-axis machine cannot finish them.
+    pub undercut: usize,
+    pub max_undercut: f64,
+    #[serde(skip)]
+    max_undercut_seen: f64,
+    /// Where the deepest of those is: (X, radius, part angle deg).
+    pub undercut_at: Option<[f64; 3]>,
 }
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -207,6 +215,10 @@ pub fn left_in_3d(job: &Job, tps: &[Toolpath], mesh: &Mesh, h: f64, reach_r: f64
         max_unreachable: 0.0,
         worst: Vec::new(),
         inside: 0,
+        undercut: 0,
+        max_undercut: 0.0,
+        max_undercut_seen: 0.0,
+        undercut_at: None,
     };
     let mut worst: Vec<[f64; 4]> = Vec::new();
     for p in dx.surface_points() {
@@ -241,6 +253,33 @@ pub fn left_in_3d(job: &Job, tps: &[Toolpath], mesh: &Mesh, h: f64, reach_r: f64
             out.unreachable += 1;
             out.max_unreachable = out.max_unreachable.max(d);
             continue;
+        }
+        // (a face a 4-axis machine's tool cannot come at: its axis is square to X, and along
+        // every such axis near the face's normal the shank above the ball meets the part:
+        // under a blade leaning over)
+        let (py, pz) = (n[1], n[2]);
+        let pl = py.hypot(pz);
+        if pl > 0.2 {
+            let base = pz.atan2(py);
+            let open = [-40.0f64, -20.0, 0.0, 20.0, 40.0].iter().any(|dg| {
+                let t = base + dg.to_radians();
+                let dir = [0.0, t.cos(), t.sin()];
+                (1..=30).all(|k| {
+                    let s = k as f64 * 0.5;
+                    let at = [c[0], c[1] + dir[1] * s, c[2] + dir[2] * s];
+                    near.nearest(at)
+                        .is_none_or(|(dc, _, _)| dc >= reach_r - 0.02)
+                })
+            });
+            if !open {
+                out.undercut += 1;
+                out.max_undercut = out.max_undercut.max(d);
+                if d > out.max_undercut_seen {
+                    out.max_undercut_seen = d;
+                    out.undercut_at = Some([p[0], p[1].hypot(p[2]), p[2].atan2(p[1]).to_degrees()]);
+                }
+                continue;
+            }
         }
         for (j, t) in [0.05, 0.1, 0.2, 0.5].iter().enumerate() {
             if d > *t {
