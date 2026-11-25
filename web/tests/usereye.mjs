@@ -1667,14 +1667,21 @@ try {
     check("a custom toolpath: its path on the screen (its cuts drawn at the slot and in the pocket)", onSlot > 3 && inPocket > 3, JSON.stringify({ onSlot, inPocket, view: vr }));
     // simulated: the stock as the program leaves it, on the screen (the view's Simulated stock
     // toggle on, as a person does)
-    const simToggle = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return b.getAttribute('aria-pressed') === 'true' ? null : [r.left + r.width / 2, r.top + r.height / 2]; })()");
-    if (simToggle) await drag(simToggle, simToggle, 1);
+    // (left on by a section before: off, then on, as a person does to see it again)
+    const simState = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return { on: b.getAttribute('aria-pressed') === 'true', at: [r.left + r.width / 2, r.top + r.height / 2] }; })()");
+    const simToggle = simState.at;
+    if (simState.on) {
+      await drag(simToggle, simToggle, 1);
+      await settled();
+    }
+    await drag(simToggle, simToggle, 1);
     await waitFor(() => read("/Simulated stock/.test(document.getElementById('summary').textContent)"), "the simulation", 180000 * SLACK).catch(() => {});
     await settled();
     const sim = await read(`(() => { const vis = ${VISIBLE}; return { status: document.getElementById('status').textContent.slice(0, 80), summary: [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent).find((t) => /Simulated stock/.test(t))?.slice(0, 120) || '' }; })()`);
     await shot("custom_toolpath_simulated");
     check("a custom toolpath: simulated, the stock it leaves on the screen", /Simulated stock/.test(sim.summary), JSON.stringify(sim));
-    if (simToggle) await drag(simToggle, simToggle, 1);
+    // (left as it was)
+    if (!simState.on) await drag(simToggle, simToggle, 1);
     await clean("a custom toolpath");
   }
   // ---------------------------------------------------------------- playback: one clock
