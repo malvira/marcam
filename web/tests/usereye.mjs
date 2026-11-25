@@ -1612,6 +1612,13 @@ try {
     const seenOf = (id) => added.find((o) => o.id === id)?.seen ?? 0;
     check("the view: a new operation added and selected, ops on several tools: every operation's path still in its own colour at its path (the copy's over its original)",
       tools >= 2 && added.length === normal.length + 1 && added.filter((o) => o.at >= 3 && o.id !== "op3" && o.id !== copyOf).every((o) => o.seen >= 0.5) && Math.max(seenOf("op3"), seenOf(copyOf)) >= 0.5, JSON.stringify({ tools, copyOf, added }));
+    // (the copy deleted, as a person does: its ✕; the checks after see the plate as it was)
+    await read("(() => { window.confirm = () => true; return true; })()");
+    await click(`#tree .tree-op[data-op="${copyOf}"] [data-act="delete"]`);
+    await waitFor(() => read("window.__marcam.state.tree.doc.setups[0].operations.length === " + normal.length), "the copy deleted", 30000).catch(() => {});
+    await settled();
+    await read("window.__marcam.setView('top', {})");
+    await sleep(1500);
     // picking for the pocket: the same colours (were all op1's blue)
     await click('#tree .tree-op[data-op="op2"] [data-act="select"]');
     await settled();
