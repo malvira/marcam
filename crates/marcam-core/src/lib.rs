@@ -119,6 +119,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::HelicalKnurl(_) => "helical_knurl",
         Operation::FlankChamfer(_) => "flank_chamfer",
         Operation::RotaryFinish(_) => "rotary_finish",
+        Operation::RotaryParallel(_) => "rotary_parallel",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
@@ -1321,6 +1322,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             (Operation::Parting(_), _) => return Err(wrong("flat or vbit")),
             (
                 Operation::RotaryFinish(_)
+                | Operation::RotaryParallel(_)
                 | Operation::RotaryRough(_)
                 | Operation::Raster3d(_)
                 | Operation::Rough3d(_)
@@ -1562,7 +1564,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     .map_err(|e| Error::Invalid(format!("program {}: parting: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
             }
-            (Operation::RotaryFinish(o), _) => {
+            (Operation::RotaryFinish(o) | Operation::RotaryParallel(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;
                 // (its axial stock to leave: the tool wider by it)
                 let c = grown_for(cutter.expect("set above"), o.leave_axial, &prog.name)?;
@@ -2612,6 +2614,7 @@ pub fn gouge_check(
                     o,
                     Operation::RotaryTurning(_)
                         | Operation::RotaryFinish(_)
+                        | Operation::RotaryParallel(_)
                         | Operation::RotaryRough(_)
                 )
             })

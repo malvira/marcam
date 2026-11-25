@@ -878,9 +878,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     let svg = "";
     const field = (p) => {
       const v = op[p.name];
-      // rotary_finish uses one stepover or the other, depending on the pattern
-      if (p.name === "stepover_deg" && op.pattern === "around") return;
-      if (p.name === "stepover_mm" && op.pattern === "along" && op.stepover_deg != null) return;
+      // rotary_finish (and rotary parallel) use one stepover or the other, depending on the
+      // pattern
+      if (p.name === "stepover_deg" && ["around", "circular", "spiral"].includes(op.pattern)) return;
+      if (p.name === "stepover_mm" && ["along", "line"].includes(op.pattern) && op.stepover_deg != null) return;
       // a vise has no rotary axis to index
       if (p.name === "index_a" && isBox(setup())) return;
       // several picked features: shown in the Geometry list, set by picking
@@ -1114,7 +1115,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   // (pocket, contour and face take one), "select all similar" adds the ones alike. Finishing
   // operations record the picked faces (a faces selection); the others take the fields the
   // engine fills from the picks (drill points and depth, a pocket's outline, ...).
-  const FACE_TYPES = ["raster3d", "rough3d", "waterline", "rotary_finish"];
+  const FACE_TYPES = ["raster3d", "rough3d", "waterline", "rotary_finish", "rotary_parallel"];
   const SINGLE = ["helical_knurl", "flank_chamfer", "engrave", "vcarve"];
   /** The parameters that are geometry typed as numbers (paths, points, corners, ranges, the
    *  body's ends, an edge, a cut's place, tabs' places): under Advanced, not in the form. */

@@ -686,6 +686,9 @@ pub enum Operation {
     HelicalKnurl(HelicalKnurl),
     FlankChamfer(FlankChamfer),
     RotaryFinish(RotaryFinish),
+    /// Rotary parallel (simultaneous 4-axis finishing): lines along X, rings round the axis,
+    /// or a spiral, the A axis moving with X and the radius.
+    RotaryParallel(RotaryFinish),
     RotaryRough(RotaryRough),
     Face(Face),
     Pocket(Pocket),
@@ -1386,7 +1389,7 @@ impl Operation {
             Operation::RotaryTurning(o) => Some(o.ramp_angle),
             Operation::HelicalKnurl(o) => Some(o.ramp_angle),
             Operation::FlankChamfer(o) => Some(o.ramp_angle),
-            Operation::RotaryFinish(o) => Some(o.ramp_angle),
+            Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => Some(o.ramp_angle),
             Operation::RotaryRough(o) => Some(o.ramp_angle),
             Operation::Bore(o) => Some(o.ramp_angle),
             Operation::Parting(o) => Some(o.ramp_angle),
@@ -1401,7 +1404,7 @@ impl Operation {
             Operation::RotaryTurning(o) => (o.smoothing, false),
             Operation::HelicalKnurl(o) => (o.smoothing, true),
             Operation::FlankChamfer(o) => (o.smoothing, true),
-            Operation::RotaryFinish(o) => (o.smoothing, true),
+            Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => (o.smoothing, true),
             Operation::RotaryRough(o) => (o.smoothing, false),
             Operation::Raster3d(o) => (o.smoothing, true),
             Operation::Rough3d(o) => (o.smoothing, false),
@@ -1419,7 +1422,7 @@ impl Operation {
 
     pub fn tool(&self) -> u32 {
         match self {
-            Operation::RotaryFinish(o) => o.tool,
+            Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => o.tool,
             Operation::RotaryRough(o) => o.tool,
             Operation::Face(o) => o.tool,
             Operation::Pocket(o) => o.tool,
@@ -1611,6 +1614,13 @@ pub enum FinishPattern {
     Along,
     /// One helix around the axis, advancing `stepover_mm` in X per revolution.
     Around,
+    /// Rotary parallel's "line": as [`FinishPattern::Along`].
+    Line,
+    /// Rotary parallel's "circular": rings round the axis at fixed X, `stepover_mm` apart
+    /// in X (a full turn each, or across `a_range` and back).
+    Circular,
+    /// Rotary parallel's "spiral": as [`FinishPattern::Around`] (a full turn at each end).
+    Spiral,
 }
 
 /// Finish the part mesh with a radial drop-cutter (flat, ball or V-bit).

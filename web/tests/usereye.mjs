@@ -2067,6 +2067,64 @@ try {
       folded && before.maxBite === null && before.limit === (before.ball ? "5.94" : "7.56") && after.maxBite === 0.3 && after.limit === "0.30" && after.lines > before.lines && rb.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(rb.verifier) && (!rb.gouge || /deepest 0\.0[0-1]\d* mm/.test(rb.gouge)) && !rb.error, JSON.stringify({ folded, before, after, rb }));
     await clean("rest roughing on the 4th axis");
   }
+  // ---------------------------------------------------------------- rotary parallel (4-axis simultaneous)
+  // (Mar: real simultaneous 4-axis toolpaths) the overhang fixture on the 4th axis: Rotary
+  // parallel picked from the menu with a ball, as it comes (a spiral: X and A together, a full
+  // turn at each end), then its Style switched to Circular (rings round the axis): each
+  // planned, clean (no verifier issue, no gouge, no red)
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; return true; })()");
+    await click("#menuFile");
+    await click("#menuFile button, #menuFile [role=menuitem], #menuFile li, #menuFile a", "^New");
+    await settled();
+    {
+      const doc = await S("DOM.getDocument");
+      const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#importStlFile" });
+      await S("DOM.setFileInputFiles", { files: [join(root, "tests", "fixtures", "overhang_ledge.stl")], nodeId });
+    }
+    await settled();
+    await click("#tree .tree-setup.active [data-act=setup]");
+    await settled();
+    if (await where("#treeDetails [data-setkind=rotary]")) {
+      await click("#treeDetails [data-setkind=rotary]");
+      await settled();
+    }
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    if (await where("button", "^Fit to part$")) {
+      await click("button", "^Fit to part$");
+      await settled();
+    }
+    const offered = await read("[...document.getElementById('treeAddType').options].some((o) => o.value === 'rotary_parallel' && /Rotary parallel/.test(o.textContent))");
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'rotary_parallel'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    const lib = await waitFor(() => where("dialog[open] .tp-row", "Ball nose 3\.175 x 22"), "the library", 15000).catch(() => null);
+    if (lib) await click("dialog[open] .tp-row", "Ball nose 3\.175 x 22");
+    await waitFor(() => read("JSON.parse(document.getElementById('job').value).setups[0].operations.some((o) => o.type === 'rotary_parallel')"), "rotary parallel added", 60000);
+    await settled();
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
+    const parallelState = `(() => { const vis = ${VISIBLE}; const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'rotary_parallel'); const g = (window.__marcam.state.result?.programs || []).map((p) => p.gcode || '').join(String.fromCharCode(10)).split(String.fromCharCode(10)); const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { pattern: op?.pattern, ...(() => { let x = null, a = null, xa = 0, aOnly = 0; for (const l of g) { if (!/^G1 /.test(l)) { const mx = l.match(/X(-?[0-9.]+)/), ma = l.match(/A(-?[0-9.]+)/); if (mx) x = +mx[1]; if (ma) a = +ma[1]; continue; } const mx = l.match(/X(-?[0-9.]+)/), ma = l.match(/A(-?[0-9.]+)/); const nx = mx ? +mx[1] : x, na = ma ? +ma[1] : a; if (nx !== x && na !== a) xa++; else if (nx === x && na !== a) aOnly++; x = nx; a = na; } return { xa, aOnly }; })(), tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent), verifier: t.filter((x) => /^Verifier/.test(x)).sort((a, b) => a.length - b.length)[0] || '', gouge: t.filter((x) => /^Gouge check/.test(x)).sort((a, b) => a.length - b.length)[0] || '', error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`;
+    const okPlan = (r) => r.tabs.length && r.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(r.verifier) && (!r.gouge || /deepest 0[.]0[0-1][0-9]* mm/.test(r.gouge)) && !r.error;
+    const spiral = await read(parallelState);
+    await shot("rotary_parallel_spiral");
+    check("rotary parallel, offered in the menu and picked with a ball: a spiral, X and A moving together, clean",
+      offered && spiral.pattern === "spiral" && spiral.xa > 100 && okPlan(spiral), JSON.stringify({ offered, spiral }));
+    // its Style switched to Circular in its form
+    await read("document.querySelector('#opForm [name=pattern]')?.scrollIntoView({ block: 'center' }), true");
+    await read("(() => { const s = document.querySelector('#opForm [name=pattern]'); s.value = 'circular'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await settled();
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
+    const circular = await read(parallelState);
+    await shot("rotary_parallel_circular");
+    check("rotary parallel's Style switched to Circular: rings round the axis (the A axis turning at fixed X), clean",
+      circular.pattern === "circular" && circular.aOnly > 100 && okPlan(circular), JSON.stringify(circular));
+    await clean("rotary parallel");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")

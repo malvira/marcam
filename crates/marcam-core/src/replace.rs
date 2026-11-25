@@ -123,7 +123,13 @@ pub fn find<'a>(sig: &Value, list: &'a [Pickable]) -> Result<&'a Pickable, Strin
 
 /// The operation types whose picks are faces they are bounded by (not fields filled from
 /// the features).
-const FACE_TYPES: [&str; 4] = ["raster3d", "rough3d", "waterline", "rotary_finish"];
+const FACE_TYPES: [&str; 5] = [
+    "raster3d",
+    "rough3d",
+    "waterline",
+    "rotary_finish",
+    "rotary_parallel",
+];
 
 /// What happened to one operation.
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]

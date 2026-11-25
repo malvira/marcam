@@ -227,7 +227,8 @@ pub fn rotary_finish_on(
         }
     };
     match op.pattern {
-        FinishPattern::Along => {
+        FinishPattern::Circular => {}
+        FinishPattern::Along | FinishPattern::Line => {
             let step = match (op.stepover_deg, op.stepover_mm) {
                 (Some(d), _) => d,
                 (None, Some(mm)) => (mm / r_max.max(1e-9)).to_degrees(),
@@ -280,7 +281,7 @@ pub fn rotary_finish_on(
             }
             b.rapid_r(safe_r);
         }
-        FinishPattern::Around => {
+        FinishPattern::Around | FinishPattern::Spiral => {
             let step = op
                 .stepover_mm
                 .ok_or("around needs stepover_mm (X advance per turn)")?;
@@ -339,6 +340,52 @@ pub fn rotary_finish_on(
                 }
             }
         }
+    }
+    // (Rotary parallel's "circular") rings round the axis at fixed X, `stepover_mm` apart in
+    // X: a full turn each, the A axis going on round; or across `a_range`, back and forth.
+    // From ring to ring along X at the angle it ended at.
+    if op.pattern == FinishPattern::Circular {
+        let step = op
+            .stepover_mm
+            .ok_or("circular needs stepover_mm (X between the rings)")?;
+        if step <= 0.0 {
+            return Err("stepover_mm must be > 0".into());
+        }
+        let n = ((x1 - x0).abs() / step).ceil().max(1.0) as usize;
+        let xs: Vec<f64> = (0..=n)
+            .map(|i| x0 + (x1 - x0) * i as f64 / n as f64)
+            .collect();
+        let [a0, a1] = op.a_range;
+        let full = (a1 - a0).abs() >= 360.0 - 1e-9;
+        let sweep = if full { 360.0 } else { (a1 - a0).abs() };
+        let k = (sweep / op.sample_deg).ceil().max(1.0) as usize;
+        let mut at = a0;
+        start(b, xs[0], a0);
+        for (i, &x) in xs.iter().enumerate() {
+            if crate::budget::over() {
+                break;
+            }
+            if i > 0 {
+                let from = xs[i - 1];
+                let m = ((x - from).abs() / op.sample_mm).ceil().max(1.0) as usize;
+                for j in 1..=m {
+                    go(b, from + (x - from) * j as f64 / m as f64, at);
+                }
+            }
+            let to = if full {
+                at + 360.0 * (a1 - a0).signum()
+            } else if i % 2 == 0 {
+                a1
+            } else {
+                a0
+            };
+            let from = at;
+            for j in 1..=k {
+                go(b, x, from + (to - from) * j as f64 / k as f64);
+            }
+            at = to;
+        }
+        b.rapid_r(safe_r);
     }
     let r_min = b.moves[first..]
         .iter()

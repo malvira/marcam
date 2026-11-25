@@ -208,7 +208,7 @@ pub fn registry() -> Vec<OperationType> {
                 lv("leave_radial", "Radial", "Stock to leave on the bar, radially (for a finish after it)."),
                 lv("leave_axial", "Axial (X)", "Stock to leave on the faces across the bar, along X."),
             ],
-            "rotary_rough" | "rotary_finish" => vec![lv("leave_axial", "Axial (X)", "Stock to leave on the faces across the bar, along X (a flat or ball tool).")],
+            "rotary_rough" | "rotary_finish" | "rotary_parallel" => vec![lv("leave_axial", "Axial (X)", "Stock to leave on the faces across the bar, along X (a flat or ball tool).")],
             "helical_knurl" | "flank_chamfer" => vec![lv("leave_radial", "Radial", "Stock to leave on the bar, radially (a shallower cut).")],
             "parting" => vec![lv("leave_axial", "Axial (X)", "Stock to leave on the part's face (the cut that much further back, the part longer).")],
             _ => vec![],
@@ -316,6 +316,35 @@ fn types() -> Vec<OperationType> {
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),
                 p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
                 p("clean_walls", "boolean", "", "'around': a full turn at the foot of each wall.").opt(json!(true)),
+                p("lead_in", "number", "mm", "Lead-in: each pass comes onto the surface turning, from this high above it (at 15 degrees), instead of a radial plunge (0: plunge).").opt(json!(0.0)).min(0.0),
+                feed(),
+                plunge(),
+                ramp(),
+                smoothing(),
+            ],
+            tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
+            geometry: &["mesh", "profile", "axial_range"],
+            machine_needs: &["rotary_a"],
+            shapes_part: false,
+        },
+        OperationType {
+            kind: "rotary_parallel",
+            title: "Rotary parallel (4-axis simultaneous)",
+            description: "Finish the part turning while it cuts: lines along X at angles a stepover apart, rings round the axis at X positions a stepover apart (a full turn, or an A range back and forth), or one spiral with a full turn at each end.",
+            group: "finishing",
+            params: vec![
+                tool(),
+                p("pattern", "choice", "", "Line: passes along X, stepping round. Circular: rings round the axis, stepping along X. Spiral: one helix along X, a full turn at each end.").choices(&["line", "circular", "spiral"]).label("Style"),
+                p("x_range", "vec2", "mm", "Axial extent of the tool tip [front, back]."),
+                p("a_range", "vec2", "deg", "Angular extent: a full turn, or a range ('line', 'circular').").opt(json!([0.0, 360.0])),
+                p("stepover_deg", "number", "deg", "'line': angular stepover.").opt(Value::Null).min(0.01),
+                p("stepover_mm", "number", "mm", "'line': stepover at the largest radius; 'circular': X between rings; 'spiral': X advance per turn.").opt(Value::Null).min(0.001),
+                p("sample_mm", "number", "mm", "Point spacing along X.").opt(json!(0.1)).min(0.001),
+                p("sample_deg", "number", "deg", "Point spacing round X.").opt(json!(2.0)).min(0.01),
+                p("leave_radial", "number", "mm", "Stock to leave on the bar, radially (for a finish after it).").opt(json!(0.0)).label("Radial"),
+                p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),
+                p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
+                p("clean_walls", "boolean", "", "'spiral': a full turn at the foot of each wall.").opt(json!(true)),
                 p("lead_in", "number", "mm", "Lead-in: each pass comes onto the surface turning, from this high above it (at 15 degrees), instead of a radial plunge (0: plunge).").opt(json!(0.0)).min(0.0),
                 feed(),
                 plunge(),
@@ -880,6 +909,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::FlankChamfer(_) => "flank_chamfer",
         Operation::Parting(_) => "parting",
         Operation::RotaryFinish(_) => "rotary_finish",
+        Operation::RotaryParallel(_) => "rotary_parallel",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
@@ -1159,6 +1189,16 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
             v.insert("plunge_feed".into(), json!(plunge));
             // onto each pass turning, from a little above the surface
+            v.insert("lead_in".into(), json!(0.3));
+        }
+        "rotary_parallel" => {
+            // (a spiral: the A axis moving with X all the way, a full turn at each end)
+            v.insert("pattern".into(), json!("spiral"));
+            v.insert("x_range".into(), json!([x_range[1], x_range[0]]));
+            v.insert("a_range".into(), json!(a_range));
+            v.insert("stepover_mm".into(), json!(fine));
+            v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
+            v.insert("plunge_feed".into(), json!(plunge));
             v.insert("lead_in".into(), json!(0.3));
         }
         "helical_knurl" => {
@@ -1716,7 +1756,7 @@ mod tests {
             };
             m.insert(p.name.into(), v);
         }
-        if t.kind == "rotary_finish" {
+        if t.kind == "rotary_finish" || t.kind == "rotary_parallel" {
             m.insert("stepover_mm".into(), json!(0.5));
         }
         Value::Object(m)

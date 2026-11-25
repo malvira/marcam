@@ -934,7 +934,7 @@ impl Project {
                 }
             };
             match target {
-                Operation::RotaryFinish(f) => {
+                Operation::RotaryFinish(f) | Operation::RotaryParallel(f) => {
                     if let Some(x) = b.x {
                         f.x_range = clamp(f.x_range, x);
                     }
