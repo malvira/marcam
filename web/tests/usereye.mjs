@@ -1616,14 +1616,15 @@ try {
       }
     }
     check("the carried piece: drawn solid (opaque, no edge lines), no stripes across it", !box.edges && box.opaque && covered > n * 0.9 && flips < steps * 0.05, JSON.stringify({ edges: box.edges, opaque: box.opaque, covered, n, flips, steps }));
-    // the setup's type, from the row at the top of its details: for the carried setup, the
+    // the setup's type, from its icon cards at the top of its details (Mar: "just move up the
+    // icon based one"): for the carried setup, the
     // plate's first (a part, operations), and a setup with no part
     const typeSwitch = async (label, from, to) => {
       await click("#tree .tree-setup.active [data-act=setup]");
       await settled();
       const vr = await viewRect();
       const img0 = await shot(`type_${label}_before`);
-      const before = await read("(() => { const st = window.__marcam.state; const s = st.tree.doc.setups.find((x) => x.id === st.tree.setup); return { kind: s.kind || '', holding: s.holding?.kind, stock: s.stock?.shape, jaws: st.three.groups.jaws?.children.length || 0, row: (r => Math.round(r.top))(document.getElementById('setupType').getBoundingClientRect()) }; })()");
+      const before = await read("(() => { const st = window.__marcam.state; const s = st.tree.doc.setups.find((x) => x.id === st.tree.setup); return { kind: s.kind || '', holding: s.holding?.kind, stock: s.stock?.shape, jaws: st.three.groups.jaws?.children.length || 0, row: (r => Math.round(r.top))(document.getElementById('setupType').getBoundingClientRect()), icons: document.querySelectorAll('#setupType .sd-kind svg').length, shown: [...document.querySelectorAll('.sd-kind')].filter((e) => e.getBoundingClientRect().height > 0).length }; })()");
       await click(`#setupType [data-setkind=${to}]`);
       await waitFor(() => read(`(() => { const st = window.__marcam.state; return st.tree.doc.setups.find((x) => x.id === st.tree.setup)?.kind === '${to}'; })()`), `${label}: the type changed`, 30000).catch(() => {});
       await settled();
@@ -1637,8 +1638,8 @@ try {
           m++;
           if (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]) > 60) diff++;
         }
-      check(`the setup's type (${label}): its Type row at the top of its details; ${from} -> ${to} switches it, the stock and the fixture change on the screen`,
-        before.row < 600 && now.kind === to && now.holding !== before.holding && (to === "vise" ? now.jaws > 0 : now.jaws === 0) && diff > m * 0.02, JSON.stringify({ before, now, diff, m }));
+      check(`the setup's type (${label}): its icon cards at the top of its details (none further down); ${from} -> ${to} switches it, the stock and the fixture change on the screen`,
+        before.row < 600 && before.icons === 3 && before.shown === 3 && now.kind === to && now.holding !== before.holding && (to === "vise" ? now.jaws > 0 : now.jaws === 0) && diff > m * 0.02, JSON.stringify({ before, now, diff, m }));
     };
     await typeSwitch("carried", "3-axis vise", "rotary");
     // the plate's first setup: a part and operations

@@ -324,9 +324,16 @@ details.menu[open] > summary { border-color: var(--accent); }
 /* (Mar) what holds the stock is the Fixture's: not in the setup's details */
 #setupDialog.embedded #sdTailRow, #setupDialog.embedded #sdJawsRow { display: none; }
 
-/* the setup's type, at the top of its details */
-.setup-type { gap: 4px; align-items: center; margin: 4px 0 6px; }
-.setup-type button.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+/* the setup's type, at the top of its details: the form's icon cards, moved up (the form's
+   own, further down, hidden there) */
+#setupDialog.embedded fieldset.sd-kinds { display: none; }
+.setup-type.sd-kinds { gap: 4px; margin: 4px 0 6px; padding: 0; border: 0; }
+.setup-type legend { font-size: 12px; color: var(--muted); padding: 0; }
+.setup-type .sd-kind { padding: 4px 6px; gap: 2px; background: none; color: inherit; font: inherit; text-align: left; align-items: flex-start; }
+.setup-type .sd-kind svg { width: 36px; height: 24px; }
+.setup-type .sd-kind b { font-size: 12px; }
+.setup-type .sd-kind small { display: none; }
+.setup-type .sd-kind.on { border-color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
 /* a custom toolpath's program: what can't be read or planned, each with its line */
 .gcode-text { font: 12px/1.35 ui-monospace, Consolas, monospace; width: 100%; }
 .gcode-lines { max-height: 14em; overflow: auto; margin: 4px 0; }

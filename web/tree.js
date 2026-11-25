@@ -438,17 +438,18 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     await commit({ label: `Setup "${s.name || s.id}": the part ${label.toLowerCase()}.` });
   }
 
-  /** (Mar: "need a way to edit the type of setup after it's been added") its type at the top
-   *  of its details, as buttons: the setup's own type buttons (further down, in its
-   *  settings) chosen by them, so a change keeps what fits and turns the stock as there. */
+  /** (Mar: "need a way to edit the type of setup after it's been added"; "just move up the
+   *  icon based one") its type at the top of its details: the setup's own type cards (the
+   *  form's, hidden further down), each choosing the form's own type button, so a change
+   *  keeps what fits and turns the stock as there. */
   function typeRow(x) {
     const k = kindOfSetup(x) || (isBox(x) ? "vise" : "rotary");
-    const KINDS = [
-      ["vise", "3-axis vise"],
-      ["rotary", "4th axis"],
-      ["indexed", "Indexed 3+1"],
-    ];
-    return `<div class="row small setup-type" id="setupType" role="group" aria-label="Setup type"><span class="muted">Type</span>${KINDS.map(([v, label]) => `<button type="button" data-setkind="${v}" aria-pressed="${v === k}" class="${v === k ? "on" : ""}">${label}</button>`).join("")}</div>`;
+    const cards = [...document.querySelectorAll("#setupDialog .sd-kind")].map((c) => {
+      const v = c.dataset.kind;
+      const inner = [...c.childNodes].filter((n) => n.nodeName !== "INPUT").map((n) => n.outerHTML ?? esc(n.textContent)).join("");
+      return `<button type="button" class="sd-kind ${v === k ? "on" : ""}" data-setkind="${v}" aria-pressed="${v === k}" title="${esc(c.title || "")}">${inner}</button>`;
+    });
+    return `<fieldset class="sd-kinds setup-type" id="setupType"><legend>Setup type</legend>${cards.join("")}</fieldset>`;
   }
 
   /** (Mar) Where setup `x` starts (setup 2 and after): continuing from the setup before (its
@@ -1621,8 +1622,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     // the setup's type, from the row at the top of its details: its own type button chosen
-    if (el.dataset?.setkind) {
-      const radio = document.querySelector(`#setupDialog.embedded input[name="sdKind"][value="${el.dataset.setkind}"]`);
+    const kindCard = el.closest?.("[data-setkind]");
+    if (kindCard) {
+      const radio = document.querySelector(`#setupDialog.embedded input[name="sdKind"][value="${kindCard.dataset.setkind}"]`);
       if (!radio) return;
       if (radio.disabled) return showError(radio.closest(".sd-kind")?.title || "This setup can't be that type: a vise holds a part's mesh, a block or the stock a setup before left.");
       if (!radio.checked) radio.click();
