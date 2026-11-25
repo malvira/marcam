@@ -140,7 +140,15 @@ impl RadialMap {
 
     /// Like [`RadialMap::from_mesh`], with rays `offset` mm from each cell centre.
     pub fn from_mesh_at(grid: Grid, mesh: &Mesh, offset: f64) -> RadialMap {
+        Self::from_mesh_layers_at(grid, mesh, offset).0
+    }
+
+    /// [`RadialMap::from_mesh_at`], and where each ray from the axis crosses the part more
+    /// than twice on its way out (a gap under an overhang): the top of the part below the
+    /// outermost gap (elsewhere the outer radius).
+    pub fn from_mesh_layers_at(grid: Grid, mesh: &Mesh, offset: f64) -> (RadialMap, RadialMap) {
         let mut m = RadialMap::filled(grid, 0.0);
+        let mut hits: Vec<Vec<f32>> = vec![Vec::new(); grid.nx * grid.na];
         let dphi = TAU / grid.na as f64;
         for t in &mesh.triangles {
             let xs = [t[0][0], t[1][0], t[2][0]];
@@ -184,11 +192,27 @@ impl RadialMap {
                     if inside_3d(t, &n, p) {
                         let k = i * grid.na + j;
                         m.r[k] = m.r[k].max(rho as f32);
+                        hits[k].push(rho as f32);
                     }
                 }
             }
         }
-        m.measured()
+        // the crossings out from the axis, in order (one counted once where two triangles
+        // share an edge): the last is the outer surface, the one before it where the outer
+        // solid starts; a third from the end, the top of the solid under the gap
+        let mut under = m.clone();
+        for (k, h) in hits.iter_mut().enumerate() {
+            if h.len() < 3 {
+                continue;
+            }
+            h.sort_by(|a, b| a.total_cmp(b));
+            h.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+            let n = h.len();
+            if n >= 3 && h[n - 2] - h[n - 3] > 1e-3 {
+                under.r[k] = h[n - 3];
+            }
+        }
+        (m.measured(), under)
     }
 }
 
@@ -300,6 +324,11 @@ pub struct Part {
     pub center: RadialMap,
     pub lo: RadialMap,
     pub hi: RadialMap,
+    /// (Mar's impeller) where a ray from the axis leaves the part and meets it again further
+    /// out (under a blade leaning over the hub): the top of the part below that gap, lowest
+    /// across the cell; elsewhere as `lo`. A radial map cannot hold the gap, so a stock cut
+    /// down into it (the tool reached under the overhang) is not a gouge: only below this is.
+    pub under: Option<RadialMap>,
 }
 
 impl Part {
@@ -316,6 +345,7 @@ impl Part {
             center: maps[0].clone(),
             lo,
             hi,
+            under: None,
         }
     }
 
@@ -348,12 +378,22 @@ impl Part {
 
     pub fn from_mesh(grid: Grid, mesh: &Mesh) -> Part {
         let e = 0.4999 * grid.dx;
-        Part::from_samples(
-            [0.0, -e, e]
-                .iter()
-                .map(|&o| RadialMap::from_mesh_at(grid, mesh, o))
-                .collect(),
-        )
+        let (maps, unders): (Vec<RadialMap>, Vec<RadialMap>) = [0.0, -e, e]
+            .iter()
+            .map(|&o| RadialMap::from_mesh_layers_at(grid, mesh, o))
+            .unzip();
+        let mut part = Part::from_samples(maps);
+        let mut under = unders[0].clone();
+        for u in &unders[1..] {
+            for k in 0..under.r.len() {
+                under.r[k] = under.r[k].min(u.r[k]);
+            }
+        }
+        // (no gap anywhere: as `lo`)
+        if under.r.iter().zip(&part.lo.r).any(|(u, l)| u < l) {
+            part.under = Some(under);
+        }
+        part
     }
 }
 
@@ -1179,6 +1219,8 @@ pub fn deviation_with(
         }
         for j in 0..g.na {
             let (hi, lo) = (part.hi.at(i, j), part.lo.at(i, j));
+            // (under an overhang: only a cut below the part under the gap is a gouge)
+            let lo = part.under.as_ref().map_or(lo, |u| lo.min(u.at(i, j)));
             if hi <= 0.0 {
                 continue;
             }
@@ -1480,5 +1522,67 @@ mod tests {
         };
         let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
         assert_eq!(st.rapid_hits, vec![2]);
+    }
+}
+
+#[cfg(test)]
+mod overhang_tests {
+    use super::*;
+
+    /// A box's 12 triangles (outward).
+    fn cuboid(lo: [f64; 3], hi: [f64; 3]) -> Vec<crate::mesh::Triangle> {
+        let c = |i: usize| {
+            [
+                if i & 1 == 0 { lo[0] } else { hi[0] },
+                if i & 2 == 0 { lo[1] } else { hi[1] },
+                if i & 4 == 0 { lo[2] } else { hi[2] },
+            ]
+        };
+        let quads = [
+            [0, 2, 6, 4],
+            [1, 5, 7, 3],
+            [0, 4, 5, 1],
+            [2, 3, 7, 6],
+            [0, 1, 3, 2],
+            [4, 6, 7, 5],
+        ];
+        quads
+            .iter()
+            .flat_map(|q| [[c(q[0]), c(q[1]), c(q[2])], [c(q[0]), c(q[2]), c(q[3])]])
+            .collect()
+    }
+
+    /// (Mar's impeller: 1700 "gouged" cells, 10.7 mm deep, where the tool had cut under a
+    /// blade leaning over the hub) a hub round the axis and a ledge out past a gap: a stock cut
+    /// down into the gap is no gouge; cut into the hub, it is.
+    #[test]
+    fn a_cut_under_an_overhang_is_no_gouge_a_cut_into_what_is_below_is() {
+        let mut tris = cuboid([-10.0, -5.0, -5.0], [0.0, 5.0, 5.0]);
+        tris.extend(cuboid([-10.0, 8.0, -1.0], [0.0, 10.0, 1.0]));
+        let mesh = Mesh {
+            triangles: tris,
+            faces: vec![],
+        };
+        let g = Grid::new(-10.0, 0.0, 0.1, 360);
+        let part = Part::from_mesh(g, &mesh);
+        assert!(part.under.is_some());
+        // the ray along +Y (phi 0) halfway along: hub to 5, gap to 8, ledge to 10
+        let (i, j) = (50, 0);
+        assert!(
+            (part.hi.at(i, j) - 10.0).abs() < 1e-3,
+            "{}",
+            part.hi.at(i, j)
+        );
+        assert!((part.under.as_ref().unwrap().at(i, j) - 5.0).abs() < 1e-3);
+        let mut stock = part.hi.clone();
+        // (cut there by an operation: only cuts count)
+        stock.op[i * g.na + j] = 1;
+        stock.r[i * g.na + j] = 6.0;
+        let d = deviation(&stock, &part, -10.0, 0.0, 0.02);
+        assert_eq!(d.gouge_cells, 0, "{d:?}");
+        stock.r[i * g.na + j] = 4.0;
+        let d = deviation(&stock, &part, -10.0, 0.0, 0.02);
+        assert_eq!(d.gouge_cells, 1, "{d:?}");
+        assert!((d.max_gouge - 1.0).abs() < 1e-3, "{d:?}");
     }
 }
