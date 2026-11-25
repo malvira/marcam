@@ -1748,6 +1748,24 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     }
                     hi as f64
                 };
+                // (a limit on the bite: the stock taken from as the passes are planned, to
+                // say what each would take)
+                // (by default 1.5 times the tool's normal bite: buried to its centre, a ball's
+                // half disc, a flat's square of its radius by its width: the impeller's ball
+                // 3.96, so 5.94 mm3/mm)
+                let mut live = rest3d
+                    .clone()
+                    .and_then(|dx| Some((dx, tool_solid(job, o.tool)?)));
+                let bite_limit = o.max_bite.unwrap_or_else(|| {
+                    live.as_ref().map_or(f64::INFINITY, |(_, t)| {
+                        let normal = if t.ball {
+                            0.5 * std::f64::consts::PI * t.radius * t.radius
+                        } else {
+                            2.0 * t.radius * t.radius
+                        };
+                        1.5 * normal
+                    })
+                });
                 let r_min = strategy::rotary_rough(
                     &mut b,
                     &dc,
@@ -1757,6 +1775,11 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     Some(&stock_at as &dyn Fn(f64) -> f64),
                     (column.is_some() || rest3d.is_some())
                         .then_some(&stock_near as strategy::StockNear),
+                    live.as_mut().map(|(stock, tool)| strategy::Bite {
+                        stock,
+                        tool: *tool,
+                        limit: bite_limit,
+                    }),
                 )
                 .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;

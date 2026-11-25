@@ -13,12 +13,80 @@ const AIR_FEED: f64 = 2000.0;
 /// Through the air round the axis: at most this many mm/min per mm from it (about 3,400
 /// degrees a minute, under the 4,000 the Z1's controller takes).
 const AIR_TURN: f64 = 60.0;
+/// Rest roughing on the 3D stock with a limit on the bite: the stock as the operations
+/// before left it (taken from as the passes are planned), the tool's solid, and the most a
+/// pass may take per mm of travel (mm3/mm).
+pub struct Bite<'a> {
+    pub stock: &'a mut crate::dexel::Dexel,
+    pub tool: crate::dexel::ToolSolid,
+    pub limit: f64,
+}
+
+/// Where a pass's bite is sampled along it (mm).
+const BITE_STEP: f64 = 0.25;
+/// The slowest a pass over its bite goes (of the feed).
+const BITE_SLOW: f64 = 0.6;
+
+type RayLog = Vec<(usize, usize, Vec<[f32; 2]>)>;
+
+/// A pass along X at A `a` from `xa` to `xb`, its tip at `zf`, taken out of the stock: what
+/// it takes per mm at points at most [`BITE_STEP`] apart (X, mm3/mm; its start, where it
+/// comes down, not a bite). With `log`, what it changed is kept for
+/// [`crate::dexel::Dexel::restore`].
+fn take_pass(
+    bt: &mut Bite,
+    zf: &dyn Fn(f64, f64) -> f64,
+    xa: f64,
+    xb: f64,
+    a: f64,
+    mut log: Option<&mut RayLog>,
+) -> Vec<(f64, f64)> {
+    let n = (((xb - xa).abs() / BITE_STEP).ceil() as usize).max(1);
+    let mut out = Vec::with_capacity(n + 1);
+    let mut scratch = RayLog::new();
+    for i in 0..=n {
+        let x = xa + (xb - xa) * i as f64 / n as f64;
+        let (tip, dir) = crate::dexel::pose(x, 0.0, zf(x, a), a);
+        let v = match log.as_deref_mut() {
+            Some(l) => bt.stock.subtract_logged(&bt.tool, tip, dir, l),
+            None => {
+                scratch.clear();
+                bt.stock.subtract_logged(&bt.tool, tip, dir, &mut scratch)
+            }
+        };
+        // (per mm the tip moved: a short pass's step is short; the impeller's 0.11 mm one
+        // beside a blade's wall took 1 mm3)
+        if i > 0 {
+            let moved = ((xb - xa).abs() / n as f64)
+                .hypot(zf(x, a) - zf(xa + (xb - xa) * (i - 1) as f64 / n as f64, a));
+            out.push((x, v / moved.max(0.05)));
+        }
+    }
+    out
+}
+
+/// The feed's share at X for a pass whose bites are `bites`: under the limit, all of it;
+/// over, in proportion, to [`BITE_SLOW`] (in twentieths, down).
+fn bite_scale(bites: &[(f64, f64)], limit: f64, x: f64) -> f64 {
+    let worst = bites
+        .iter()
+        .filter(|(bx, _)| (bx - x).abs() <= 0.5 + 1e-9)
+        .map(|b| b.1)
+        .fold(0.0f64, f64::max);
+    if worst <= limit {
+        return 1.0;
+    }
+    ((limit / worst * 20.0).floor() / 20.0).clamp(BITE_SLOW, 1.0)
+}
+
 /// Rest roughing along X: at each level, passes along X at angles `op.step_x` mm apart at the
 /// level's radius, each only over the X runs where more than [`REST_MIN`] of the stock left
 /// (`st`, its top at `xs` x the `seg`-degree angles) stands above the level and the part
 /// (with its allowance, `clg`/`cl`). Each pass comes down onto the stock from just above it,
 /// rides `max(level, part)`, and leaves upward; the next angle's pass follows at the safe
 /// radius. The levels top-down, so a pass takes at most a level's depth and a stepover.
+/// With `bite`, a pass that would take more than its limit per mm goes in two, half a level
+/// apart, and slower where the second still would.
 #[allow(clippy::too_many_arguments)]
 fn rest_along(
     b: &mut Builder,
@@ -33,18 +101,133 @@ fn rest_along(
     tol: f64,
     feeds: (f64, f64),
     takes: StockNear,
+    mut bite: Option<Bite>,
 ) {
     let n_rev = clg.first().map_or(0, |r| r.len());
     if n_rev == 0 || xs.len() < 2 {
         return;
     }
     let k_of = |a: f64| ((a.rem_euclid(360.0) / seg).round() as usize) % n_rev;
-    let mut done_above: Vec<Vec<bool>> = vec![vec![false; n_rev]; xs.len()];
     let mut forward = true;
+    // one pass along X at A `a` from `xa` to `xb` at `level`, its feed's share at X `scale`;
+    // `live`: the stock as the passes before it left it (else the operations' before)
+    let pass = |b: &mut Builder,
+                live: Option<(&crate::dexel::Dexel, &crate::dexel::ToolSolid)>,
+                level: f64,
+                a: f64,
+                xa: f64,
+                xb: f64,
+                scale: &dyn Fn(f64) -> f64| {
+        let zf = |x: f64, a: f64| py_max(level, cl(x, a));
+        // the tool at the tip radius `r` there takes nothing
+        let free = |x: f64, aa: f64, r: f64| match live {
+            Some((dx, t)) => {
+                let (tip, dir) = crate::dexel::pose(x, 0.0, r, aa);
+                dx.inside(t, tip, dir) <= 0.05
+            }
+            None => takes(x, x, aa, aa, r) <= 0.0,
+        };
+        // down from just above what stands there: the level above where a pass of it went,
+        // else the stock left
+        // (down by rapid only to where the tool takes nothing: up from the pass a half mm at
+        // a time; the stock's top along a ray alone missed what stood beside it)
+        let mut above = zf(xa, a);
+        while above < safe_r && !free(xa, a, above) {
+            above += 0.5;
+        }
+        let z0 = zf(xa, a);
+        let start = py_max(above + 0.5, z0 + 0.5).min(safe_r);
+        // (Mar's impeller: 18,000 rapids up to the safe radius and back between short passes,
+        // 53 min) from the end of the pass before, near here: up to where the tool takes
+        // nothing there and on the way, over at the feed, and down
+        let linked = match (b.x, b.r) {
+            (Some(px), Some(pr)) if (px - xa).abs() <= LINK_REACH && pr < safe_r - 1e-9 => {
+                let pa = b.a;
+                let mut rl = pr.max(start);
+                // (clear of the stock left, and of the part itself, at points a third of a mm
+                // apart along the way: the overhang fixture's ledge between two passes'
+                // angles, gouged 3 mm by a link)
+                let way = (xa - px)
+                    .abs()
+                    .max((a - pa).abs().to_radians() * pr.max(1.0));
+                let n = ((way / 0.3).ceil() as usize).max(4);
+                let clear = |r: f64| {
+                    (0..=n).all(|t| {
+                        let f = t as f64 / n as f64;
+                        let (x, aa) = (px + (xa - px) * f, pa + (a - pa) * f);
+                        r >= cl(x, aa) + 0.05 && free(x, aa, r)
+                    })
+                };
+                while rl < safe_r && !clear(rl) {
+                    rl += 0.5;
+                }
+                (rl < safe_r).then_some(rl)
+            }
+            _ => None,
+        };
+        let top = match linked {
+            Some(rl) => {
+                b.cut(b.x.unwrap_or(xa), rl, b.a, feeds.0, feeds.1);
+                b.cut(xa, rl, a, feeds.0, feeds.1);
+                rl
+            }
+            None => {
+                b.rapid_r(safe_r);
+                b.rapid(Some(xa), None, Some(a));
+                b.rapid_r(start);
+                start
+            }
+        };
+        let fd = |x: f64| (feeds.0 * scale(x), feeds.1);
+        // (no plunge through what stands there: down a ramp along the pass at the operation's
+        // ramp angle, then back over the ramp at depth)
+        let tan = op.ramp_angle.clamp(2.0, 45.0).to_radians().tan();
+        let len = (xb - xa).abs();
+        let ramp_len = ((top - z0).max(0.0) / tan).min(len);
+        let dir = if xb >= xa { 1.0 } else { -1.0 };
+        if ramp_len > 0.05 && len > 0.5 {
+            // (the ramp or the part, whichever is higher, followed as a pass is: the impeller's
+            // blade wall rose 8 mm between two ramp points a quarter mm apart, and the
+            // straight move between them gouged 5.4 mm)
+            let zr = |x: f64, aa: f64| {
+                let f = ((x - xa) * dir / ramp_len).clamp(0.0, 1.0);
+                py_max(top + (z0 - top) * f, zf(x, aa))
+            };
+            let steps = (ramp_len / 0.25).ceil().max(1.0) as usize;
+            for j in 1..=steps {
+                let f = j as f64 / steps as f64;
+                let x = xa + dir * ramp_len * f;
+                let p0 = [b.x.unwrap_or(xa), b.r.unwrap_or(top), b.a];
+                refine(b, &zr, p0, [x, zr(x, a), a], tol, 0, fd(x));
+            }
+            // the rest of the way down there, if the ramp ran out of pass
+            let xe = xa + dir * ramp_len;
+            b.plunge(zf(xe, a), feeds.1);
+            // back over the ramp at depth, then the pass
+            let n = (ramp_len / 0.5).ceil().max(1.0) as usize;
+            for j in 1..=n {
+                let x = xe - dir * ramp_len * j as f64 / n as f64;
+                let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(z0), b.a];
+                refine(b, &zf, p0, [x, zf(x, a), a], tol, 0, fd(x));
+            }
+        } else {
+            b.plunge(z0, feeds.1);
+        }
+        let n = (len / 0.5).ceil().max(1.0) as usize;
+        for j in 1..=n {
+            let x = xa + (xb - xa) * j as f64 / n as f64;
+            let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(z0), b.a];
+            refine(b, &zf, p0, [x, zf(x, a), a], tol, 0, fd(x));
+        }
+    };
+    let mut prev_level: Option<f64> = None;
     for &level in levels {
         if crate::budget::over() {
             break;
         }
+        // half a step above this level, where a pass would take too much
+        let half = prev_level.map_or(level + 0.5 * op.step_down, |p| 0.5 * (p + level));
+        prev_level = Some(level);
         // angles a stepover apart at this radius
         let da = (op.step_x / level.max(0.5))
             .to_degrees()
@@ -80,104 +263,45 @@ fn rest_along(
             let runs = intervals(&mask, xs);
             for (xa, xb) in runs {
                 let (xa, xb) = if forward { (xa, xb) } else { (xb, xa) };
+                let Some(bt) = bite.as_mut() else {
+                    pass(b, None, level, a, xa, xb, &|_| 1.0);
+                    forward = !forward;
+                    continue;
+                };
+                let limit = bt.limit;
                 let zf = |x: f64, a: f64| py_max(level, cl(x, a));
-                // down from just above what stands there: the level above where a pass of it
-                // went, else the stock left
-                // (down by rapid only to where the tool takes nothing: up from the pass a half
-                // mm at a time; the stock's top along a ray alone missed what stood beside it)
-                let mut above = zf(xa, a);
-                while above < safe_r && takes(xa, xa, a, a, above) > 0.0 {
-                    above += 0.5;
+                // the whole step: within the limit, as it is
+                let mut log = RayLog::new();
+                let full = take_pass(bt, &zf, xa, xb, a, Some(&mut log));
+                bt.stock.restore(log);
+                if full.iter().all(|s| s.1 <= limit) {
+                    pass(b, Some((&*bt.stock, &bt.tool)), level, a, xa, xb, &|_| 1.0);
+                    take_pass(bt, &zf, xa, xb, a, None);
+                    forward = !forward;
+                    continue;
                 }
-                let z0 = zf(xa, a);
-                let start = py_max(above + 0.5, z0 + 0.5).min(safe_r);
-                // (Mar's impeller: 18,000 rapids up to the safe radius and back between short
-                // passes, 53 min) from the end of the pass before, near here: up to where the
-                // tool takes nothing there and on the way, over at the feed, and down
-                let linked = match (b.x, b.r) {
-                    (Some(px), Some(pr)) if (px - xa).abs() <= LINK_REACH && pr < safe_r - 1e-9 => {
-                        let pa = b.a;
-                        let mut rl = pr.max(start);
-                        // (clear of the stock left, and of the part itself, at points a third
-                        // of a mm apart along the way: the overhang fixture's ledge between
-                        // two passes' angles, gouged 3 mm by a link)
-                        let way = (xa - px)
-                            .abs()
-                            .max((a - pa).abs().to_radians() * pr.max(1.0));
-                        let n = ((way / 0.3).ceil() as usize).max(4);
-                        let clear = |r: f64| {
-                            (0..=n).all(|t| {
-                                let f = t as f64 / n as f64;
-                                let (x, aa) = (px + (xa - px) * f, pa + (a - pa) * f);
-                                r >= cl(x, aa) + 0.05 && takes(x, x, aa, aa, r) <= 0.0
-                            })
-                        };
-                        while rl < safe_r && !clear(rl) {
-                            rl += 0.5;
-                        }
-                        (rl < safe_r).then_some(rl)
-                    }
-                    _ => None,
-                };
-                let top = match linked {
-                    Some(rl) => {
-                        b.cut(b.x.unwrap_or(xa), rl, b.a, feeds.0, feeds.1);
-                        b.cut(xa, rl, a, feeds.0, feeds.1);
-                        rl
-                    }
-                    None => {
-                        b.rapid_r(safe_r);
-                        b.rapid(Some(xa), None, Some(a));
-                        b.rapid_r(start);
-                        start
-                    }
-                };
-                // (no plunge through what stands there: down a ramp along the pass at the
-                // operation's ramp angle, then back over the ramp at depth)
-                let tan = op.ramp_angle.clamp(2.0, 45.0).to_radians().tan();
-                let len = (xb - xa).abs();
-                let ramp_len = ((top - z0).max(0.0) / tan).min(len);
-                let dir = if xb >= xa { 1.0 } else { -1.0 };
-                if ramp_len > 0.05 && len > 0.5 {
-                    // (the ramp or the part, whichever is higher, followed as a pass is: the
-                    // impeller's blade wall rose 8 mm between two ramp points a quarter mm
-                    // apart, and the straight move between them gouged 5 mm)
-                    let zr = |x: f64, aa: f64| {
-                        let f = ((x - xa) * dir / ramp_len).clamp(0.0, 1.0);
-                        py_max(top + (z0 - top) * f, zf(x, aa))
-                    };
-                    let steps = (ramp_len / 0.25).ceil().max(1.0) as usize;
-                    for j in 1..=steps {
-                        let f = j as f64 / steps as f64;
-                        let x = xa + dir * ramp_len * f;
-                        let p0 = [b.x.unwrap_or(xa), b.r.unwrap_or(top), b.a];
-                        refine(b, &zr, p0, [x, zr(x, a), a], tol, 0, feeds);
-                    }
-                    // the rest of the way down there, if the ramp ran out of pass
-                    let xe = xa + dir * ramp_len;
-                    b.plunge(zf(xe, a), feeds.1);
-                    // back over the ramp at depth, then the pass
-                    let n = (ramp_len / 0.5).ceil().max(1.0) as usize;
-                    for j in 1..=n {
-                        let x = xe - dir * ramp_len * j as f64 / n as f64;
-                        let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(z0), b.a];
-                        refine(b, &zf, p0, [x, zf(x, a), a], tol, 0, feeds);
-                    }
-                } else {
-                    b.plunge(z0, feeds.1);
+                // over: half the step first, then the rest of it, each slower where still over
+                let zh = |x: f64, a: f64| py_max(half, cl(x, a));
+                let mut log = RayLog::new();
+                let first = take_pass(bt, &zh, xa, xb, a, Some(&mut log));
+                bt.stock.restore(log);
+                let (mut xa, mut xb) = (xa, xb);
+                if first.iter().any(|s| s.1 > 0.05) {
+                    pass(b, Some((&*bt.stock, &bt.tool)), half, a, xa, xb, &|x| {
+                        bite_scale(&first, limit, x)
+                    });
+                    take_pass(bt, &zh, xa, xb, a, None);
+                    forward = !forward;
+                    (xa, xb) = (xb, xa);
                 }
-                let n = (len / 0.5).ceil().max(1.0) as usize;
-                for j in 1..=n {
-                    let x = xa + (xb - xa) * j as f64 / n as f64;
-                    let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(z0), b.a];
-                    refine(b, &zf, p0, [x, zf(x, a), a], tol, 0, feeds);
-                }
+                let mut log = RayLog::new();
+                let second = take_pass(bt, &zf, xa, xb, a, Some(&mut log));
+                bt.stock.restore(log);
+                pass(b, Some((&*bt.stock, &bt.tool)), level, a, xa, xb, &|x| {
+                    bite_scale(&second, limit, x)
+                });
+                take_pass(bt, &zf, xa, xb, a, None);
                 forward = !forward;
-            }
-            for i in 0..xs.len() {
-                if mask[i] {
-                    done_above[i][k] = true;
-                }
             }
         }
     }
@@ -226,6 +350,7 @@ pub type StockNear<'a> = &'a dyn Fn(f64, f64, f64, f64, f64) -> f64;
 /// places): a level is cut only along X where the bar stands above it. `stock_near` (a stock
 /// not round about the axis: a carried piece) says where round a level there is none: those
 /// stretches are crossed at the air feed.
+#[allow(clippy::too_many_arguments)]
 pub fn rotary_rough(
     b: &mut Builder,
     dc: &DropCutter,
@@ -234,6 +359,7 @@ pub fn rotary_rough(
     op: &RotaryRough,
     stock_at: Option<&dyn Fn(f64) -> f64>,
     stock_near: Option<StockNear>,
+    bite: Option<Bite>,
 ) -> Result<f64, String> {
     if op.step_down <= 0.0 || op.step_x <= 0.0 || op.sample_deg <= 0.0 {
         return Err("step_down, step_x and sample_deg must be > 0".into());
@@ -318,6 +444,7 @@ pub fn rotary_rough(
             tol,
             feeds,
             stock_near.expect("rest"),
+            bite,
         );
         return Ok(b.moves[first..]
             .iter()
@@ -464,6 +591,7 @@ mod tests {
             ramp_angle: 2.0,
             smoothing: None,
             rest: true,
+            max_bite: None,
         };
         let xs: Vec<f64> = (0..=200).map(|i| -40.0 + i as f64 * 0.05).collect();
         let seg = 30.0;
@@ -485,6 +613,7 @@ mod tests {
             0.01,
             (500.0, 150.0),
             &takes,
+            None,
         );
         let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0);
         let mut cuts = 0;
@@ -533,5 +662,96 @@ mod tests {
             }
         }
         assert!(cuts > 10, "{cuts} cuts");
+    }
+
+    /// A limit on the bite: a pass over it goes in two, half a level apart, and slower where
+    /// still over (not below 0.6 of the feed); without one, every pass a full step.
+    #[test]
+    fn rest_passes_over_the_bite_go_in_two_and_slower() {
+        use crate::dexel::{pose, Dexel, ToolSolid};
+        let tool = ToolSolid {
+            radius: 1.5875,
+            ball: true,
+            height: 20.0,
+        };
+        let bar = Dexel::bar(10.0, 20.0, 0.2);
+        let cl = |_x: f64, _a: f64| 7.0;
+        let op = RotaryRough {
+            tool: 1,
+            leave_axial: 0.0,
+            x_range: [-15.0, -5.0],
+            step_down: 1.0,
+            step_x: 0.6,
+            leave_radial: 0.0,
+            sample_deg: 6.0,
+            tolerance: 0.01,
+            min_radius: 0.0,
+            feed: 500.0,
+            plunge_feed: 150.0,
+            ramp_angle: 30.0,
+            smoothing: None,
+            rest: true,
+            max_bite: Some(1.5),
+        };
+        let xs: Vec<f64> = (0..=200).map(|i| -15.0 + i as f64 * 0.05).collect();
+        let clg: Vec<Vec<f64>> = xs.iter().map(|_| vec![7.0; 60]).collect();
+        let takes = |x: f64, _: f64, a: f64, _: f64, r: f64| {
+            let (rr, least) = if r < 0.0 { (-r, 0.5) } else { (r, 0.05) };
+            let (tip, dir) = pose(x, 0.0, rr, a);
+            if bar.inside(&tool, tip, dir) > least {
+                rr
+            } else {
+                0.0
+            }
+        };
+        let plan = |limit: Option<f64>| {
+            let mut live = bar.clone();
+            let mut b = Builder::new();
+            let bite = limit.map(|limit| Bite {
+                stock: &mut live,
+                tool,
+                limit,
+            });
+            rest_along(
+                &mut b,
+                &op,
+                &xs,
+                6.0,
+                &clg,
+                &[],
+                &[9.0],
+                25.0,
+                &cl,
+                0.01,
+                (500.0, 150.0),
+                &takes,
+                bite,
+            );
+            b.moves
+        };
+        let cuts = |m: &[Move]| -> Vec<(f64, f64)> {
+            m.iter()
+                .filter_map(|m| match *m {
+                    Move::Cut { r, feed, .. } => Some((r, feed)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let plain = cuts(&plan(None));
+        assert!(
+            !plain.iter().any(|c| (c.0 - 9.5).abs() < 1e-6),
+            "a half level without a limit"
+        );
+        assert!(plain.iter().all(|c| c.1 >= 500.0 - 1e-9 || c.1 > 600.0));
+        let limited = cuts(&plan(Some(1.5)));
+        let halves = limited.iter().filter(|c| (c.0 - 9.5).abs() < 1e-6).count();
+        assert!(halves > 5, "{halves} cuts at the half level");
+        let slow: Vec<f64> = limited
+            .iter()
+            .filter(|c| c.1 < 500.0 - 1e-9)
+            .map(|c| c.1)
+            .collect();
+        assert!(!slow.is_empty(), "nothing slower over the limit");
+        assert!(slow.iter().all(|&f| f >= 300.0 - 1e-9), "{slow:?}");
     }
 }

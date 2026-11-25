@@ -275,6 +275,7 @@ fn types() -> Vec<OperationType> {
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the allowance surface.").opt(json!(0.005)).min(0.0001),
                 p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
                 p("rest", "boolean", "", "Rest roughing: only where the operations before it in the setup left material (simulated), e.g. a ball under blades no index of the roughing reached; round the rest at the air feed.").opt(json!(false)),
+                p("max_bite", "number", "mm3/mm", "Rest roughing: the most a pass may take per mm of travel (the simulated stock says how much it would). A level's pass that would take more goes in two, half a step down each, and slower where still over (to 0.6 of the feed). Empty: 1.5 times the tool's normal bite (buried to its centre).").min(0.1).adv(),
                 feed(),
                 plunge(),
                 ramp(),

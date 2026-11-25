@@ -2043,6 +2043,29 @@ try {
     await shot("rest_roughing");
     check("rotary rest roughing after indexed roughing (rest ticked by a click): planned along X where stock is left, clean (no verifier issue, no gouge)",
       rr.rest && rr.along && rr.tabs.length && rr.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(rr.verifier) && (!rr.gouge || /deepest 0\.0[0-1]\d* mm/.test(rr.gouge)) && !rr.error, JSON.stringify(rr));
+    // (Mar's impeller: a full step where the rest is thin, two half steps where a pass would
+    // take too much; by default 1.5 times the tool's normal bite, nothing new in the form) a
+    // "Max bite" typed in under More: its passes over it go in two and slower, none below
+    // 0.6 of the feed, clean
+    const restCode = `(() => { const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'rotary_rough'); const g = (window.__marcam.state.result?.programs || []).map((p) => p.gcode || '').join(' '); const i = g.indexOf('rest roughing (along X)'); const tail = i < 0 ? '' : g.slice(i); const fs = [...tail.matchAll(/G1[^F]*F(\d+)/g)].map((m) => +m[1]); return { feed: op?.feed, maxBite: op?.max_bite ?? null, lines: tail.split(/\n/).length, slowest: fs.length ? Math.min(...fs.filter((f) => f > op.plunge_feed + 1)) : null, slower: fs.filter((f) => f > op.plunge_feed + 1 && f < op.feed).length }; })()`;
+    const before = await read(restCode);
+    const mbCss = "#opForm [name=max_bite]";
+    const folded = await read(`(() => { const d = document.querySelector('${mbCss}')?.closest('details'); return !!d && !d.open; })()`);
+    if (folded) await click(`#opForm details:has([name=max_bite]) > summary`);
+    await read(`document.querySelector('${mbCss}')?.scrollIntoView({ block: 'center' }), true`);
+    await click(mbCss);
+    await key("a", 2);
+    for (const ch of "1") await type(ch);
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await settled();
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
+    const after = await read(restCode);
+    const rb = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent), verifier: t.filter((x) => /^Verifier/.test(x)).sort((a, b) => a.length - b.length)[0] || '', gouge: t.filter((x) => /^Gouge check/.test(x)).sort((a, b) => a.length - b.length)[0] || '', error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    await shot("rest_roughing_max_bite");
+    check("rest roughing: its Max bite folded under More (nothing new in the form); typed in there (1 mm3/mm): more passes, some slower but none under 0.6 of the feed, clean",
+      folded && after.maxBite === 1 && after.lines > before.lines && after.slower > 0 && after.slowest >= 0.6 * after.feed - 1e-6 && rb.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(rb.verifier) && (!rb.gouge || /deepest 0\.0[0-1]\d* mm/.test(rb.gouge)) && !rb.error, JSON.stringify({ folded, before, after, rb }));
     await clean("rest roughing on the 4th axis");
   }
   // ---------------------------------------------------------------- tree rows: the whole row

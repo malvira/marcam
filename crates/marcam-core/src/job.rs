@@ -1725,6 +1725,13 @@ pub struct RotaryRough {
     /// the hub under the blades, which no index of the roughing reached).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rest: bool,
+    /// Rest roughing on the 3D stock: the most a pass may take per mm of travel (mm3/mm). A
+    /// level's pass that would take more goes in two, half a step down each; where the
+    /// second still would, slower in proportion (to 0.6 of the feed). None: 1.5 times the
+    /// tool's normal bite (buried to its centre: a ball's half disc, a flat's radius by its
+    /// width).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bite: Option<f64>,
 }
 
 fn default_rough_sample_deg() -> f64 {

@@ -278,6 +278,50 @@ impl Dexel {
         taken * self.h * self.h / 3.0
     }
 
+    /// As [`Dexel::subtract`], keeping each ray it changed as it was in `log`, for
+    /// [`Dexel::restore`].
+    pub fn subtract_logged(
+        &mut self,
+        tool: &ToolSolid,
+        tip: [f64; 3],
+        dir: [f64; 3],
+        log: &mut Vec<(usize, usize, Vec<[f32; 2]>)>,
+    ) -> f64 {
+        let mut cuts: Vec<(usize, usize, f64, f64)> = Vec::new();
+        self.crossing(tool, tip, dir, |d, k, s0, s1| cuts.push((d, k, s0, s1)));
+        let mut taken = 0.0;
+        for (d, k, s0, s1) in cuts {
+            let ray = &self.rays[d][k];
+            let (s0, s1) = (s0 as f32, s1 as f32);
+            if !ray.iter().any(|&[a, b]| b > s0 && a < s1) {
+                continue;
+            }
+            let mut out: Vec<[f32; 2]> = Vec::with_capacity(ray.len() + 1);
+            for &[a, b] in ray.iter() {
+                if b <= s0 || a >= s1 {
+                    out.push([a, b]);
+                    continue;
+                }
+                taken += (b.min(s1) - a.max(s0)) as f64;
+                if a < s0 {
+                    out.push([a, s0]);
+                }
+                if b > s1 {
+                    out.push([s1, b]);
+                }
+            }
+            log.push((d, k, std::mem::replace(&mut self.rays[d][k], out)));
+        }
+        taken * self.h * self.h / 3.0
+    }
+
+    /// Puts back what [`Dexel::subtract_logged`] took, latest first.
+    pub fn restore(&mut self, log: Vec<(usize, usize, Vec<[f32; 2]>)>) {
+        for (d, k, ray) in log.into_iter().rev() {
+            self.rays[d][k] = ray;
+        }
+    }
+
     /// The stock inside the tool at a pose (mm3, as [`Dexel::subtract`] would take), without
     /// taking it.
     pub fn inside(&self, tool: &ToolSolid, tip: [f64; 3], dir: [f64; 3]) -> f64 {
