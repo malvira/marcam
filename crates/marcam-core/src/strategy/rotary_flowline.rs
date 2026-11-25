@@ -13,7 +13,7 @@ use crate::job::{FlowSpan, RotaryFlowline};
 use crate::toolpath::{Builder, Move};
 
 /// Angular resolution of the channel search (degrees).
-const SEARCH_DEG: f64 = 0.5;
+pub const SEARCH_DEG: f64 = 0.5;
 /// The most a channel's middle moves round from one X sample to the next (degrees).
 const MAX_SHIFT: f64 = 15.0;
 

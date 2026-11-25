@@ -7,7 +7,7 @@
 //! ([`super::rotary_flowline::channels_at`]), both faces of every blade, top down.
 
 use super::rotary_finish::refine;
-use super::rotary_flowline::channels_at;
+use super::rotary_flowline::{channels_at, SEARCH_DEG};
 use crate::dropcutter::DropCutter;
 use crate::job::RotaryWall;
 use crate::toolpath::{Builder, Move};
@@ -41,6 +41,19 @@ pub fn rotary_wall(
             hi = hi.max(r);
         }
     }
+    // (the part round the axis at each X once, for every level's search: the impeller's
+    // 60 levels each searching it again was past the planning budget)
+    let na = (360.0 / SEARCH_DEG).round() as usize;
+    let rows: Vec<Vec<f64>> = xs
+        .iter()
+        .map(|&x| (0..na).map(|k| cl(x, k as f64 * SEARCH_DEG)).collect())
+        .collect();
+    let dxs = (x1 - x0) / m as f64;
+    let cached = |x: f64, a: f64| {
+        let i = (((x - x0) / dxs.max(1e-12)).round().max(0.0) as usize).min(rows.len() - 1);
+        let k = ((a.rem_euclid(360.0) / SEARCH_DEG).round() as usize) % na;
+        rows[i][k]
+    };
     let first = b.moves.len();
     let tol = op.tolerance.max(1e-4);
     let feeds = (op.feed, op.plunge_feed);
@@ -62,7 +75,7 @@ pub fn rotary_wall(
             let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(zf(x, a)), b.a];
             refine(b, &zf, p0, [x, zf(x, a), a], tol, 0, feeds);
         };
-        for c in channels_at(&cl, &xs, level) {
+        for c in channels_at(&cached, &xs, level) {
             if crate::budget::over() {
                 break;
             }
