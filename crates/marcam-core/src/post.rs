@@ -189,6 +189,209 @@ pub fn shift_work_zero(tp: &Toolpath, o: [f64; 3]) -> Toolpath {
     t
 }
 
+/// Where a ball over the axis (tip radius `r` at A `a`) is with its centre `y` off the axis
+/// in Y, its tool upright: the same ball, its centre at the same place on the part (radius
+/// `r + ball_r`), A turned back by the angle of the centre off the vertical. As a pose in the
+/// part's frame (tip, tool direction).
+pub fn offset_pose(x: f64, r: f64, a: f64, y: f64, ball_r: f64) -> ([f64; 3], [f64; 3]) {
+    let rho = r + ball_r;
+    // (no farther off than the centre's radius: at worst beside it)
+    let y = y.clamp(-0.999 * rho.abs(), 0.999 * rho.abs());
+    let a1 = a - (y / rho).asin().to_degrees();
+    let zc = (rho * rho - y * y).sqrt();
+    let tip = crate::kinematics::to_part([x, y, zc - ball_r], a1);
+    let axis = crate::kinematics::to_part([0.0, 0.0, 1.0], a1);
+    (tip, axis)
+}
+
+/// A rotary move from `p` to `q` (X, radius, A) in steps of at most `most` degrees of A: a
+/// pose says its A only up to whole turns (the post takes the one nearest the last: 90 for a
+/// rapid), and its feed is timed along the straight line between its tips, which a turn of
+/// 2 degrees follows to 0.005% (2 for a feed move). The points after `p`, the last `q`.
+fn turns(p: [f64; 3], q: [f64; 3], most: f64) -> Vec<(f64, f64, f64)> {
+    let n = ((q[2] - p[2]).abs() / most).ceil().max(1.0) as usize;
+    (1..=n)
+        .map(|i| {
+            let t = i as f64 / n as f64;
+            (
+                p[0] + (q[0] - p[0]) * t,
+                p[1] + (q[1] - p[1]) * t,
+                p[2] + (q[2] - p[2]) * t,
+            )
+        })
+        .collect()
+}
+
+/// The rotary moves between [`Move::YOffset`] markers as poses of the tool off the axis in
+/// Y (see [`offset_pose`]); the markers themselves a rapid there (and back, at the end).
+/// Rapids stay as high as the ball over the axis would be (off the axis its tip comes a
+/// little lower), and one that only goes up or down keeps its A (a rapid turns only at the
+/// safe height). A feed move that comes down steeper than `ramp_angle` (in the machine's
+/// own moves, as the verifier reads them) is slowed so its Z falls no faster than the
+/// plunge feed.
+pub fn offset_poses(moves: &[Move], ramp_angle: Option<f64>) -> Vec<Move> {
+    let ramp_tan = ramp_angle
+        .unwrap_or(0.0)
+        .clamp(0.0, 89.0)
+        .to_radians()
+        .tan();
+    let mut out = Vec::with_capacity(moves.len());
+    let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0f64);
+    let mut off: Option<(f64, f64)> = None;
+    // the machine's last place (X, Y, Z, A), and the plunge feed
+    let mut last: Option<[f64; 4]> = None;
+    let mut plunge = f64::INFINITY;
+    // the machine's place for the ball over the axis at (x, r, a), `y` off it
+    let place = |x: f64, r: f64, a: f64, y: f64, br: f64, rapid: bool| -> [f64; 4] {
+        let rho = r + br;
+        let y = y.clamp(-0.999 * rho.abs(), 0.999 * rho.abs());
+        let zc = (rho * rho - y * y).sqrt();
+        let z = if rapid { (zc - br).max(r) } else { zc - br };
+        [x, y, z, a - (y / rho).asin().to_degrees()]
+    };
+    let pose_of = |m: [f64; 4], feed: Option<f64>| Move::Pose {
+        tip: crate::kinematics::to_part([m[0], m[1], m[2]], m[3]),
+        axis: crate::kinematics::to_part([0.0, 0.0, 1.0], m[3]),
+        feed,
+    };
+    // a feed move to `m`: slowed where it comes down steeply
+    let feed_to =
+        |out: &mut Vec<Move>, last: &mut Option<[f64; 4]>, m: [f64; 4], f: f64, plunge: f64| {
+            let mut f = f;
+            if let Some(p) = *last {
+                let dz = m[2] - p[2];
+                if dz < 0.0 && plunge.is_finite() {
+                    let radius = 0.5 * (p[1].hypot(p[2]) + m[1].hypot(m[2]));
+                    let arc = radius.max(0.5) * (m[3] - p[3]).to_radians();
+                    let across = ((m[0] - p[0]).powi(2) + (m[1] - p[1]).powi(2) + arc * arc).sqrt();
+                    if !crate::toolpath::gentle_descent(-dz, across, ramp_tan) {
+                        let t0 = crate::kinematics::to_part([p[0], p[1], p[2]], p[3]);
+                        let t1 = crate::kinematics::to_part([m[0], m[1], m[2]], m[3]);
+                        let len = ((t1[0] - t0[0]).powi(2)
+                            + (t1[1] - t0[1]).powi(2)
+                            + (t1[2] - t0[2]).powi(2))
+                        .sqrt();
+                        // (a tenth under, and as the written digits may make it: a
+                        // thousandth more down, two less along)
+                        f = f.min(0.9 * plunge * (len - 0.002).max(1e-4) / (0.001 - dz));
+                    }
+                }
+            }
+            out.push(pose_of(m, Some(f)));
+            *last = Some(m);
+        };
+    for mv in moves {
+        match (mv, off) {
+            (&Move::YOffset { y, ball_r }, _) => {
+                let now = (y != 0.0).then_some((y, ball_r));
+                // over there (or back) at the safe height it is at
+                if let (Some(px), Some(pr)) = (x, r) {
+                    let (y, br) = now.unwrap_or((0.0, ball_r));
+                    let m = place(px, pr, a, y, br, true);
+                    out.push(pose_of(m, None));
+                    last = Some(m);
+                }
+                off = now;
+            }
+            (
+                &Move::Rapid {
+                    x: nx,
+                    r: nr,
+                    a: na,
+                },
+                Some((y, br)),
+            ) => {
+                let from = (x, r, a);
+                (x, r, a) = (nx.or(x), nr.or(r), na.unwrap_or(a));
+                let (Some(px), Some(pr)) = (x, r) else {
+                    out.push(mv.clone());
+                    continue;
+                };
+                match (nx, na, last, from) {
+                    // up or down only: its A kept
+                    (None, None, Some(p), _) => {
+                        let mut m = place(px, pr, a, y, br, true);
+                        m[3] = p[3];
+                        out.push(pose_of(m, None));
+                        last = Some(m);
+                    }
+                    (_, _, _, (Some(fx), Some(fr), fa)) => {
+                        for (qx, qr, qa) in turns([fx, fr, fa], [px, pr, a], 90.0) {
+                            let m = place(qx, qr, qa, y, br, true);
+                            out.push(pose_of(m, None));
+                            last = Some(m);
+                        }
+                    }
+                    _ => {
+                        let m = place(px, pr, a, y, br, true);
+                        out.push(pose_of(m, None));
+                        last = Some(m);
+                    }
+                }
+            }
+            (&Move::Plunge { r: nr, feed }, Some((y, br))) => {
+                r = Some(nr);
+                plunge = plunge.min(feed);
+                match x {
+                    Some(px) => feed_to(
+                        &mut out,
+                        &mut last,
+                        place(px, nr, a, y, br, false),
+                        feed,
+                        plunge,
+                    ),
+                    None => out.push(mv.clone()),
+                }
+            }
+            (
+                &Move::Cut {
+                    x: nx,
+                    r: nr,
+                    a: na,
+                    feed,
+                    plunge_cap,
+                },
+                Some((y, br)),
+            ) => {
+                plunge = plunge.min(plunge_cap);
+                let steps = match (x, r) {
+                    (Some(fx), Some(fr)) => turns([fx, fr, a], [nx, nr, na], 2.0),
+                    _ => vec![(nx, nr, na)],
+                };
+                for (qx, qr, qa) in steps {
+                    feed_to(
+                        &mut out,
+                        &mut last,
+                        place(qx, qr, qa, y, br, false),
+                        feed,
+                        plunge,
+                    );
+                }
+                (x, r, a) = (Some(nx), Some(nr), na);
+            }
+            (_, _) => {
+                match *mv {
+                    Move::Rapid {
+                        x: nx,
+                        r: nr,
+                        a: na,
+                    } => (x, r, a) = (nx.or(x), nr.or(r), na.unwrap_or(a)),
+                    Move::Plunge { r: nr, .. } => r = Some(nr),
+                    Move::Cut {
+                        x: nx,
+                        r: nr,
+                        a: na,
+                        ..
+                    } => (x, r, a) = (Some(nx), Some(nr), na),
+                    _ => {}
+                }
+                out.push(mv.clone());
+            }
+        }
+    }
+    out
+}
+
 pub fn post(tp: &Toolpath, machine: &Machine) -> String {
     post_marked(tp, machine).0
 }
@@ -214,6 +417,17 @@ pub fn post_lines(
             &shifted
         }
         _ => tp,
+    };
+    // (rotary parallel's tool offset in Y) its moves as the machine makes them
+    let offset;
+    let tp = if tp.moves.iter().any(|m| matches!(m, Move::YOffset { .. })) {
+        offset = Toolpath {
+            moves: offset_poses(&tp.moves, tp.ramp_angle),
+            ..tp.clone()
+        };
+        &offset
+    } else {
+        tp
     };
     let mut marks = Vec::new();
     let mut before = Vec::with_capacity(tp.moves.len() + 1);
@@ -308,6 +522,8 @@ pub fn post_lines(
             }
         }
         match mv {
+            // (written as the moves it turned into, see [`offset_poses`])
+            Move::YOffset { .. } => {}
             Move::Comment { text } => out.push(format!("({text})")),
             Move::Operation {
                 id,

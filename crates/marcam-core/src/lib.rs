@@ -1576,6 +1576,29 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                     Some(DropCutter::new(&sub, c))
                 };
+                // (rotary parallel's tool offset in Y: a ball's, at most its radius; planned
+                // over the axis, the post puts it off it)
+                // (the tool's own ball: the planning's is wider by the axial stock to leave)
+                let offset = match (o.y_offset, cutter.expect("set above")) {
+                    (0.0, _) => None,
+                    (y, Cutter::Ball { radius }) if y.abs() <= radius + 1e-9 => Some((y, radius)),
+                    (y, Cutter::Ball { radius }) => {
+                        return Err(Error::Invalid(format!(
+                            "program {}: a Y offset of {y} mm is more than the ball's radius ({radius} mm)",
+                            prog.name
+                        )))
+                    }
+                    _ => {
+                        return Err(Error::Invalid(format!(
+                            "program {}: a Y offset needs a ball tool",
+                            prog.name
+                        )))
+                    }
+                };
+                if let Some((y, ball_r)) = offset {
+                    b.rapid_r(safe_r);
+                    b.moves.push(Move::YOffset { y, ball_r });
+                }
                 let r_min = strategy::rotary_finish_on(
                     &mut b,
                     &dc,
@@ -1585,6 +1608,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     o,
                 )
                 .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
+                if let Some((_, ball_r)) = offset {
+                    b.rapid_r(safe_r);
+                    b.moves.push(Move::YOffset { y: 0.0, ball_r });
+                }
                 check_flute(tool, job.stock.radius, r_min)?;
             }
             (Operation::RotaryRough(o), _) => {
@@ -2732,6 +2759,7 @@ pub fn gouge_check(
                 | Move::Operation { .. }
                 | Move::Rapid3 { .. }
                 | Move::Line3 { .. }
+                | Move::YOffset { .. }
                 | Move::Pose { .. } => {}
             }
         }

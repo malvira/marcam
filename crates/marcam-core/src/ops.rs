@@ -344,6 +344,7 @@ fn types() -> Vec<OperationType> {
                 p("leave_radial", "number", "mm", "Stock to leave on the bar, radially (for a finish after it).").opt(json!(0.0)).label("Radial"),
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),
                 p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
+                p("y_offset", "number", "mm", "The tool this far off the axis in Y (a ball, at most its radius): the ball cuts off its tip, where its edge turns at speed, not at its centre, where it does not move. 0: over the axis.").opt(json!(0.0)).label("Y offset"),
                 p("clean_walls", "boolean", "", "'spiral': a full turn at the foot of each wall.").opt(json!(true)),
                 p("lead_in", "number", "mm", "Lead-in: each pass comes onto the surface turning, from this high above it (at 15 degrees), instead of a radial plunge (0: plunge).").opt(json!(0.0)).min(0.0),
                 feed(),

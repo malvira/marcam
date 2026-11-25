@@ -527,6 +527,7 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
                 Move::Comment { .. }
                 | Move::Rapid3 { .. }
                 | Move::Line3 { .. }
+                | Move::YOffset { .. }
                 | Move::Pose { .. } => continue,
                 Move::Rapid {
                     x: mx,

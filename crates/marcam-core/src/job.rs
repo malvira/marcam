@@ -1683,6 +1683,10 @@ pub struct RotaryFinish {
     /// [`crate::smoothing`]); None: the type's default; 0: off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing: Option<f64>,
+    /// (Rotary parallel) the tool this far off the axis in Y (mm, a ball, at most its
+    /// radius): the ball cuts off its tip, where it turns at speed; 0: over the axis.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub y_offset: f64,
 }
 
 /// Descents at up to 30 degrees run at the cutting feed (Mar, 2026-11-17).

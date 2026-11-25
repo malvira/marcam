@@ -36,6 +36,12 @@ pub enum Move {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feed: Option<f64>,
     },
+    /// (Rotary parallel's tool offset in Y) from here the rotary moves (X, the tip's radius,
+    /// A) are a ball's as if it stood over the axis, its centre where it is; the machine has
+    /// it `y` mm off the axis in Y (0: back over it), A turned to match. Only the post reads
+    /// it: what the ball takes, and where, is the same, so simulation and checks use the
+    /// moves as they are. `ball_r` is the ball's radius.
+    YOffset { y: f64, ball_r: f64 },
     /// Start of an operation: the moves until the next marker belong to it. `id` numbers the
     /// job's operations in order (0, 1, ...); `kind` is the operation type. Posts ignore it.
     Operation {
@@ -97,6 +103,7 @@ impl Move {
                 tip.iter().chain(axis).all(|v| v.is_finite()) && o(*feed)
             }
             Move::Rapid { x, r, a } => o(*x) && o(*r) && o(*a),
+            Move::YOffset { y, ball_r } => f(*y) && f(*ball_r),
             Move::Plunge { r, feed } => f(*r) && f(*feed),
             Move::Cut {
                 x,

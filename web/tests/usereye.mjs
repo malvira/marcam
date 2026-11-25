@@ -2123,6 +2123,21 @@ try {
     await shot("rotary_parallel_circular");
     check("rotary parallel's Style switched to Circular: rings round the axis (the A axis turning at fixed X), clean",
       circular.pattern === "circular" && circular.aOnly > 100 && okPlan(circular), JSON.stringify(circular));
+    // a Y offset typed in its form: the ball off the axis (its tool upright), the same cut
+    await read("document.querySelector('#opForm [name=y_offset]')?.scrollIntoView({ block: 'center' }), true");
+    await click("#opForm [name=y_offset]");
+    await key("a", 2);
+    for (const ch of "0.8") await type(ch);
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await settled();
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
+    const offsetY = await read(`(() => { const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'rotary_parallel'); const g = (window.__marcam.state.result?.programs || []).map((p) => p.gcode || '').join(String.fromCharCode(10)); return { y: op?.y_offset, words: g.split(String.fromCharCode(10)).filter((l) => / Y0[.]800/.test(l.split('(')[0])).length }; })()`);
+    const circularY = { ...(await read(parallelState)), ...offsetY };
+    await shot("rotary_parallel_y_offset");
+    check("rotary parallel with a Y offset typed in (0.8 mm): the G-code has the tool 0.8 off the axis in Y, the same rings, clean",
+      circularY.y === 0.8 && circularY.words > 100 && circularY.aOnly > 100 && okPlan(circularY), JSON.stringify(circularY));
     await clean("rotary parallel");
   }
   // ---------------------------------------------------------------- tree rows: the whole row
