@@ -569,7 +569,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = (await addTypes()).join(",");
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 20 && String(typesAll).split(",").length === 20, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 21 && String(typesAll).split(",").length === 21, `${typesAll}`);
   const filled = [];
   const took = [];
   let autoSeen = null;
@@ -606,7 +606,7 @@ try {
     await settle();
     took.push(`${kind} ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   }
-  check("every operation type's new form is fully filled and applies cleanly (those needing a pick, or a program, wait for it)", filled.length === 20 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
+  check("every operation type's new form is fully filled and applies cleanly (those needing a pick, or a program, wait for it)", filled.length === 21 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
   check("rotary roughing's max bite: marked auto, empty and folded under More in a new form (worked out when planned)", !!autoSeen && autoSeen.there && autoSeen.empty && autoSeen.folded && autoSeen.auto, JSON.stringify(autoSeen));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");

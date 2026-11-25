@@ -9,6 +9,7 @@ mod flank_chamfer;
 mod helical_knurl;
 pub mod parting;
 mod rotary_finish;
+pub mod rotary_flowline;
 mod rotary_rough;
 mod rotary_turning;
 pub mod three_axis;
@@ -17,6 +18,7 @@ pub use flank_chamfer::flank_chamfer;
 pub use helical_knurl::helical_knurl;
 pub use parting::{parting, PartingTool};
 pub use rotary_finish::{rotary_finish, rotary_finish_on};
+pub use rotary_flowline::rotary_flowline;
 pub use rotary_rough::{rotary_rough, Bite, StockNear};
 pub use rotary_turning::rotary_turning;
 

@@ -208,7 +208,7 @@ pub fn registry() -> Vec<OperationType> {
                 lv("leave_radial", "Radial", "Stock to leave on the bar, radially (for a finish after it)."),
                 lv("leave_axial", "Axial (X)", "Stock to leave on the faces across the bar, along X."),
             ],
-            "rotary_rough" | "rotary_finish" | "rotary_parallel" => vec![lv("leave_axial", "Axial (X)", "Stock to leave on the faces across the bar, along X (a flat or ball tool).")],
+            "rotary_rough" | "rotary_finish" | "rotary_parallel" | "rotary_flowline" => vec![lv("leave_axial", "Axial (X)", "Stock to leave on the faces across the bar, along X (a flat or ball tool).")],
             "helical_knurl" | "flank_chamfer" => vec![lv("leave_radial", "Radial", "Stock to leave on the bar, radially (a shallower cut).")],
             "parting" => vec![lv("leave_axial", "Axial (X)", "Stock to leave on the part's face (the cut that much further back, the part longer).")],
             _ => vec![],
@@ -347,6 +347,30 @@ fn types() -> Vec<OperationType> {
                 p("y_offset", "number", "mm", "The tool this far off the axis in Y (a ball, at most its radius): the ball cuts off its tip, where its edge turns at speed, not at its centre, where it does not move. 0: over the axis.").opt(json!(0.0)).label("Y offset"),
                 p("clean_walls", "boolean", "", "'spiral': a full turn at the foot of each wall.").opt(json!(true)),
                 p("lead_in", "number", "mm", "Lead-in: each pass comes onto the surface turning, from this high above it (at 15 degrees), instead of a radial plunge (0: plunge).").opt(json!(0.0)).min(0.0),
+                feed(),
+                plunge(),
+                ramp(),
+                smoothing(),
+            ],
+            tool_shapes: &["flat", "ball", "vbit", "tapered_ball"],
+            geometry: &["mesh", "profile", "axial_range"],
+            machine_needs: &["rotary_a"],
+            shapes_part: false,
+        },
+        OperationType {
+            kind: "rotary_flowline",
+            title: "Rotary flowline (4-axis simultaneous)",
+            description: "Finish the channels between the part's walls (an impeller's blades) with passes that follow them, A and X together: each keeps its place across the channel, from one wall's line to the other's, a stepover apart across the floor, one after another without leaving the channel.",
+            group: "finishing",
+            params: vec![
+                tool(),
+                p("x_range", "vec2", "mm", "Axial extent of the tool tip [front, back]."),
+                p("stepover_mm", "number", "mm", "Distance between passes across a channel's floor (at its widest).").min(0.001),
+                p("wall_height", "number", "mm", "A wall: where the surface stands more than this above the lowest at that X; the channels are what is lower.").opt(json!(1.0)).min(0.01),
+                p("sample_mm", "number", "mm", "Point spacing along X.").opt(json!(0.25)).min(0.001),
+                p("leave_radial", "number", "mm", "Stock to leave on the bar, radially (for a finish after it).").opt(json!(0.0)).label("Radial"),
+                p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),
+                p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
                 feed(),
                 plunge(),
                 ramp(),
@@ -911,6 +935,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::Parting(_) => "parting",
         Operation::RotaryFinish(_) => "rotary_finish",
         Operation::RotaryParallel(_) => "rotary_parallel",
+        Operation::RotaryFlowline(_) => "rotary_flowline",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
@@ -1201,6 +1226,12 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
             v.insert("plunge_feed".into(), json!(plunge));
             v.insert("lead_in".into(), json!(0.3));
+        }
+        "rotary_flowline" => {
+            v.insert("x_range".into(), json!(x_range));
+            v.insert("stepover_mm".into(), json!(fine));
+            v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
+            v.insert("plunge_feed".into(), json!(plunge));
         }
         "helical_knurl" => {
             // the part's biggest cone or cylinder; (Mar's carry-through: a cut piece carried in,
@@ -1883,7 +1914,12 @@ G0 Z16
             let tps = crate::plan_with_mesh(&one, three.then_some(&dome))
                 .unwrap_or_else(|e| panic!("{}: {e}", t.kind));
             // (a custom toolpath: the few moves of the program given above)
-            let least = if t.kind == "custom" { 4 } else { 10 };
+            // (rotary flowline: the knob has no channel between walls, only its warning)
+            let least = match t.kind {
+                "custom" => 4,
+                "rotary_flowline" => 0,
+                _ => 10,
+            };
             assert!(tps[0].moves.len() > least, "{}", t.kind);
         }
         // defaults follow the context: the knob's own values come out for the knob

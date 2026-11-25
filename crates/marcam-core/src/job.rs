@@ -689,6 +689,9 @@ pub enum Operation {
     /// Rotary parallel (simultaneous 4-axis finishing): lines along X, rings round the axis,
     /// or a spiral, the A axis moving with X and the radius.
     RotaryParallel(RotaryFinish),
+    /// Rotary flowline (morph): passes following the channels between the part's walls,
+    /// A and X together.
+    RotaryFlowline(RotaryFlowline),
     RotaryRough(RotaryRough),
     Face(Face),
     Pocket(Pocket),
@@ -1390,6 +1393,7 @@ impl Operation {
             Operation::HelicalKnurl(o) => Some(o.ramp_angle),
             Operation::FlankChamfer(o) => Some(o.ramp_angle),
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => Some(o.ramp_angle),
+            Operation::RotaryFlowline(o) => Some(o.ramp_angle),
             Operation::RotaryRough(o) => Some(o.ramp_angle),
             Operation::Bore(o) => Some(o.ramp_angle),
             Operation::Parting(o) => Some(o.ramp_angle),
@@ -1405,6 +1409,7 @@ impl Operation {
             Operation::HelicalKnurl(o) => (o.smoothing, true),
             Operation::FlankChamfer(o) => (o.smoothing, true),
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => (o.smoothing, true),
+            Operation::RotaryFlowline(o) => (o.smoothing, true),
             Operation::RotaryRough(o) => (o.smoothing, false),
             Operation::Raster3d(o) => (o.smoothing, true),
             Operation::Rough3d(o) => (o.smoothing, false),
@@ -1423,6 +1428,7 @@ impl Operation {
     pub fn tool(&self) -> u32 {
         match self {
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => o.tool,
+            Operation::RotaryFlowline(o) => o.tool,
             Operation::RotaryRough(o) => o.tool,
             Operation::Face(o) => o.tool,
             Operation::Pocket(o) => o.tool,
@@ -1687,6 +1693,51 @@ pub struct RotaryFinish {
     /// radius): the ball cuts off its tip, where it turns at speed; 0: over the axis.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub y_offset: f64,
+}
+
+/// Rotary flowline (morph): finish the channels between the part's walls (an impeller's
+/// blades) with passes that follow them, A and X together, a stepover apart across each
+/// channel's floor, one after another without leaving it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RotaryFlowline {
+    pub tool: u32,
+    /// Stock to leave on the faces across the bar, along X (mm).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_axial: f64,
+    /// Axial extent `[start, end]` of the tool tip.
+    pub x_range: [f64; 2],
+    /// Distance between passes across a channel's floor (mm, at its widest).
+    pub stepover_mm: f64,
+    /// Point spacing along X (mm).
+    #[serde(default = "default_flow_sample")]
+    pub sample_mm: f64,
+    /// A wall: where the surface stands more than this above the lowest at that X (mm); the
+    /// channels are what is lower.
+    #[serde(default = "default_wall_height")]
+    pub wall_height: f64,
+    /// Radial stock to leave (mm).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_radial: f64,
+    /// Largest allowed dip of a straight move below the surface (mm).
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    /// The tip never goes below this radius (mm, >= 0).
+    #[serde(default)]
+    pub min_radius: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
+}
+
+fn default_flow_sample() -> f64 {
+    0.25
+}
+
+fn default_wall_height() -> f64 {
+    1.0
 }
 
 /// Descents at up to 30 degrees run at the cutting feed (Mar, 2026-11-17).

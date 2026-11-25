@@ -113,9 +113,8 @@ impl Engagement {
             "drill" => Engagement::Drill,
             "contour" | "engrave" | "vcarve" | "parting" | "bore" | "flank_chamfer"
             | "helical_knurl" => Engagement::Slot,
-            "raster3d" | "waterline" | "rotary_finish" | "rotary_parallel" | "rotary_turning" => {
-                Engagement::Finish
-            }
+            "raster3d" | "waterline" | "rotary_finish" | "rotary_parallel" | "rotary_flowline"
+            | "rotary_turning" => Engagement::Finish,
             _ => Engagement::Side,
         }
     }
