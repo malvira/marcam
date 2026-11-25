@@ -1993,6 +1993,58 @@ try {
     if (!simB.on) await drag(simB.at, simB.at, 1);
     await clean("under an overhang");
   }
+  // ---------------------------------------------------------------- rest roughing on the 4th axis
+  // (Mar's impeller: the hub under the blades no index of the roughing reached, the ball's
+  // finish buried in it) the overhang fixture on the 4th axis: Indexed roughing (3+1), then
+  // Rotary roughing (mesh) with a ball and "rest" ticked (a click): it plans its passes along
+  // X only where stock is left (the 3D in-process stock), clean
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; return true; })()");
+    await click("#menuFile");
+    await click("#menuFile button, #menuFile [role=menuitem], #menuFile li, #menuFile a", "^New");
+    await settled();
+    {
+      const doc = await S("DOM.getDocument");
+      const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#importStlFile" });
+      await S("DOM.setFileInputFiles", { files: [join(root, "tests", "fixtures", "overhang_ledge.stl")], nodeId });
+    }
+    await settled();
+    await click("#tree .tree-setup.active [data-act=setup]");
+    await settled();
+    if (await where("#treeDetails [data-setkind=rotary]")) {
+      await click("#treeDetails [data-setkind=rotary]");
+      await settled();
+    }
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    if (await where("button", "^Fit to part$")) {
+      await click("button", "^Fit to part$");
+      await settled();
+    }
+    const addType = async (type, toolRe) => {
+      await read(`(() => { const s = document.getElementById('treeAddType'); s.value = '${type}'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+      await click("#treeAdd");
+      const lib = await waitFor(() => where("dialog[open] .tp-row", toolRe), "the library", 15000).catch(() => null);
+      if (lib) await click("dialog[open] .tp-row", toolRe);
+      await waitFor(() => read("!!document.getElementById('opForm')"), "the form", 60000);
+      await settled();
+    };
+    await addType("rough3d:indexed", "Spiral O Metal 3\.175 x 12");
+    await addType("rotary_rough", "Ball nose 3\.175 x 22");
+    await read("document.querySelector('#opForm [name=rest]')?.scrollIntoView({ block: 'center' }), true");
+    await click("#opForm [name=rest]");
+    await settled();
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
+    const rr = await read(`(() => { const vis = ${VISIBLE}; const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'rotary_rough'); const all = (window.__marcam.state.result?.programs || []).map((p) => p.gcode || '').join(' '); const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { rest: op?.rest === true, along: /rest roughing [(]along X[)]/.test(all), tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent), verifier: t.filter((x) => /^Verifier/.test(x)).sort((a, b) => a.length - b.length)[0] || '', gouge: t.filter((x) => /^Gouge check/.test(x)).sort((a, b) => a.length - b.length)[0] || '', error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    await shot("rest_roughing");
+    check("rotary rest roughing after indexed roughing (rest ticked by a click): planned along X where stock is left, clean (no verifier issue, no gouge)",
+      rr.rest && rr.along && rr.tabs.length && rr.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(rr.verifier) && (!rr.gouge || /deepest 0\.0[0-1]\d* mm/.test(rr.gouge)) && !rr.error, JSON.stringify(rr));
+    await clean("rest roughing on the 4th axis");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")

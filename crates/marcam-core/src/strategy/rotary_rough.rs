@@ -98,11 +98,18 @@ fn rest_along(
                     (Some(px), Some(pr)) if (px - xa).abs() <= LINK_REACH && pr < safe_r - 1e-9 => {
                         let pa = b.a;
                         let mut rl = pr.max(start);
+                        // (clear of the stock left, and of the part itself, at points a third
+                        // of a mm apart along the way: the overhang fixture's ledge between
+                        // two passes' angles, gouged 3 mm by a link)
+                        let way = (xa - px)
+                            .abs()
+                            .max((a - pa).abs().to_radians() * pr.max(1.0));
+                        let n = ((way / 0.3).ceil() as usize).max(4);
                         let clear = |r: f64| {
-                            (0..=4).all(|t| {
-                                let f = t as f64 / 4.0;
+                            (0..=n).all(|t| {
+                                let f = t as f64 / n as f64;
                                 let (x, aa) = (px + (xa - px) * f, pa + (a - pa) * f);
-                                takes(x, x, aa, aa, r) <= 0.0
+                                r >= cl(x, aa) + 0.05 && takes(x, x, aa, aa, r) <= 0.0
                             })
                         };
                         while rl < safe_r && !clear(rl) {
