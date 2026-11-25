@@ -24,6 +24,60 @@ export function carriedFrom(doc, s) {
   return doc.setups.find((x) => x.id === s.stock.from) || doc.setups[i - 1] || null;
 }
 
+/** Rotations as 3x3 matrices (rows), degrees about X, then Y, then Z (R = Rz Ry Rx), as the
+ *  engine's carry_mesh::rotation. */
+function rotM([ax, ay, az]) {
+  const [cx, sx, cy, sy, cz, sz] = [ax, ax, ay, ay, az, az].map((d, i) => (i % 2 ? Math.sin : Math.cos)((d * Math.PI) / 180));
+  const rx = [[1, 0, 0], [0, cx, -sx], [0, sx, cx]], ry = [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], rz = [[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]];
+  return mulM(rz, mulM(ry, rx));
+}
+function mulM(a, b) {
+  return a.map((row) => [0, 1, 2].map((j) => row.reduce((s, v, k) => s + v * b[k][j], 0)));
+}
+/** The X, Y, Z degrees of rotation `m` (R = Rz Ry Rx), rounded to 1e-3. */
+function eulerM(m) {
+  const sy = -m[2][0];
+  let x, y, z;
+  if (Math.abs(sy) < 1 - 1e-9) {
+    y = Math.asin(sy);
+    x = Math.atan2(m[2][1], m[2][2]);
+    z = Math.atan2(m[1][0], m[0][0]);
+  } else {
+    y = sy > 0 ? Math.PI / 2 : -Math.PI / 2;
+    x = Math.atan2(-m[1][2], m[1][1]);
+    z = 0;
+  }
+  return [x, y, z].map((v) => { const d = r3((v * 180) / Math.PI); return Object.is(d, -0) || Math.abs(d) < 1e-9 ? 0 : d; });
+}
+/** Which axis of the setup before runs along A (the new X) under the carry's turn. */
+function carryAxisOf(st) {
+  const m = rotM(st.rotate || [0, 0, 0]);
+  // the new X's components from the old axes: the row of the matrix
+  const row = m[0].map(Math.abs);
+  const k = row.indexOf(Math.max(...row));
+  return row[k] > 0.999 ? "xyz"[k] : null;
+}
+
+/** (On the 4th axis) a carried piece turned by a quick button: `act` = "x" | "y" | "z" (that
+ *  axis of the setup before along A), "flip" (end for end), "quarter" (90° about A). Returns
+ *  the edit's label. */
+export function carryQuick(s, act) {
+  const st = s.stock;
+  if (st?.shape !== "from_previous") return null;
+  let m = rotM(st.rotate || [0, 0, 0]);
+  if (act === "x" || act === "y" || act === "z") {
+    // the setup before's axis onto X, the others kept in turn
+    m = { x: rotM([0, 0, 0]), y: rotM([0, 0, -90]), z: rotM([0, 90, 0]) }[act];
+    delete st.turn;
+  } else if (act === "flip") m = mulM(rotM([0, 0, 180]), m);
+  else if (act === "quarter") m = mulM(rotM([90, 0, 0]), m);
+  else return null;
+  const e = eulerM(m);
+  if (e.some((v) => v)) st.rotate = e;
+  else delete st.rotate;
+  return act === "flip" ? `Setup "${s.name || s.id}": the piece turned end for end.` : act === "quarter" ? `Setup "${s.name || s.id}": the piece turned 90° about A.` : `Setup "${s.name || s.id}": the setup before's ${act.toUpperCase()} along A.`;
+}
+
 /** The mesh model a setup places (its own), or null. */
 export function meshModelOf(doc, s) {
   return doc.models.find((m) => s.part?.includes(m.id) && m.kind === "mesh") || null;
@@ -45,6 +99,19 @@ export function stockPane(doc, s, esc, opts = {}) {
     <label>Stock <select id="stType" aria-label="The stock's type">${opts1.join("")}</select></label>`;
   if (from) {
     html += `<div class="muted small">What ${esc(from.name || from.id)} left, cut, as a mesh: move and turn it in the ${vise ? "vise" : "chuck"} with the handles in the 3D view (its part goes with it).</div>`;
+    // (Mar: "I can't get it to orient correctly ... the UI makes all of this very unclear") on
+    // the 4th axis: which of the setup before's axes runs along A, end for end, a quarter turn
+    // about A, and how far it sticks out of the chuck, in plain words, as buttons
+    if (!vise) {
+      const along = carryAxisOf(st);
+      const name = esc(from.name || from.id);
+      html += `<div class="carry-quick" id="carryQuick">
+        <div class="row small" role="group" aria-label="Which axis of ${name} runs along A"><span class="muted">Along A:</span>${["x", "y", "z"].map((a) => `<button type="button" data-carry-axis="${a}" aria-pressed="${along === a}" class="${along === a ? "on" : ""}" title="${name}'s ${a.toUpperCase()} axis along the 4th axis (A)">${a.toUpperCase()} of ${name}</button>`).join("")}</div>
+        <div class="row small"><button type="button" data-carry="flip" title="Turn it end for end: the other end in the chuck">Flip end for end</button>
+        <button type="button" data-carry="quarter" title="Turn it a quarter turn about the 4th axis">Turn 90° about A</button></div>
+        <label title="How much of it stands out of the chuck (the rest is held)">Stick out <input id="stStickOut" type="text" inputmode="decimal" value="${opts.length ? r3(Math.max(0, opts.length - (s.holding?.chuck ?? 0))) : ""}" placeholder="${opts.length ? r3(opts.length) : ""}"> <span class="u">mm</span></label>
+      </div>`;
+    }
   } else {
     const d = spec?.dims || {};
     if (spec?.shape === "block") {
@@ -67,14 +134,16 @@ export function stockPane(doc, s, esc, opts = {}) {
   const more = [];
   if (!from) more.push(`<label title="Fit to part leaves this much round the part">Margin <input id="stMargin" type="text" inputmode="decimal" value="${r3(opts.margin ?? (vise ? 2 : 0.5))}"> <span class="u">mm</span></label>`);
 
+  const typed = [];
   if (from) {
     const rot = st.rotate || [0, 0, 0], off = st.offset || [0, 0, 0];
-    more.push(`<div class="small muted">Turned (degrees about X, then Y, then Z), then moved:</div>`);
-    more.push(["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="stRot${a}" type="text" inputmode="decimal" value="${r3(rot[i])}"> <span class="u">°</span></label>`).join(""));
-    more.push(`<label>Turned over <select id="stTurn">${[["none", "no"], ["y180", "left to right (Y)"], ["x180", "front to back (X)"], ["z180", "end for end (Z)"]].map(([v, n]) => `<option value="${v}" ${(st.turn || "none") === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>`);
-    more.push(["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="stOff${a}" type="text" inputmode="decimal" value="${r3(off[i])}"> <span class="u">mm</span></label>`).join(""));
+    typed.push(`<div class="small muted">Turned (degrees about X, then Y, then Z), then moved:</div>`);
+    typed.push(["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="stRot${a}" type="text" inputmode="decimal" value="${r3(rot[i])}"> <span class="u">°</span></label>`).join(""));
+    if (vise) typed.push(`<label>Turned over <select id="stTurn">${[["none", "no"], ["y180", "left to right (Y)"], ["x180", "front to back (X)"], ["z180", "end for end (Z)"]].map(([v, n]) => `<option value="${v}" ${(st.turn || "none") === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>`);
+    typed.push(["X", "Y", "Z"].map((a, i) => `<label>${a} <input id="stOff${a}" type="text" inputmode="decimal" value="${r3(off[i])}"> <span class="u">mm</span></label>`).join(""));
   }
-  html += `<details class="op-more" id="stMore" ${opts.moreOpen ? "open" : ""}><summary>More</summary>${more.join("")}</details>`;
+  if (more.length) html += `<details class="op-more" id="stMore" ${opts.moreOpen ? "open" : ""}><summary>More</summary>${more.join("")}</details>`;
+  if (typed.length) html += `<details class="op-more" id="stTyped"><summary>Advanced: coordinates typed by hand</summary>${typed.join("")}</details>`;
   return html + `</div>`;
 }
 
@@ -273,6 +342,13 @@ export function applyStockField(doc, s, id, val, frameBox) {
     if (v == null) delete s.holding.jaws;
     else s.holding.jaws = r3(v);
     return `Setup "${s.name || s.id}": the jaws' grip.`;
+  }
+  if (id === "stStickOut" && st?.shape === "from_previous") {
+    const len = frameBox?.length;
+    if (v == null || !len) return null;
+    s.holding ||= { kind: "rotary_chuck" };
+    s.holding.chuck = r3(Math.max(0, len - v));
+    return `Setup "${s.name || s.id}": the piece sticks out ${r3(v)} mm.`;
   }
   if (id === "stChuck") {
     s.holding ||= { kind: "rotary_chuck" };

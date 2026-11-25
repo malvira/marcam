@@ -170,7 +170,8 @@ export function setupHandles({ state, edit }) {
     const v = state.three;
     const THREE = v.THREE;
     const b = new THREE.Box3();
-    const add = (g) => g?.children.forEach((c) => b.expandByObject(c));
+    // (the A axis and its labels beside a carried piece: not part of it)
+    const add = (g) => g?.children.forEach((c) => !c.userData.guide && b.expandByObject(c));
     if (kind === "carried" || kind === "stock") add(v.groups.stock);
     if (kind !== "stock") add(v.groups.part);
     return b;

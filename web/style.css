@@ -341,3 +341,7 @@ details.menu[open] > summary { border-color: var(--accent); }
 .gcode-lines .gcode-msg.warn { color: var(--warn); background: var(--warn-bg); }
 .gcode-lines .gcode-msg.error { padding: 2px 6px; }
 .gcode-lines code { font-size: 11px; opacity: 0.85; }
+/* a carried piece on the 4th axis: its quick turns, in plain words */
+.carry-quick { margin: 4px 0; }
+.carry-quick .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 3px 0; }
+.carry-quick button.on { border-color: var(--accent); background: var(--accent); color: #fff; }

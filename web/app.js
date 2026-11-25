@@ -1744,6 +1744,9 @@ async function drawModel() {
           o.userData.carried = true;
           clear(groups.stock);
           groups.stock.add(o);
+          // (Mar: "the UI makes all of this very unclear") on the 4th axis: the A axis, and
+          // which end is in the chuck and which stands free
+          if (!sb && r.bounds) groups.stock.add(carryGuide(THREE, r.bounds));
           window.__marcam.kickView?.();
         }
       } catch (e) {
@@ -1829,6 +1832,40 @@ function resultId(res) {
 
 /** A carried cut piece (triangles, x y z each) as a solid: its vertices shared, so it shades
  *  smoothly, in the colour of uncut stock, opaque, as a simulated stock is drawn. */
+/** The A axis through a carried piece (dashed), its chuck side and its free end labelled. */
+function carryGuide(THREE, [lo, hi]) {
+  const g = new THREE.Group();
+  g.userData.guide = true;
+  const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(lo[0] - 10, 0, 0), new THREE.Vector3(hi[0] + 10, 0, 0)]);
+  const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 2, gapSize: 1.5, depthTest: false, transparent: true }));
+  line.computeLineDistances();
+  line.renderOrder = 10;
+  g.add(line);
+  const R = Math.max(Math.abs(lo[1]), Math.abs(hi[1]), Math.abs(lo[2]), Math.abs(hi[2]));
+  const label = (text, x) => {
+    const c = document.createElement("canvas");
+    c.width = 256;
+    c.height = 64;
+    const k = c.getContext("2d");
+    k.font = "600 30px system-ui, sans-serif";
+    k.fillStyle = "rgba(15, 23, 42, 0.75)";
+    k.fillRect(0, 8, 256, 48);
+    k.fillStyle = "#fbbf24";
+    k.textAlign = "center";
+    k.textBaseline = "middle";
+    k.fillText(text, 128, 32);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+    const w = Math.max(6, R * 1.2);
+    sp.scale.set(w, w / 4, 1);
+    sp.position.set(x, 0, R + w / 6);
+    sp.renderOrder = 11;
+    sp.userData.label = text;
+    return sp;
+  };
+  g.add(label("chuck side", lo[0]), label("free end", hi[0]), label("A axis", hi[0] + 10 + Math.max(6, R * 1.2)));
+  return g;
+}
+
 function carriedSolid(THREE, tris) {
   const at = new Map();
   const pos = [];

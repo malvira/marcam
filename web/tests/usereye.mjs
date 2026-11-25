@@ -1444,6 +1444,46 @@ try {
     const frame = await read("window.__marcam.engine('setupFrame', window.__marcam.state.tree.doc, { setup: window.__marcam.state.tree.setup }).then((r) => r.result.stock)");
     check("carry-through, setup 2 (4th axis, continuing): the cut piece on the screen, lying along A, no error, nothing of setup 1 drawn over it",
       !s2.error && /left/.test(s2.stock) && s2.tabs === 0 && px > 2000 && frame.length > 59, `${JSON.stringify(s2)}; ${JSON.stringify(frame)}; ${px} px`);
+    // (Mar: "I can't get it to orient correctly ... the UI makes all of this very unclear") the
+    // carried piece on the A axis by default, its length along X, nothing drawn beside it; the
+    // quick buttons (no typing): end for end, a quarter turn about A, as a person clicks them
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    const pieceNow = () => read("(() => { const v = window.__marcam.state.three; const B = new v.THREE.Box3(); const out = { piece: null, extra: 0, part: null, guide: !!v.groups.stock.children.find((c) => c.userData.guide) }; for (const c of v.groups.stock.children) { if (c.userData.guide) continue; B.setFromObject(c); if (c.userData.carried) out.piece = [B.min.toArray(), B.max.toArray()].map((p) => p.map((x) => +x.toFixed(2))); else out.extra++; } const p = v.groups.part.children[0]; if (p) { B.setFromObject(p); out.part = [B.min.toArray(), B.max.toArray()].map((q) => q.map((x) => +x.toFixed(2))); } return out; })()");
+    const p0 = await pieceNow();
+    const onAxis = (b) => b && Math.abs(b[0][1] + b[1][1]) < 0.5 && Math.abs(b[0][2] + b[1][2]) < 0.5 && b[1][0] - b[0][0] >= Math.max(b[1][1] - b[0][1], b[1][2] - b[0][2]);
+    const buttons = await read("[...document.querySelectorAll('#carryQuick button')].map((b) => b.textContent.trim())");
+    check("carried onto the 4th axis: the piece centred on A (Y, Z), its length along X, nothing else drawn as stock; the A axis and its ends labelled; plain-word buttons, typed coordinates folded away",
+      onAxis(p0.piece) && p0.extra === 0 && p0.guide && buttons.some((b) => /Flip end for end/.test(b)) && buttons.some((b) => /Turn 90/.test(b)) && !(await read("document.getElementById('stTyped')?.open")), JSON.stringify({ p0, buttons }));
+    const imgA = await shot("carry_orient_before");
+    await click("#carryQuick button", "Flip end for end");
+    await settled();
+    const p1 = await pieceNow();
+    await click("#carryQuick button", "Turn 90");
+    await settled();
+    const p2 = await pieceNow();
+    const imgB = await shot("carry_orient_after");
+    const vrO = await viewRect();
+    let changed = 0, seen = 0;
+    for (let y = vrO[1]; y < vrO[1] + vrO[3]; y += 4)
+      for (let x = vrO[0]; x < vrO[0] + vrO[2]; x += 4) {
+        const p = imgA.at(x, y), q = imgB.at(x, y);
+        seen++;
+        if (Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]) > 60) changed++;
+      }
+    // (the part goes with it: end for end, its end at the other end of X)
+    const midX = (b) => (b[0][0] + b[1][0]) / 2;
+    check("the carried piece's quick buttons: Flip end for end puts the part at the other end, Turn 90° about A turns it, the piece stays on A, the view changes",
+      onAxis(p1.piece) && onAxis(p2.piece) && p0.part && p1.part && Math.abs(midX(p1.part) - midX(p0.part)) > 5 && changed > seen * 0.01, JSON.stringify({ p0: p0.part, p1: p1.part, p2: p2.part, changed, seen }));
+    // back as it was (the knurl after this is picked on the part where it was)
+    await click("#carryQuick button", "Turn 90");
+    await settled();
+    await click("#carryQuick button", "Turn 90");
+    await settled();
+    await click("#carryQuick button", "Turn 90");
+    await settled();
+    await click("#carryQuick button", "Flip end for end");
+    await settled();
     // the knurl on the OD, picked on the part (the library for a V-bit)
     await addOp("helical_knurl", "90 deg V-bit");
     const odBand = await pickOn("(x) => x.kind === 'cylindrical_band' && Math.abs(x.data.r[1] - 10) < 0.05", "the OD to knurl");

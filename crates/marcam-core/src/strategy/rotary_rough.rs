@@ -71,6 +71,16 @@ pub fn rotary_rough(
         .map(|&x| stock_at.map_or(stock_r, |f| f(x)))
         .collect();
 
+    // (Mar's knob4: radial 20 left on the part put the whole path 20-45 mm from the axis,
+    // round a bar 27 mm at most: 6 h in the air) nothing below the stock: said so
+    let highest = top.iter().copied().fold(0.0f64, f64::max);
+    if z_min >= highest - 1e-6 {
+        return Err(format!(
+            "nothing to rough: the part with {:.2} mm of radial stock left on it (Radial) stands above the stock everywhere ({:.2} mm from the axis at most)",
+            op.leave_radial, highest
+        ));
+    }
+    let top_at = |x: f64| stock_at.map_or(stock_r, |f| f(x));
     let mut levels = Vec::new();
     let mut level = stock_r - op.step_down;
     while level > z_min - op.step_down + 1e-6 {
@@ -97,7 +107,9 @@ pub fn rotary_rough(
             if direction < 0.0 {
                 std::mem::swap(&mut xa, &mut xb);
             }
-            let zf = |x: f64, a: f64| py_max(level, cl(x, a));
+            // (never above the bar: where the part with what it leaves stands higher, along the
+            // bar's top, not round the air above it)
+            let zf = |x: f64, a: f64| py_max(level, cl(x, a).min(top_at(x) + 0.5));
             let go = |b: &mut Builder, x: f64, r: f64, a: f64| {
                 let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(r), b.a];
                 refine(b, &zf, p0, [x, r, a], tol, 0, feeds);

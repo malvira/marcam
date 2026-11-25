@@ -7,7 +7,7 @@ const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 import { describeStock, stockRadius } from "./project.js";
-import { applyFixtureField, applyPartField, applyStockField, carriedFrom, FIXTURES, fixtureOf, fixturePane, fitStock, meshModelOf, partPane, rangesFollow, stockPane } from "./stockpane.js";
+import { applyFixtureField, applyPartField, applyStockField, carriedFrom, carryQuick, FIXTURES, fixtureOf, fixturePane, fitStock, meshModelOf, partPane, rangesFollow, stockPane } from "./stockpane.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
 import { moveSetup } from "./handles.js";
 
@@ -303,7 +303,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       html += toolDetails(tool, s);
     } else if (t.focus === "stock" && !t.selected) {
       const m = meshModelOf(t.doc, s);
-      html += stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore });
+      html += stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore, length: carryLength(s) });
     } else if (t.focus === "part" && !t.selected) {
       html += partPane(t.doc, s, esc, { moreOpen: t.ptMore, choices: modelChoices(s) });
     } else if (t.focus === "fixture" && !t.selected) {
@@ -317,7 +317,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         ${typeRow(s)}
         ${t.setupNotes?.[s.id] ? `<div class="small setup-note" id="setupNote">${esc(t.setupNotes[s.id])}</div>` : ""}
         ${sourcePick(s)}
-        ${stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore })}
+        ${stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore, length: carryLength(s) })}
         <div class="row small">${kindOfSetup(s) === "vise" ? "" : '<button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model\'s faces">Knurl wizard</button>'}
         ${s.stock?.shape === "from_previous" ? `<button type="button" id="treeStockStl" title="The stock this setup starts with (what the setup before left, turned as here) as an STL">Incoming stock STL</button>` : ""}</div>
         <div id="setupHost" class="setup-host"></div>`;
@@ -344,6 +344,27 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     // (the 3D view's handles: on what the selected Stock or Part moves, or hidden)
     window.__marcam.handles?.refresh?.();
+  }
+
+  /** A carried piece's length on the 4th axis (for its stick-out): known after the engine
+   *  says, then the field filled in. */
+  function carryLength(s) {
+    if (s.stock?.shape !== "from_previous") return null;
+    const key = JSON.stringify([s.id, s.stock, t.doc.setups.indexOf(s)]);
+    const got = (t.carryLen ||= new Map()).get(key);
+    if (got === undefined) {
+      t.carryLen.set(key, null);
+      engine("setupFrame", t.doc, { setup: s.id }).then(({ result }) => {
+        const len = result.stock?.length || null;
+        t.carryLen.set(key, len);
+        const f = $("stStickOut");
+        if (f && len && f.value === "" && document.activeElement !== f) {
+          f.value = String(Math.round(Math.max(0, len - (s.holding?.chuck ?? 0)) * 1000) / 1000);
+          f.defaultValue = f.value;
+        }
+      }).catch(() => {});
+    }
+    return got || null;
   }
 
   /** (Mar) The setup's Stock and Part in the tree: selecting one shows its pane, and the
@@ -1622,6 +1643,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       return;
     }
     // the setup's type, from the row at the top of its details: its own type button chosen
+    // a carried piece on the 4th axis turned by a quick button
+    const cq = el.closest?.("#carryQuick button");
+    if (cq) {
+      const s = setup();
+      const label = s && carryQuick(s, cq.dataset.carryAxis || cq.dataset.carry);
+      if (label) await commit({ label });
+      return;
+    }
     const kindCard = el.closest?.("[data-setkind]");
     if (kindCard) {
       const radio = document.querySelector(`#setupDialog.embedded input[name="sdKind"][value="${kindCard.dataset.setkind}"]`);
@@ -2129,6 +2158,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (el.id === "stType" && s.stock?.shape === "from_previous") {
         try {
           box = (await engine("setupFrame", t.doc, { setup: s.id })).result.stock_box;
+        } catch {}
+      }
+      // (the stick-out: the piece's length less what the chuck holds)
+      if (el.id === "stStickOut") {
+        try {
+          box = (await engine("setupFrame", t.doc, { setup: s.id })).result.stock;
         } catch {}
       }
       const label = el.closest("#stockPane") ? applyStockField(t.doc, s, el.id, el.value, box) : applyPartField(t.doc, s, el.id, el.value);

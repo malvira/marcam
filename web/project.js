@@ -1279,6 +1279,20 @@ export function setupProject(ctx) {
     editSetup(id, { host }).catch((e) => showError(e.message));
   }
 
+  /** (Mar: "put that cut stock into a 4 axis setup") a bar the setup before held standing up
+   *  (or along Y) in the vise goes on the 4th axis along its own axis, the end cut in the vise
+   *  to the front: `cfg.carry` turned so, unless it is turned already (Stock > More shows it;
+   *  the handles turn it any other way). `before`: the setup it continues from, by default. */
+  function turnOntoAxis(doc, cfg, before) {
+    if (!(cfg.carry && cfg.kind === "rotary" && !cfg.carry.rotate?.some((v) => v) && (!cfg.carry.turn || cfg.carry.turn === "none"))) return;
+    const src = doc.setups.find((x) => x.id === cfg.carry.from) ?? before;
+    const vise = src && (src.kind === "vise" || src.holding?.kind === "vise");
+    const bar = src && ["cylinder", "square", "hex", "rect"].includes(src.stock?.shape);
+    const along = src?.holding?.along;
+    if (vise && bar && along === "z") cfg.carry = { ...cfg.carry, rotate: [0, 90, 0] };
+    else if (vise && bar && along === "y") cfg.carry = { ...cfg.carry, rotate: [0, 0, -90] };
+  }
+
   async function editSetup(id, opts = {}) {
     let doc;
     try {
@@ -1415,6 +1429,9 @@ export function setupProject(ctx) {
       tris = part.tris;
       found = result.operations;
     }
+    // (Mar: "it's all confused": a vise setup continuing, made a 4th-axis one, kept the bar
+    // standing across the axis) made a 4th-axis setup: turned onto the axis, as when added so
+    if (cfg.kind === "rotary" && (s.kind || "rotary") !== "rotary") turnOntoAxis(doc, cfg, doc.setups[doc.setups.findIndex((x) => x.id === s.id) - 1]);
     const report = await applySetup(doc, doc.setups.find((x) => x.id === s.id), cfg, tris);
     // (the walkthrough: "Rotary 4th axis" stayed the name of a setup made a vise) a name that
     // was only its type's follows the type
@@ -1489,14 +1506,7 @@ export function setupProject(ctx) {
     // (Mar: "put that cut stock into a 4 axis setup") a bar the setup before held standing up
     // (or along Y) in the vise goes on the 4th axis along its own axis, the end cut in the vise
     // to the front: turned so (Stock > More shows it; the handles turn it any other way)
-    if (cfg.carry && cfg.kind === "rotary" && !cfg.carry.rotate?.some((v) => v) && (!cfg.carry.turn || cfg.carry.turn === "none")) {
-      const src = doc.setups.find((x) => x.id === cfg.carry.from) ?? doc.setups[doc.setups.length - 2];
-      const vise = src && (src.kind === "vise" || src.holding?.kind === "vise");
-      const bar = src && ["cylinder", "square", "hex", "rect"].includes(src.stock?.shape);
-      const along = src?.holding?.along;
-      if (vise && bar && along === "z") cfg.carry = { ...cfg.carry, rotate: [0, 90, 0] };
-      else if (vise && bar && along === "y") cfg.carry = { ...cfg.carry, rotate: [0, 0, -90] };
-    }
+    turnOntoAxis(doc, cfg, doc.setups[doc.setups.length - 2]);
     const report = await applySetup(doc, s, cfg, tris);
     // (the new setup's Stock shown, its handles in the view)
     if (state.tree) Object.assign(state.tree, { setup: s.id, focus: "stock", selected: null });
