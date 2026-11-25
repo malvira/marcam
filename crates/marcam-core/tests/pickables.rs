@@ -191,11 +191,12 @@ fn pocketing_contouring_and_facing() {
         v["faces"].as_array().unwrap().len() >= 5,
         "floor and walls: {v:?}"
     );
-    // every operation type takes picks (Mar: picking on all operations)
+    // every operation type takes picks (Mar: picking on all operations), but a custom
+    // toolpath: its geometry is its program
     let without: Vec<&str> = marcam::ops::registry()
         .iter()
         .map(|t| t.kind)
-        .filter(|k| accepts(k).is_empty())
+        .filter(|k| accepts(k).is_empty() && *k != "custom")
         .collect();
     assert!(without.is_empty(), "types without picking: {without:?}");
     assert!(accepts("no_such_type").is_empty());
