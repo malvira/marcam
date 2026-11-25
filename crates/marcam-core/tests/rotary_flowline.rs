@@ -44,16 +44,22 @@ fn finned() -> Mesh {
                 let a = th(x);
                 [x, r * a.cos() - v * a.sin(), r * a.sin() + v * a.cos()]
             };
-            for (r0, r1, v0, v1) in [
-                (6.0, 12.0, 1.0, 1.0),
-                (6.0, 12.0, -1.0, -1.0),
-                (12.0, 12.0, -1.0, 1.0),
-            ] {
+            // (each face wound to face out: the +v side the other way round)
+            for (r0, r1, v0, v1) in [(6.0, 12.0, -1.0, -1.0), (12.0, 12.0, -1.0, 1.0)] {
                 quad(
                     &mut t,
                     [c(x0, r0, v0), c(x0, r1, v1), c(x1, r1, v1), c(x1, r0, v0)],
                 );
             }
+            quad(
+                &mut t,
+                [
+                    c(x1, 6.0, 1.0),
+                    c(x1, 12.0, 1.0),
+                    c(x0, 12.0, 1.0),
+                    c(x0, 6.0, 1.0),
+                ],
+            );
         }
     }
     Mesh {

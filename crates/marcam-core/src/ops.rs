@@ -392,6 +392,7 @@ fn types() -> Vec<OperationType> {
                 tool(),
                 p("x_range", "vec2", "mm", "Axial extent of the tool tip [front, back]."),
                 p("step_down", "number", "mm", "Radial distance between waterlines (a 3.175 ball at 0.3: a scallop of 0.007 mm on the wall).").min(0.01),
+                p("y_offset", "number", "mm", "The tool upright this far off the axis in Y, to one side for each wall's one face and to the other for its other face: its shank leans off the radius, clear of a wall leaning over the face it cuts (an impeller's blades near the hub). 0: over the axis.").opt(json!(0.0)).min(0.0).label("Y offset"),
                 p("sample_mm", "number", "mm", "Point spacing along X.").opt(json!(0.25)).min(0.001),
                 p("leave_radial", "number", "mm", "Stock to leave on the bar, radially (for a finish after it).").opt(json!(0.0)).label("Radial"),
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),

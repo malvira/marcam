@@ -22,7 +22,7 @@ pub use rotary_finish::{rotary_finish, rotary_finish_on};
 pub use rotary_flowline::rotary_flowline;
 pub use rotary_rough::{rotary_rough, Bite, StockNear};
 pub use rotary_turning::rotary_turning;
-pub use rotary_wall::rotary_wall;
+pub use rotary_wall::{rotary_wall, rotary_wall_offset};
 
 use crate::toolpath::Builder;
 

@@ -19,8 +19,10 @@ for k in range(4):
         def c(x, rr, v):
             a = math.radians(90 * k + 2.0 * x)
             return (x, rr * math.cos(a) - v * math.sin(a), rr * math.sin(a) + v * math.cos(a))
-        for r0, r1, v0, v1 in [(6, 12, 1, 1), (6, 12, -1, -1), (12, 12, -1, 1)]:
+        # (each face wound to face out: the +v side the other way round)
+        for r0, r1, v0, v1 in [(6, 12, -1, -1), (12, 12, -1, 1)]:
             quad(c(x0, r0, v0), c(x0, r1, v1), c(x1, r1, v1), c(x1, r0, v0))
+        quad(c(x1, 6, 1), c(x1, 12, 1), c(x0, 12, 1), c(x0, 6, 1))
         if j == 0 or j == 59:
             x = x0 if j == 0 else x1
             quad(c(x, 6, -1), c(x, 12, -1), c(x, 12, 1), c(x, 6, 1))
@@ -31,3 +33,4 @@ with open(sys.argv[1], "wb") as f:
         f.write(struct.pack("<3f", 0, 0, 0))
         for v in t:
             f.write(struct.pack("<3f", *v))
+        f.write(bytes(2))

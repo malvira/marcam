@@ -1755,6 +1755,11 @@ pub struct RotaryWall {
     pub x_range: [f64; 2],
     /// Radial distance between waterlines (mm).
     pub step_down: f64,
+    /// The tool upright this far off the axis in Y (mm; the faces either side of each wall
+    /// with the offset to one side, then the other): its shank leans off the radius, clear of
+    /// a wall leaning over the face it cuts. 0: over the axis.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub y_offset: f64,
     /// Point spacing along X (mm).
     #[serde(default = "default_flow_sample")]
     pub sample_mm: f64,
