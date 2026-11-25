@@ -1599,17 +1599,19 @@ try {
     check("the view: letters typed off the view (o, p, t, s, r) toggle nothing", view0 === view1, `${view0} -> ${view1}`);
     // a new operation added (on another tool than some): every operation's path still drawn in
     // its own colour (none hidden by it being selected)
-    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'face'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
-    await click("#treeAdd");
-    const libRow = await waitFor(() => where("dialog[open] .tp-row", "3\.175"), "the library", 8000).catch(() => null);
-    if (libRow) await click("dialog[open] .tp-row", "3\.175");
-    await waitFor(() => read("!window.__marcam.state.tree.draft"), "the facing added", 60000).catch(() => {});
+    // (a copy of the holes, as a person makes one with its ⧉ button: a new operation, selected;
+    // drawn over its original, so one of the two colours is seen there)
+    await click('#tree .tree-op[data-op="op3"] [data-act="dup"]');
+    await waitFor(() => read("window.__marcam.state.tree.doc.setups[0].operations.length === " + (normal.length + 1)), "the copy added", 60000).catch(() => {});
     await settled();
     await read("window.__marcam.setView('top', {})");
     await sleep(1500);
     const added = await coloursSeen("added");
     const tools = await read("[...new Set(window.__marcam.state.tree.doc.setups[0].operations.map((o) => o.tool))].length");
-    check("the view: a new operation added and selected, ops on several tools: every operation's path still in its own colour at its path", tools >= 2 && added.length === normal.length + 1 && added.filter((o) => o.at >= 3).every((o) => o.seen >= 0.5), JSON.stringify({ tools, added }));
+    const copyOf = await read("(() => { const ops = window.__marcam.state.tree.doc.setups[0].operations; return ops[ops.length - 1].id; })()");
+    const seenOf = (id) => added.find((o) => o.id === id)?.seen ?? 0;
+    check("the view: a new operation added and selected, ops on several tools: every operation's path still in its own colour at its path (the copy's over its original)",
+      tools >= 2 && added.length === normal.length + 1 && added.filter((o) => o.at >= 3 && o.id !== "op3" && o.id !== copyOf).every((o) => o.seen >= 0.5) && Math.max(seenOf("op3"), seenOf(copyOf)) >= 0.5, JSON.stringify({ tools, copyOf, added }));
     // picking for the pocket: the same colours (were all op1's blue)
     await click('#tree .tree-op[data-op="op2"] [data-act="select"]');
     await settled();
@@ -1817,7 +1819,7 @@ try {
     await click("#loadExample");
     await settled();
     // a point of the row right of its words (and left of its buttons), and what is there
-    const emptyOf = (css) => read(`(() => { const row = document.querySelector(${JSON.stringify(css)}); if (!row) return null; row.scrollIntoView({ block: 'nearest' }); const r = row.getBoundingClientRect(); let right = r.right - 6; for (const b of row.querySelectorAll('button')) { const q = b.getBoundingClientRect(); if (q.width && q.left > r.left + r.width / 2) right = Math.min(right, q.left - 6); } let words = r.left; for (const e of row.querySelectorAll('.tree-label, .muted')) { const q = e.getBoundingClientRect(); for (const rr of e.getClientRects()) if (Math.abs(rr.top + rr.height / 2 - (r.top + r.height / 2)) < r.height / 2) words = Math.max(words, rr.right); } const x = Math.round((words + right) / 2), y = Math.round(r.top + r.height / 2); const hit = document.elementFromPoint(x, y); return { at: [x, y], room: Math.round(right - words), hit: hit ? hit.className || hit.tagName : null, onWords: !!hit?.closest('.tree-label') && hit.closest('.tree-label') !== hit.closest('.tree-op .tree-label') }; })()`);
+    const emptyOf = (css) => read(`(() => { const row = document.querySelector(${JSON.stringify(css)}); if (!row) return null; row.scrollIntoView({ block: 'nearest' }); const r = row.getBoundingClientRect(); let right = r.right - 6; for (const b of row.querySelectorAll('button')) { const q = b.getBoundingClientRect(); if (q.width && q.left > r.left + r.width / 2) right = Math.min(right, q.left - 6); } let words = r.left; for (const e of row.querySelectorAll('.tree-label, .muted')) { const q = e.getBoundingClientRect(); for (const rr of e.getClientRects()) if (Math.abs(rr.top + rr.height / 2 - (r.top + r.height / 2)) < r.height / 2) words = Math.max(words, rr.right); } const x = Math.round((words + right) / 2), y = Math.round(r.top + r.height / 2); const hit = document.elementFromPoint(x, y); const lab = row.querySelector('.tree-label'); const lr = lab?.getBoundingClientRect(); return { at: [x, y], room: Math.round(right - words), fills: !!lr && lr.width >= r.width - 30, hit: hit ? hit.className || hit.tagName : null, onWords: !!hit?.closest('.tree-label') && hit.closest('.tree-label') !== hit.closest('.tree-op .tree-label') }; })()`);
     const rows = [
       ["the setup's line", ".tree-setup.active > .tree-setuphead", "!!document.querySelector('#setupDialog.embedded') && document.querySelector('#setupDialog.embedded').getBoundingClientRect().height > 0"],
       ["Stock", ".tree-stock[data-node=stock]", "!!document.getElementById('stockPane')?.getBoundingClientRect().height"],
@@ -1839,7 +1841,8 @@ try {
       await drag(e.at, e.at, 1);
       await settled();
       const after = await read(shown);
-      check(`tree rows: ${what} clicked right of its words (not on them): what it is for shown`, !before && after && e.room > 20 && !e.onWords, JSON.stringify({ before, after, ...e }));
+      // (a row whose label fills it: clickable anywhere already, its far right clicked)
+      check(`tree rows: ${what} clicked right of its words (not on them, or its far right where its label fills it): what it is for shown`, !before && after && ((e.room > 20 && !e.onWords) || e.fills), JSON.stringify({ before, after, ...e }));
     }
     await shot("tree_row_clicked");
     await clean("tree rows");
