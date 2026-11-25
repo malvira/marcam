@@ -9,7 +9,7 @@
 
 use super::rotary_finish::refine;
 use crate::dropcutter::DropCutter;
-use crate::job::RotaryFlowline;
+use crate::job::{FlowSpan, RotaryFlowline};
 use crate::toolpath::{Builder, Move};
 
 /// Angular resolution of the channel search (degrees).
@@ -67,14 +67,43 @@ fn low_runs(row: &[f64], wall: f64) -> Vec<[f64; 2]> {
     runs
 }
 
-/// The channels over `xs`: each X's low stretches, joined to the last X's by overlap.
-pub fn channels(cl: &dyn Fn(f64, f64) -> f64, xs: &[f64], wall: f64) -> Vec<Channel> {
+/// Each low stretch widened to the middle of the walls on either side of it: from one
+/// wall's top to the next's (circular; `runs` in order round the axis).
+fn sectors(runs: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let k = runs.len();
+    (0..k)
+        .map(|i| {
+            let prev_end = if i == 0 {
+                runs[k - 1][1] - 360.0
+            } else {
+                runs[i - 1][1]
+            };
+            let next_start = if i + 1 == k {
+                runs[0][0] + 360.0
+            } else {
+                runs[i + 1][0]
+            };
+            [
+                0.5 * (prev_end + runs[i][0]),
+                0.5 * (runs[i][1] + next_start),
+            ]
+        })
+        .collect()
+}
+
+/// The channels over `xs`: each X's low stretches (with `sector`, each widened to the walls'
+/// tops either side), joined to the last X's by overlap.
+pub fn channels(cl: &dyn Fn(f64, f64) -> f64, xs: &[f64], wall: f64, sector: bool) -> Vec<Channel> {
     let n = (360.0 / SEARCH_DEG).round() as usize;
     let mut done: Vec<Channel> = Vec::new();
     let mut open: Vec<Channel> = Vec::new();
     for &x in xs {
         let row: Vec<f64> = (0..n).map(|k| cl(x, k as f64 * SEARCH_DEG)).collect();
-        let runs = low_runs(&row, wall);
+        let mut runs = low_runs(&row, wall);
+        if sector && !(runs.len() == 1 && runs[0][1] - runs[0][0] >= 360.0 - 1e-9) {
+            runs.sort_by(|p, q| p[0].total_cmp(&q[0]));
+            runs = sectors(&runs);
+        }
         // (no walls at this X, low all round: no channel; the impeller's hub in front of its
         // blades)
         if runs.len() == 1 && runs[0][1] - runs[0][0] >= 360.0 - 1e-9 {
@@ -148,7 +177,8 @@ pub fn rotary_flowline(
     let xs: Vec<f64> = (0..=m)
         .map(|i| x0 + (x1 - x0) * i as f64 / m as f64)
         .collect();
-    let chans = channels(&cl, &xs, op.wall_height.max(0.0));
+    let sector = op.span == FlowSpan::Sector;
+    let chans = channels(&cl, &xs, op.wall_height.max(0.0), sector);
     if chans.is_empty() {
         b.warnings.push(
             "rotary flowline: no channel between walls in its X range, nothing to follow".into(),
@@ -166,17 +196,25 @@ pub fn rotary_flowline(
         if crate::budget::over() {
             break;
         }
-        // passes across the channel: a stepover apart at its widest floor
+        // passes across the channel: a stepover apart at its widest floor (over the walls'
+        // tops, a sector: at its highest)
         let widest =
             c.xs.iter()
                 .zip(c.lo.iter().zip(&c.hi))
                 .map(|(&x, (&lo, &hi))| {
-                    let r = cl(x, 0.5 * (lo + hi)).max(0.5);
+                    let r = if sector {
+                        cl(x, lo).max(cl(x, hi)).max(cl(x, 0.5 * (lo + hi)))
+                    } else {
+                        cl(x, 0.5 * (lo + hi))
+                    }
+                    .max(0.5);
                     (hi - lo).to_radians() * r
                 })
                 .fold(0.0, f64::max);
         let n = ((widest / op.stepover_mm).ceil() as usize).max(1);
-        let vs: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+        // (a sector's last pass is the next one's first: on the wall's top between them)
+        let last = if sector { n - 1 } else { n };
+        let vs: Vec<f64> = (0..=last.max(1)).map(|k| k as f64 / n as f64).collect();
         let at = |i: usize, v: f64| c.lo[i] + v * (c.hi[i] - c.lo[i]);
         // down onto the first pass's start, from the safe radius
         b.rapid_r(safe_r);

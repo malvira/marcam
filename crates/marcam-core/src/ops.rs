@@ -367,6 +367,7 @@ fn types() -> Vec<OperationType> {
                 p("x_range", "vec2", "mm", "Axial extent of the tool tip [front, back]."),
                 p("stepover_mm", "number", "mm", "Distance between passes across a channel's floor (at its widest).").min(0.001),
                 p("wall_height", "number", "mm", "A wall: where the surface stands more than this above the lowest at that X; the channels are what is lower.").opt(json!(1.0)).min(0.01),
+                p("span", "choice", "", "Floor: each channel's floor, between its walls. Sector: from one wall's top to the next, the passes climbing the walls along their twist.").choices(&["floor", "sector"]).opt(json!("floor")),
                 p("sample_mm", "number", "mm", "Point spacing along X.").opt(json!(0.25)).min(0.001),
                 p("leave_radial", "number", "mm", "Stock to leave on the bar, radially (for a finish after it).").opt(json!(0.0)).label("Radial"),
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the surface.").opt(json!(0.005)).min(0.0001),

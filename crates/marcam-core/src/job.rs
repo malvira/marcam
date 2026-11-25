@@ -1715,6 +1715,10 @@ pub struct RotaryFlowline {
     /// channels are what is lower.
     #[serde(default = "default_wall_height")]
     pub wall_height: f64,
+    /// What a pass spans: a channel's floor between its walls, or the whole sector from one
+    /// wall's top to the next (the passes climbing the walls along their twist).
+    #[serde(default)]
+    pub span: FlowSpan,
     /// Radial stock to leave (mm).
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub leave_radial: f64,
@@ -1730,6 +1734,17 @@ pub struct RotaryFlowline {
     pub ramp_angle: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing: Option<f64>,
+}
+
+/// What a rotary flowline's pass spans.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowSpan {
+    /// A channel's floor, between the feet of its walls.
+    #[default]
+    Floor,
+    /// From one wall's top to the next: over the walls too.
+    Sector,
 }
 
 fn default_flow_sample() -> f64 {

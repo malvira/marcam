@@ -147,3 +147,42 @@ fn no_channel_where_there_are_no_walls() {
         tps[0].notes
     );
 }
+
+#[test]
+fn sector_wide_passes_climb_the_fins_along_their_twist() {
+    let mesh = finned();
+    let j = job(json!({"span": "sector", "stepover_mm": 1.0}));
+    let tps = marcam::plan_with_mesh(&j, Some(&mesh)).unwrap();
+    let g = marcam::gouge_check(&j, &tps, Some(&mesh)).unwrap();
+    let deepest = g.iter().map(|r| r.max_depth).fold(0.0, f64::max);
+    assert!(deepest < 0.01, "{deepest} mm into the part");
+    let cuts: Vec<[f64; 3]> = tps[0]
+        .moves
+        .iter()
+        .filter_map(|m| match *m {
+            Move::Cut { x, r, a, .. } => Some([x, r, a]),
+            _ => None,
+        })
+        .collect();
+    // over the fins' tops (radius 12) as well as the hub between them
+    let top = cuts.iter().map(|c| c[1]).fold(0.0, f64::max);
+    let low = cuts.iter().map(|c| c[1]).fold(f64::INFINITY, f64::min);
+    assert!(top > 11.9 && low < 6.1, "radius {low:.2}..{top:.2}");
+    // still one plunge a sector, along the twist
+    let plunges = tps[0]
+        .moves
+        .iter()
+        .filter(|m| matches!(m, Move::Plunge { .. }))
+        .count();
+    assert_eq!(plunges, 4);
+    let along: Vec<_> = cuts
+        .windows(2)
+        .filter(|w| (w[1][0] - w[0][0]).abs() > 0.1 && (w[1][0] - w[0][0]).abs() < 1.0)
+        .collect();
+    let mean = along
+        .iter()
+        .map(|w| (w[1][2] - w[0][2]) / (w[1][0] - w[0][0]))
+        .sum::<f64>()
+        / along.len() as f64;
+    assert!((mean + TWIST).abs() < 0.2, "A turns {mean:.2} a mm along X");
+}

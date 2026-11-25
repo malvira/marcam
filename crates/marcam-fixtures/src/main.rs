@@ -144,7 +144,10 @@ mod tests {
     fn committed_fixtures_match_the_generators() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         for (path, bytes) in super::files(&root) {
-            let cur = std::fs::read(&path).unwrap_or_default();
+            // (a read that fails says so: on Windows another process holding the file, a
+            // test run beside a server or a gate, read as empty was "out of date")
+            let cur = std::fs::read(&path)
+                .unwrap_or_else(|e| panic!("{}: could not read it: {e}", path.display()));
             assert!(cur == bytes, "{} is out of date", path.display());
         }
     }
