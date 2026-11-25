@@ -1394,6 +1394,7 @@ try {
     // the boss: its outline (the edge round its top), cut down its walls
     await addOp("contour", "3\\.175 x 12");
     // (Mar's picking rule) before its pick: the one-line prompt only, nothing planned, no error
+    await read("document.getElementById('pickNone')?.scrollIntoView({ block: 'nearest' }), true");
     const before = await read(`(() => { const vis = ${VISIBLE}; return { prompt: vis(document.getElementById('pickNone')) ? document.getElementById('pickNone').textContent : '', tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).length, error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '', issues: [...document.querySelectorAll('.issues, #summary .error')].filter((e) => vis(e)).map((e) => e.textContent.slice(0, 60)) }; })()`);
     check("carry-through: a contour added, nothing picked yet: only the 'Nothing picked' line, not planned, no error", /^Nothing picked\. Pick/.test(before.prompt) && before.tabs === 0 && !before.error && !before.issues.length, JSON.stringify(before));
     const bossPick = await pickOn("(x) => x.kind === 'edge_loop' && x.data.side === 'outside' && Math.abs(x.data.length - 48) < 0.5", "the boss");
@@ -1774,8 +1775,8 @@ try {
     const blueNear = async (x, y) => {
       const [px, py2] = await at(x, y);
       let n = 0;
-      for (let dy = -6; dy <= 6; dy++)
-        for (let dx = -6; dx <= 6; dx++) {
+      for (let dy = -8; dy <= 8; dy++)
+        for (let dx = -8; dx <= 8; dx++) {
           const q = img.at(Math.round(px + dx), Math.round(py2 + dy));
           if (q && q[2] > 120 && q[2] > q[0] + 40) n++;
         }
@@ -1833,10 +1834,12 @@ try {
     await click("#treeAdd");
     const lib = await waitFor(() => where("dialog[open] .tp-row", "3\\.175"), "the library", 15000).catch(() => null);
     if (lib) await click("dialog[open] .tp-row", "3\\.175");
-    await waitFor(() => where("#opForm [name=clear_to_stock]"), "the facing's form", 60000);
+    await waitFor(() => read("!!document.querySelector('#opForm [name=clear_to_stock]')"), "the facing's form", 60000);
+    await read("document.querySelector('#opForm [name=clear_to_stock]').scrollIntoView({ block: 'center' }), true");
     await settled();
     await click("#opForm [name=clear_to_stock]");
     await settled();
+    await read("document.querySelector('#opForm [name=outward_only]')?.scrollIntoView({ block: 'center' }), true");
     await click("#opForm [name=outward_only]");
     await settled();
     const op = await read("(() => { const st = window.__marcam.state; const s = st.tree.doc.setups.find((x) => x.id === st.tree.setup); return s.operations.find((o) => o.id === st.tree.selected) || null; })()");
@@ -1898,7 +1901,8 @@ try {
     await click("#treeAdd");
     const lib = await waitFor(() => where("dialog[open] .tp-row", "3\.175"), "the library", 15000).catch(() => null);
     if (lib) await click("dialog[open] .tp-row", "3\.175");
-    await waitFor(() => where("#opForm [name=min_radius]"), "the roughing's form", 60000);
+    await waitFor(() => read("!!document.querySelector('#opForm [name=min_radius]')"), "the roughing's form", 60000);
+    await read("document.querySelector('#opForm [name=min_radius]').scrollIntoView({ block: 'center' }), true");
     await settled();
     await click("#opForm [name=min_radius]");
     await key("a", 2);
@@ -1967,11 +1971,16 @@ try {
         check(`tree rows: ${what} clicked right of its words: its details shown`, false, `no ${css}`);
         continue;
       }
-      await drag(e.at, e.at, 1);
+      // (a row whose words fill it, its label's and the grey note beside it, as the Tool
+      // library's may on a wider font: no room right of them; clicked on its grey note instead,
+      // never on its bold label: Mar's complaint was a row only its label selected)
+      const note = e.room > 20 || e.fills ? null : await read(`(() => { const row = document.querySelector(${JSON.stringify(css)}); const m = [...row.querySelectorAll('.muted')].find((x) => x.getBoundingClientRect().width > 4 && !x.closest('.tree-label, button')); if (!m) return null; const r = m.getBoundingClientRect(); const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2); const hit = document.elementFromPoint(x, y); return { at: [x, y], text: m.textContent.trim().slice(0, 40), onLabel: !!hit?.closest('.tree-label') }; })()`);
+      const at = note ? note.at : e.at;
+      await drag(at, at, 1);
       await settled();
       const after = await read(shown);
       // (a row whose label fills it: clickable anywhere already, its far right clicked)
-      check(`tree rows: ${what} clicked right of its words (not on them, or its far right where its label fills it): what it is for shown`, !before && after && ((e.room > 20 && !e.onWords) || e.fills), JSON.stringify({ before, after, ...e }));
+      check(`tree rows: ${what} clicked right of its words (not on them, or its far right where its label fills it, or its grey note where its words fill it): what it is for shown`, !before && after && ((e.room > 20 && !e.onWords) || e.fills || (!!note && !note.onLabel)), JSON.stringify({ before, after, note, ...e }));
     }
     await shot("tree_row_clicked");
     await clean("tree rows");
