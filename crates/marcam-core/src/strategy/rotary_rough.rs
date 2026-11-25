@@ -139,12 +139,19 @@ fn rest_along(
                 let ramp_len = ((top - z0).max(0.0) / tan).min(len);
                 let dir = if xb >= xa { 1.0 } else { -1.0 };
                 if ramp_len > 0.05 && len > 0.5 {
+                    // (the ramp or the part, whichever is higher, followed as a pass is: the
+                    // impeller's blade wall rose 8 mm between two ramp points a quarter mm
+                    // apart, and the straight move between them gouged 5 mm)
+                    let zr = |x: f64, aa: f64| {
+                        let f = ((x - xa) * dir / ramp_len).clamp(0.0, 1.0);
+                        py_max(top + (z0 - top) * f, zf(x, aa))
+                    };
                     let steps = (ramp_len / 0.25).ceil().max(1.0) as usize;
                     for j in 1..=steps {
                         let f = j as f64 / steps as f64;
                         let x = xa + dir * ramp_len * f;
-                        let r = (top + (z0 - top) * f).max(zf(x, a));
-                        b.cut(x, r, a, feeds.0, feeds.1);
+                        let p0 = [b.x.unwrap_or(xa), b.r.unwrap_or(top), b.a];
+                        refine(b, &zr, p0, [x, zr(x, a), a], tol, 0, feeds);
                     }
                     // the rest of the way down there, if the ramp ran out of pass
                     let xe = xa + dir * ramp_len;
