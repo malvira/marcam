@@ -572,14 +572,17 @@ try {
   check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 19 && String(typesAll).split(",").length === 19, `${typesAll}`);
   const filled = [];
   const took = [];
+  let autoSeen = null;
   for (const kind of String(typesAll).split(",")) {
     const t0 = Date.now();
     const before = await js("document.querySelectorAll('#tree .tree-op').length");
     await js(`document.getElementById('treeAddType').value = '${kind}'; document.getElementById('treeAdd').click(); true`);
     await waitFor(() => js(`!!document.getElementById('opForm') && ${SEL}?.type === '${kind}'`), `the ${kind} form`, 60000);
     // blank fields, but text whose registry default is "" (none: e.g. a V-carve's text)
-    // (an optional setting under More whose empty means "worked out": rest roughing's max bite)
-    const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length) || (p.default === null && !p.required && p.advanced)).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
+    // (a setting the registry marks auto, empty on purpose: worked out when planned)
+    // (the auto ones: there, empty, and folded away under More)
+    if (kind === "rotary_rough") autoSeen = await js(`(() => { const e = document.querySelector('#opForm [name=max_bite]'); const d = e?.closest('details'); return { there: !!e, empty: e?.value === '', folded: !!d && d.id === 'opMore' && !d.open, auto: !!window.__marcam.tree.state.types.find((x) => x.kind === 'rotary_rough').params.find((p) => p.name === 'max_bite')?.auto }; })()`);
+    const blanks = await js(`(() => { const ty = window.__marcam.tree.state.types.find(x => x.kind === '${kind}'); const none = new Set(ty.params.filter(p => p.default === '' || (Array.isArray(p.default) && !p.default.length) || p.auto).map(p => p.name)); return [...document.getElementById('opForm').querySelectorAll('input, select')].filter(e => e.type !== 'checkbox' && e.type !== 'file' && !['__name', '__axial'].includes(e.name) && !none.has(e.name) && e.value.trim() === '').map(e => e.name).join(','); })()`);
     // (Mar's picking rule) the types whose geometry is a placeholder until a pick: not added,
     // the one-line prompt shown instead (the next Add replaces the draft)
     if (["contour", "pocket", "drill", "chamfer", "thread_mill", "bore", "custom"].includes(kind)) {
@@ -604,6 +607,7 @@ try {
     took.push(`${kind} ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   }
   check("every operation type's new form is fully filled and applies cleanly (those needing a pick, or a program, wait for it)", filled.length === 19 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
+  check("rotary roughing's max bite: marked auto, empty and folded under More in a new form (worked out when planned)", !!autoSeen && autoSeen.there && autoSeen.empty && autoSeen.folded && autoSeen.auto, JSON.stringify(autoSeen));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
   await waitFor(() => js(`${SEL}?.type === 'rotary_finish'`), "the finish form", 60000);

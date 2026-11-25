@@ -431,6 +431,9 @@ pub fn rotary_rough(
     // rest along X at set angles: only where the stock is left
     if let Some(st) = &rest_stock {
         b.comment("--- rest roughing (along X) ---");
+        if let Some(bt) = bite.as_ref().filter(|bt| bt.limit.is_finite()) {
+            b.comment(format!("at most {:.2} mm3 a mm a pass", bt.limit));
+        }
         rest_along(
             b,
             op,

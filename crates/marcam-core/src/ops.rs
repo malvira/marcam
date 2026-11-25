@@ -33,6 +33,10 @@ pub struct ParamSpec {
     /// Shown folded away in the form (under More), with the rarely changed settings.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub advanced: bool,
+    /// Left empty on purpose: worked out when planned (rest roughing's max bite, from the
+    /// tool).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub auto: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -72,6 +76,7 @@ const fn p(
         help,
         label: "",
         advanced: false,
+        auto: false,
     }
 }
 
@@ -82,6 +87,13 @@ impl ParamSpec {
     }
     fn adv(mut self) -> Self {
         self.advanced = true;
+        self
+    }
+    /// Optional, empty: worked out when planned.
+    fn auto(mut self) -> Self {
+        self.required = false;
+        self.default = Value::Null;
+        self.auto = true;
         self
     }
     fn opt(mut self, default: Value) -> Self {
@@ -275,7 +287,7 @@ fn types() -> Vec<OperationType> {
                 p("tolerance", "number", "mm", "Largest dip of a straight move below the allowance surface.").opt(json!(0.005)).min(0.0001),
                 p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
                 p("rest", "boolean", "", "Rest roughing: only where the operations before it in the setup left material (simulated), e.g. a ball under blades no index of the roughing reached; round the rest at the air feed.").opt(json!(false)),
-                p("max_bite", "number", "mm3/mm", "Rest roughing: the most a pass may take per mm of travel (the simulated stock says how much it would). A level's pass that would take more goes in two, half a step down each, and slower where still over (to 0.6 of the feed). Empty: 1.5 times the tool's normal bite (buried to its centre).").opt(Value::Null).min(0.1).adv(),
+                p("max_bite", "number", "mm3/mm", "Rest roughing: the most a pass may take per mm of travel (the simulated stock says how much it would). A level's pass that would take more goes in two, half a step down each, and slower where still over (to 0.6 of the feed). Empty: 1.5 times the tool's normal bite (buried to its centre).").auto().min(0.1).adv(),
                 feed(),
                 plunge(),
                 ramp(),
@@ -1780,8 +1792,8 @@ mod tests {
             for p in &t.params {
                 let has = v.get(p.name).is_some_and(|x| !x.is_null());
                 let either = matches!(p.name, "stepover_deg" | "stepover_mm") // one of the two
-                    // (empty: worked out from the tool)
-                    || (t.kind == "rotary_rough" && p.name == "max_bite");
+                    // (empty: worked out when planned)
+                    || p.auto;
                 assert!(has || either, "{}: {} has no default", t.kind, p.name);
             }
             assert!(
