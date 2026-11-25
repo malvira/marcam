@@ -1042,6 +1042,10 @@ fn cmd_left3d(o: &Opts) -> Result<ExitCode, String> {
                 .map(|a| format!(" at X {:.2}, radius {:.2}, part angle {:.1}", a[0], a[1], a[2]))
                 .unwrap_or_default()
         );
+        println!(
+            "of those reachable: {} points over 0.05 mm only a tool offset in Y reaches (over the axis its shank meets the part), most left {:.3} mm",
+            l.needs_offset, l.max_needs_offset
+        );
         for w in l.worst.iter().take(10) {
             println!(
                 "  {:.3} mm at X {:.2}, radius {:.2}, part angle {:.1}",

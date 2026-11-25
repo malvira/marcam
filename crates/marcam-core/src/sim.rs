@@ -462,6 +462,9 @@ pub struct Segment {
     /// Some(A) for a 3-axis move made with the rotary axis held at A (indexed 3+1, or A = 0
     /// on a vise): `from`/`to` are then machine [x, y, z].
     pub index_a: Option<f64>,
+    /// A general move (a pose) that turns as it goes: the A it starts at (`index_a` the one it
+    /// ends at); None: A held.
+    pub a_from: Option<f64>,
 }
 
 /// The job's motion as a flat list of segments (each program starts from an unknown position
@@ -475,6 +478,7 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
         let mut op = 0u16;
         for (idx, m) in tp.moves.iter().enumerate() {
             // indexed 3+1 moves: machine X/Y/Z with A held; general moves solve their A
+            let a_was = a;
             let xyz = match *m {
                 Move::Pose { tip, axis, feed } => match crate::kinematics::solve_a(axis, a) {
                     Ok(na) => {
@@ -508,6 +512,8 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
                         program: p as u16,
                         move_index: idx,
                         index_a: Some(a),
+                        a_from: (matches!(m, Move::Pose { .. }) && (a - a_was).abs() > 1e-9)
+                            .then_some(a_was),
                     });
                 }
                 x = nx;
@@ -552,6 +558,7 @@ pub fn segments(tps: &[Toolpath]) -> Vec<Segment> {
                     program: p as u16,
                     move_index: idx,
                     index_a: None,
+                    a_from: None,
                 });
             }
             x = nx;

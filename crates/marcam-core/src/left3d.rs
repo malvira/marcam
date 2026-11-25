@@ -37,6 +37,10 @@ pub struct Left3d {
     max_undercut_seen: f64,
     /// Where the deepest of those is: (X, radius, part angle deg).
     pub undercut_at: Option<[f64; 3]>,
+    /// Of the reachable points left over 0.05 mm: those a tool over the axis cannot reach (its
+    /// shank along the radius meets the part) but one offset in Y can; the most left there.
+    pub needs_offset: usize,
+    pub max_needs_offset: f64,
 }
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -219,6 +223,8 @@ pub fn left_in_3d(job: &Job, tps: &[Toolpath], mesh: &Mesh, h: f64, reach_r: f64
         max_undercut: 0.0,
         max_undercut_seen: 0.0,
         undercut_at: None,
+        needs_offset: 0,
+        max_needs_offset: 0.0,
     };
     let mut worst: Vec<[f64; 4]> = Vec::new();
     for p in dx.surface_points() {
@@ -261,16 +267,25 @@ pub fn left_in_3d(job: &Job, tps: &[Toolpath], mesh: &Mesh, h: f64, reach_r: f64
         let pl = py.hypot(pz);
         if pl > 0.2 {
             let base = pz.atan2(py);
-            let open = [-40.0f64, -20.0, 0.0, 20.0, 40.0].iter().any(|dg| {
-                let t = base + dg.to_radians();
-                let dir = [0.0, t.cos(), t.sin()];
+            let clear = |dir: [f64; 3]| {
                 (1..=30).all(|k| {
                     let s = k as f64 * 0.5;
                     let at = [c[0], c[1] + dir[1] * s, c[2] + dir[2] * s];
                     near.nearest(at)
                         .is_none_or(|(dc, _, _)| dc >= reach_r - 0.02)
                 })
+            };
+            let open = [-40.0f64, -20.0, 0.0, 20.0, 40.0].iter().any(|dg| {
+                let t = base + dg.to_radians();
+                clear([0.0, t.cos(), t.sin()])
             });
+            // (over the axis its shank runs along the radius through the ball's centre:
+            // blocked there but open off it, only a tool offset in Y reaches)
+            let cr = c[1].hypot(c[2]).max(1e-9);
+            if open && !clear([0.0, c[1] / cr, c[2] / cr]) {
+                out.needs_offset += 1;
+                out.max_needs_offset = out.max_needs_offset.max(d);
+            }
             if !open {
                 out.undercut += 1;
                 out.max_undercut = out.max_undercut.max(d);

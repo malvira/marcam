@@ -207,6 +207,7 @@ pub fn segments_of3(moves: &[Move], p: u16) -> Vec<Segment> {
                     program: p,
                     move_index: idx,
                     index_a: Some(0.0),
+                    a_from: None,
                 });
             }
             at = to;

@@ -476,7 +476,13 @@ pub fn replay(
         let at = |f: f64| -> ([f64; 3], [f64; 3]) {
             let p = [0, 1, 2].map(|k| from[k] + (seg.to[k] - from[k]) * f);
             match seg.index_a {
-                Some(a) => pose(p[0], p[1], p[2], a),
+                // (a pose that turns as it goes: A from where it started)
+                Some(a) => pose(
+                    p[0],
+                    p[1],
+                    p[2],
+                    seg.a_from.map_or(a, |a0| a0 + (a - a0) * f),
+                ),
                 None => pose(p[0], 0.0, p[1], p[2]),
             }
         };

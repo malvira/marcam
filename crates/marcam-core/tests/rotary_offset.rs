@@ -169,3 +169,85 @@ fn an_offset_needs_a_ball_no_wider_than_it() {
         .to_string()
         .contains("needs a ball"));
 }
+
+/// The holder and shank check sees an offset tool where the machine has it: upright beside
+/// the axis. A fin of stock that the radial line misses but the upright shank passes through
+/// is a hit with the offset, none without it.
+#[test]
+fn the_holder_check_sees_the_offset_tool_upright_beside_the_axis() {
+    use marcam::collision::{simulate_rotary, ToolBody};
+    use marcam::sim::{Grid, RadialMap};
+    use marcam::toolpath::{Builder, Toolpath};
+    let tool: marcam::job::Tool = serde_json::from_value(json!({"number": 1,
+        "description": "3.175 ball, 6 mm shank", "kind": "ball", "diameter": 3.175, "flute_length": 12.0,
+        "shank_diameter": 6.0}))
+    .unwrap();
+    let body = ToolBody::of(&tool);
+    let cutter = marcam::cutter_for(1, tool.shape).unwrap();
+    // a bar of radius 10 with a fin of stock out to 26 (below the holder, past the flutes) at part angles 100..108 degrees
+    let grid = Grid::new(-20.0, 2.0, 0.3, 360);
+    let mut stock = RadialMap::filled(grid, 10.0);
+    for i in 0..grid.nx {
+        for j in 0..grid.na {
+            let phi = grid.phi(j).to_degrees();
+            if (100.0..=108.0).contains(&phi) {
+                stock.r[i * grid.na + j] = 26.0;
+            }
+        }
+    }
+    stock.top = 26.0;
+    // the ball's centre at part angle 90 (A 0), 12.59 from the axis, along X; with and without
+    // the tool 6 mm off the axis (upright there, its shank crossing the fin)
+    let program = |y: f64| {
+        let mut b = Builder::new();
+        b.tool_change(1, 12000);
+        b.rapid_r(40.0);
+        b.rapid(Some(-12.0), None, Some(0.0));
+        if y != 0.0 {
+            b.moves.push(marcam::Move::YOffset { y, ball_r: R });
+        }
+        b.rapid_r(11.5);
+        b.plunge(11.0, 100.0);
+        b.cut(-6.0, 11.0, 0.0, 300.0, 300.0);
+        b.rapid_r(40.0);
+        if y != 0.0 {
+            b.moves.push(marcam::Move::YOffset { y: 0.0, ball_r: R });
+        }
+        Toolpath {
+            name: "p".into(),
+            title: "p".into(),
+            tool: Some((1, "ball".into())),
+            notes: Vec::new(),
+            reset_a: true,
+            safe_r: 40.0,
+            moves: b.moves,
+            origin_comment: None,
+            plunge_limit: None,
+            ramp_angle: Some(30.0),
+            post: None,
+        }
+    };
+    let hits = |tp: &Toolpath| {
+        let mut st = stock.clone();
+        let (_, rep) = simulate_rotary(
+            &mut st,
+            tp,
+            &|_| Some(cutter),
+            &|_| Some(body),
+            0.25,
+            (26.0, -40.0, 0.0),
+            true,
+            None,
+        );
+        rep.count
+    };
+    assert_eq!(
+        hits(&program(0.0)),
+        0,
+        "over the axis: the fin is beside its shank"
+    );
+    assert!(
+        hits(&program(6.0)) > 0,
+        "off the axis: its shank crosses the fin"
+    );
+}

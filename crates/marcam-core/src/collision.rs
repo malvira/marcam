@@ -487,6 +487,8 @@ fn samples(seg: &Segment, step: f64) -> Vec<([f64; 3], f64)> {
         return vec![(q, aq)];
     };
     let (p, ap) = to(from);
+    // (a pose that turns: from the A it started at)
+    let ap = seg.a_from.unwrap_or(ap);
     let arc = 0.5 * (p[2] + q[2]) * (aq - ap).to_radians().abs();
     let len = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2))
         .sqrt()
@@ -590,6 +592,22 @@ pub fn simulate_rotary(
             .map_or(0.0, |c| c.2)
             .max(f.tailstock().map_or(0.0, |t| t.2))
     });
+    // (rotary parallel's tool offset in Y: its holder and shank where the machine has them,
+    // upright beside the axis, not along the radius as the planned moves say)
+    let offset;
+    let tp = if tp
+        .moves
+        .iter()
+        .any(|m| matches!(m, crate::toolpath::Move::YOffset { .. }))
+    {
+        offset = Toolpath {
+            moves: crate::post::offset_poses(&tp.moves, tp.ramp_angle),
+            ..tp.clone()
+        };
+        &offset
+    } else {
+        tp
+    };
     let segs = sim::segments(std::slice::from_ref(tp));
     let cutters: Vec<Option<Cutter>> = segs.iter().map(|s| s.tool.and_then(cutter_for)).collect();
     let mut st = SimStats::default();
