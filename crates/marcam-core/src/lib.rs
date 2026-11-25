@@ -1711,7 +1711,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                             .iter()
                             .any(|&(x, a)| {
                                 let (tip, dir) = dexel::pose(x, 0.0, r, a);
-                                dx.inside(&t, tip, dir) > 1e-3
+                                // (more than the stock's sampling round the part)
+                                dx.inside(&t, tip, dir) > 0.05
                             });
                         return if any { r } else { 0.0 };
                     }
@@ -2410,9 +2411,13 @@ fn plan_cached(
     };
     // (a rest roughing works on what the programs before it left)
     let rest = job.programs.iter().any(|p| {
-        p.operations
-            .iter()
-            .any(|o| matches!(o, Operation::Rough3d(r) if r.rest || job.carried.is_some()))
+        p.operations.iter().any(|o| match o {
+            Operation::Rough3d(r) => r.rest || job.carried.is_some() || job.stock_box.is_none(),
+            // (rotary rest roughing; and indexed 3+1 roughing on a bar, whose angles see
+            // the bar as the programs before left it)
+            Operation::RotaryRough(r) => r.rest,
+            _ => false,
+        })
     });
     let mut next_op = 0;
     let mut tps: Vec<Toolpath> = Vec::new();

@@ -326,3 +326,67 @@ fn replay_a_project() {
         }
     }
 }
+
+#[test]
+#[ignore]
+fn probe_rest_stock() {
+    use marcam::dexel::{pose, replay, Dexel, ToolSolid};
+    let dir = PathBuf::from(std::env::var("MARCAM_REPLAY").expect("MARCAM_REPLAY"));
+    let text = std::fs::read_to_string(
+        dir.join(std::env::var("MARCAM_TOML").unwrap_or("project.toml".into())),
+    )
+    .unwrap();
+    let (p, _) = marcam::project::Project::from_json_any(&text).unwrap();
+    let v = serde_json::to_value(&p).unwrap();
+    let js = jobs(&v, &dir);
+    let job = &js[0].1;
+    let mesh = marcam::load_mesh(job, &dir).unwrap();
+    let tps = marcam::plan_with_mesh(job, mesh.as_ref()).unwrap();
+    let mut dx = Dexel::bar(job.stock.radius, job.stock.length, 0.2);
+    let v0 = dx.volume();
+    let flat = ToolSolid {
+        radius: 1.5875,
+        ball: false,
+        height: 40.0,
+    };
+    let segs: Vec<_> = marcam::sim::segments(std::slice::from_ref(&tps[0]))
+        .into_iter()
+        .filter(|s| !s.rapid)
+        .collect();
+    replay(&mut dx, &segs, &|_| Some(flat), 0.25, 0.0);
+    let mv = mesh
+        .as_ref()
+        .map(|m| {
+            let mut v = 0.0;
+            for t in &m.triangles {
+                v += (t[0][0] * (t[1][1] * t[2][2] - t[1][2] * t[2][1])
+                    - t[0][1] * (t[1][0] * t[2][2] - t[1][2] * t[2][0])
+                    + t[0][2] * (t[1][0] * t[2][1] - t[1][1] * t[2][0]))
+                    / 6.0;
+            }
+            v.abs()
+        })
+        .unwrap_or(0.0);
+    eprintln!(
+        "bar {v0:.0} mm3, after roughing {:.0}, part {mv:.0}",
+        dx.volume()
+    );
+    let ball = ToolSolid {
+        radius: 1.5875,
+        ball: true,
+        height: 2.0 * 1.5875 + 0.5,
+    };
+    for r in [24.0, 20.0, 17.5, 12.0, 9.0] {
+        let mut n = 0;
+        let mut tot = 0.0;
+        for k in 0..36 {
+            let (tip, d) = pose(-20.0, 0.0, r, k as f64 * 10.0);
+            let v = dx.inside(&ball, tip, d);
+            if v > 0.05 {
+                n += 1;
+            }
+            tot += v;
+        }
+        eprintln!("x -20, r {r}: {n}/36 angles with stock in the ball, total {tot:.2} mm3");
+    }
+}

@@ -13,6 +13,121 @@ const AIR_FEED: f64 = 2000.0;
 /// Through the air round the axis: at most this many mm/min per mm from it (about 3,400
 /// degrees a minute, under the 4,000 the Z1's controller takes).
 const AIR_TURN: f64 = 60.0;
+/// Rest roughing along X: at each level, passes along X at angles `op.step_x` mm apart at the
+/// level's radius, each only over the X runs where more than [`REST_MIN`] of the stock left
+/// (`st`, its top at `xs` x the `seg`-degree angles) stands above the level and the part
+/// (with its allowance, `clg`/`cl`). Each pass comes down onto the stock from just above it,
+/// rides `max(level, part)`, and leaves upward; the next angle's pass follows at the safe
+/// radius. The levels top-down, so a pass takes at most a level's depth and a stepover.
+#[allow(clippy::too_many_arguments)]
+fn rest_along(
+    b: &mut Builder,
+    op: &RotaryRough,
+    xs: &[f64],
+    seg: f64,
+    clg: &[Vec<f64>],
+    st: &[Vec<f64>],
+    levels: &[f64],
+    safe_r: f64,
+    cl: &dyn Fn(f64, f64) -> f64,
+    tol: f64,
+    feeds: (f64, f64),
+    takes: StockNear,
+) {
+    let n_rev = clg.first().map_or(0, |r| r.len());
+    if n_rev == 0 || xs.len() < 2 {
+        return;
+    }
+    let k_of = |a: f64| ((a.rem_euclid(360.0) / seg).round() as usize) % n_rev;
+    let mut done_above: Vec<Vec<bool>> = vec![vec![false; n_rev]; xs.len()];
+    let mut forward = true;
+    for &level in levels {
+        if crate::budget::over() {
+            break;
+        }
+        // angles a stepover apart at this radius
+        let da = (op.step_x / level.max(0.5))
+            .to_degrees()
+            .clamp(0.2, seg.max(0.2) * 4.0);
+        let n_a = (360.0 / da).ceil() as usize;
+        for ia in 0..n_a {
+            let a = ia as f64 * 360.0 / n_a as f64;
+            let k = k_of(a);
+            // (where the tool at this level would take any of what is left: the stock's top
+            // along a ray alone also met the blades beside it)
+            let every = 10;
+            let mut mask = vec![false; xs.len()];
+            let mut i = 0;
+            // (the tool's width inside the range: the bar past the part's ends, towards the
+            // chuck, is not the rest of the part's roughing; at every angle and level there
+            // it went round 5 h)
+            let (x_in0, x_in1) = (xs[0] + TOOL_R_GUESS, xs[xs.len() - 1] - TOOL_R_GUESS);
+            while i < xs.len() {
+                let c = clg[i][k];
+                let z = level.max(c);
+                let here = (x_in0..=x_in1).contains(&xs[i])
+                    && c < level - 1e-6
+                    && st[i][k] - z > REST_ALONG_MIN
+                    && takes(xs[i], xs[i], a, a, z) > 0.0;
+                for m in mask.iter_mut().skip(i).take(every) {
+                    *m = here;
+                }
+                i += every;
+            }
+            let runs = intervals(&mask, xs);
+            for (xa, xb) in runs {
+                let (xa, xb) = if forward { (xa, xb) } else { (xb, xa) };
+                let zf = |x: f64, a: f64| py_max(level, cl(x, a));
+                // down from just above what stands there: the level above where a pass of it
+                // went, else the stock left
+                let i0 = xs.iter().position(|&x| (x - xa).abs() < 1e-9).unwrap_or(0);
+                // (what stands under the tool's width there: the stock left round it)
+                let wi = (TOOL_R_GUESS / 0.05).ceil() as usize;
+                let wk =
+                    ((TOOL_R_GUESS / level.max(0.5)).asin().to_degrees() / seg).ceil() as i64 + 1;
+                let mut stand = 0.0f64;
+                for i in i0.saturating_sub(wi)..(i0 + wi + 1).min(xs.len()) {
+                    for dk in -wk..=wk {
+                        let kk = (k as i64 + dk).rem_euclid(n_rev as i64) as usize;
+                        let t = if done_above[i][kk] {
+                            (level + op.step_down).min(st[i][kk])
+                        } else {
+                            st[i][kk]
+                        };
+                        stand = stand.max(t);
+                    }
+                }
+                let above = stand;
+                let z0 = zf(xa, a);
+                b.rapid_r(safe_r);
+                b.rapid(Some(xa), None, Some(a));
+                b.rapid_r(py_max(above + 0.5, z0 + 0.5).min(safe_r));
+                b.plunge(z0, feeds.1);
+                let n = ((xb - xa).abs() / 0.5).ceil().max(1.0) as usize;
+                for j in 1..=n {
+                    let x = xa + (xb - xa) * j as f64 / n as f64;
+                    let p0 = [b.x.unwrap_or(x), b.r.unwrap_or(z0), b.a];
+                    refine(b, &zf, p0, [x, zf(x, a), a], tol, 0, feeds);
+                }
+                b.rapid_r(safe_r);
+                forward = !forward;
+            }
+            for i in 0..xs.len() {
+                if mask[i] {
+                    done_above[i][k] = true;
+                }
+            }
+        }
+    }
+}
+
+/// Rest roughing along X: the least stock above the level and the part's allowance worth a
+/// pass (mm): more than the allowance the roughing before left and the in-process stock's own
+/// sampling (its rays a fifth of a mm apart).
+const REST_ALONG_MIN: f64 = 0.6;
+/// Rest roughing along X: how far round its pass a tool reaches (mm), for the stock it comes
+/// down over: as wide as the largest ball it is used with (3.175 mm).
+const TOOL_R_GUESS: f64 = 1.6;
 /// Rest roughing: the least stock above a level worth going round for (mm); less is the
 /// allowance the operations before left on the part.
 const REST_MIN: f64 = 0.25;
@@ -122,6 +237,32 @@ pub fn rotary_rough(
     // (Mar's knob4: a bar laid across A, its rough round the whole turn at every level, 4 h
     // of it in the air) where the tool meets no stock: crossed faster, at the air feed
     let air_feed = op.feed.max((5.0 * op.feed).min(AIR_FEED));
+    // (Mar's impeller: rest roughing in full turns, 2 h 23, the A axis the bottleneck) the
+    // rest along X at set angles: only where the stock is left
+    if let Some(st) = &rest_stock {
+        b.comment("--- rest roughing (along X) ---");
+        rest_along(
+            b,
+            op,
+            &xs,
+            seg,
+            &clg,
+            st,
+            &levels,
+            safe_r,
+            &cl,
+            tol,
+            feeds,
+            stock_near.expect("rest"),
+        );
+        return Ok(b.moves[first..]
+            .iter()
+            .filter_map(|m| match m {
+                Move::Cut { r, .. } | Move::Plunge { r, .. } => Some(*r),
+                _ => None,
+            })
+            .fold(f64::INFINITY, f64::min));
+    }
     let mut prev = stock_r;
     let mut direction = 1.0;
     b.comment("--- mesh roughing ---");
