@@ -554,6 +554,93 @@ fn indexed_stock(
 /// The rays of the 3D in-process stock of indexed roughing, this far apart (mm).
 const DEXEL_H: f64 = 0.2;
 
+/// The rays of the finer 3D stock a rapid the coarse one cannot tell from a graze is looked at
+/// on, round it only (mm).
+const DEXEL_FINE_H: f64 = 0.05;
+
+/// The rapids the radial map flags as through stock or grazing it, confirmed on the 3D stock
+/// (a tri-dexel of the bar cut by every move before them): through it (deeper than the radial
+/// sim's own [`sim::RAPID_DEPTH`]) still counted; into it by less, a graze, said as one; clear
+/// only where the tool is not into it by more than [`dexel::GRAZE`]. First on rays
+/// [`DEXEL_H`] apart, where through means deeper than that spacing (the rays are that far
+/// apart: a rapid within it of stock it only grazes reads as in it), and the ones in between
+/// on rays [`DEXEL_FINE_H`] apart round each.
+fn confirm_rapids_3d(
+    job: &Job,
+    tps: &[Toolpath],
+    programs: &mut [(String, sim::SimStats, sim::Deviation)],
+) {
+    use std::collections::HashSet;
+    let Some(last) = programs
+        .iter()
+        .rposition(|p| !p.1.rapid_hits.is_empty() || !p.1.rapid_grazes.is_empty())
+    else {
+        return;
+    };
+    let tool = |t: u32| tool_solid(job, t);
+    let segs: Vec<Vec<sim::Segment>> = tps
+        .iter()
+        .take(last + 1)
+        .map(|tp| sim::segments(std::slice::from_ref(tp)))
+        .collect();
+    let mut solid = dexel::Dexel::bar(job.stock.radius, job.stock.length, DEXEL_H);
+    // the ones into the coarse stock but not through it by its spacing
+    let mut unsure: Vec<(usize, usize)> = Vec::new();
+    for (k, sg) in segs.iter().enumerate() {
+        let r = dexel::replay(&mut solid, sg, &tool, 0.25, DEXEL_H);
+        let through: HashSet<usize> = r.rapid_hits.iter().map(|h| h.1).collect();
+        let touching: HashSet<usize> = r.rapid_grazes.iter().map(|h| h.1).collect();
+        let st = &mut programs[k].1;
+        let mut flagged = std::mem::take(&mut st.rapid_hits);
+        flagged.append(&mut st.rapid_grazes);
+        flagged.sort_unstable();
+        flagged.dedup();
+        for i in flagged {
+            if through.contains(&i) {
+                st.rapid_hits.push(i);
+            } else if touching.contains(&i) {
+                unsure.push((k, i));
+            }
+        }
+    }
+    // each on a fine stock round it, cut by every move before it
+    for (k, i) in unsure {
+        let Some(at) = segs[k].iter().position(|s| s.move_index == i && s.rapid) else {
+            continue;
+        };
+        let seg = &segs[k][at];
+        let Some(t) = seg.tool.and_then(tool) else {
+            continue;
+        };
+        let Some((lo, hi)) = dexel::sweep_box(seg, &t, 1.0) else {
+            continue;
+        };
+        let mut fine =
+            dexel::Dexel::bar_within(job.stock.radius, job.stock.length, DEXEL_FINE_H, lo, hi);
+        for sg in &segs[..k] {
+            dexel::replay(&mut fine, sg, &tool, 0.25, DEXEL_H);
+        }
+        dexel::replay(&mut fine, &segs[k][..at], &tool, 0.25, DEXEL_H);
+        let r = dexel::replay(
+            &mut fine,
+            std::slice::from_ref(seg),
+            &tool,
+            0.05,
+            sim::RAPID_DEPTH,
+        );
+        let st = &mut programs[k].1;
+        if !r.rapid_hits.is_empty() {
+            st.rapid_hits.push(i);
+        } else if !r.rapid_grazes.is_empty() {
+            st.rapid_grazes.push(i);
+        }
+    }
+    for p in programs.iter_mut() {
+        p.1.rapid_hits.sort_unstable();
+        p.1.rapid_grazes.sort_unstable();
+    }
+}
+
 /// A tool's solid for the 3D in-process stock (its flutes and shank: what may not pass
 /// through the stock).
 fn tool_solid(job: &Job, t: u32) -> Option<dexel::ToolSolid> {
@@ -2965,18 +3052,7 @@ pub fn simulate_job(
     // 9 in red. The rapids it flags are confirmed on the 3D stock, a tri-dexel of the bar cut
     // by every move before them, and only those it confirms are counted.)
     if job.carried.is_none() {
-        if let Some(last) = programs.iter().rposition(|p| !p.1.rapid_hits.is_empty()) {
-            let mut solid = dexel::Dexel::bar(job.stock.radius, job.stock.length, DEXEL_H);
-            for (k, tp) in tps.iter().enumerate().take(last + 1) {
-                let segs = sim::segments(std::slice::from_ref(tp));
-                // (clear of it by more than the dexel's own spacing: its rays are that far
-                // apart, and a rapid passing within it of stock it only grazes read as in it)
-                let r = dexel::replay(&mut solid, &segs, &|t| tool_solid(job, t), 0.25, DEXEL_H);
-                let through: std::collections::HashSet<usize> =
-                    r.rapid_hits.iter().map(|h| h.1).collect();
-                programs[k].1.rapid_hits.retain(|i| through.contains(i));
-            }
-        }
+        confirm_rapids_3d(job, tps, &mut programs);
     }
     Ok(JobSim {
         stock,

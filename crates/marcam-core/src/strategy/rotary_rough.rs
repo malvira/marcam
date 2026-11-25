@@ -79,6 +79,10 @@ fn bite_scale(bites: &[(f64, f64)], limit: f64, x: f64) -> f64 {
     ((limit / worst * 20.0).floor() / 20.0).clamp(BITE_SLOW, 1.0)
 }
 
+/// How far a rest pass's rapids keep clear of the stock left (mm): more than the 3D stock's
+/// rays are apart.
+const RAPID_CLEAR: f64 = 0.25;
+
 /// Rest roughing along X: at each level, passes along X at angles `op.step_x` mm apart at the
 /// level's radius, each only over the X runs where more than [`REST_MIN`] of the stock left
 /// (`st`, its top at `xs` x the `seg`-degree angles) stands above the level and the part
@@ -120,10 +124,17 @@ fn rest_along(
                 scale: &dyn Fn(f64) -> f64| {
         let zf = |x: f64, a: f64| py_max(level, cl(x, a));
         // the tool at the tip radius `r` there takes nothing
+        // (clear of it by [`RAPID_CLEAR`] all round: the impeller's rest came down by rapid
+        // onto a pass 0.02-0.05 mm into the stock beside it, where the tool "took nothing"
+        // up to 0.05 mm3)
         let free = |x: f64, aa: f64, r: f64| match live {
             Some((dx, t)) => {
-                let (tip, dir) = crate::dexel::pose(x, 0.0, r, aa);
-                dx.inside(t, tip, dir) <= 0.05
+                let fat = crate::dexel::ToolSolid {
+                    radius: t.radius + RAPID_CLEAR,
+                    ..*t
+                };
+                let (tip, dir) = crate::dexel::pose(x, 0.0, r - RAPID_CLEAR, aa);
+                dx.inside(&fat, tip, dir) <= 0.0
             }
             None => takes(x, x, aa, aa, r) <= 0.0,
         };
@@ -137,6 +148,16 @@ fn rest_along(
         }
         let z0 = zf(xa, a);
         let start = py_max(above + 0.5, z0 + 0.5).min(safe_r);
+        // the way down to it from the safe radius clear too (a blade leaning over the pass):
+        // by rapid only down to above the lowest place it is not, then at the feed
+        let mut blocked = None;
+        let mut r = start + 0.5;
+        while r < safe_r {
+            if !free(xa, a, r) {
+                blocked = Some(r);
+            }
+            r += 0.5;
+        }
         // (Mar's impeller: 18,000 rapids up to the safe radius and back between short passes,
         // 53 min) from the end of the pass before, near here: up to where the tool takes
         // nothing there and on the way, over at the feed, and down
@@ -174,7 +195,16 @@ fn rest_along(
             None => {
                 b.rapid_r(safe_r);
                 b.rapid(Some(xa), None, Some(a));
-                b.rapid_r(start);
+                match blocked {
+                    Some(rb) => {
+                        let over = (rb + 0.5).min(safe_r);
+                        if over < safe_r - 1e-9 {
+                            b.rapid_r(over);
+                        }
+                        b.plunge(start, feeds.1);
+                    }
+                    None => b.rapid_r(start),
+                }
                 start
             }
         };
@@ -756,5 +786,120 @@ mod tests {
             .collect();
         assert!(!slow.is_empty(), "nothing slower over the limit");
         assert!(slow.iter().all(|&f| f >= 300.0 - 1e-9), "{slow:?}");
+    }
+
+    /// The rapids of a rest pass keep clear of the stock the passes before left, beside the
+    /// pass as well as under it (Mar's impeller v4: its rest came down by rapid onto a pass
+    /// at X -26.05, A 205, 0.02-0.05 mm into the stock beside it, where the tool "took
+    /// nothing" up to 0.05 mm3): in a slot a few hundredths narrower than the tool, replayed on
+    /// rays 0.05 mm apart, none through the stock or grazing it.
+    #[test]
+    fn rest_rapids_keep_clear_of_the_stock_beside_the_pass() {
+        use crate::dexel::{pose, replay, Dexel, ToolSolid};
+        let tool = ToolSolid {
+            radius: 1.5875,
+            ball: true,
+            height: 20.0,
+        };
+        // the earlier operation: a slot along X at A 0, 3.1 mm wide (the ball 3.175), its
+        // floor 9.4 from the axis, in a bar 12 round
+        let slot = ToolSolid {
+            radius: 1.55,
+            ball: false,
+            height: 20.0,
+        };
+        let cut = |bar: &mut Dexel| {
+            for i in 0..=280 {
+                let (tip, dir) = pose(-17.0 + i as f64 * 0.05, 0.0, 9.4, 0.0);
+                bar.subtract(&slot, tip, dir);
+            }
+        };
+        let mut bar = Dexel::bar(12.0, 20.0, 0.2);
+        cut(&mut bar);
+        let cl = |_x: f64, _a: f64| 7.0;
+        let op = RotaryRough {
+            tool: 1,
+            leave_axial: 0.0,
+            x_range: [-15.0, -5.0],
+            step_down: 1.0,
+            step_x: 0.6,
+            leave_radial: 0.0,
+            sample_deg: 6.0,
+            tolerance: 0.01,
+            min_radius: 0.0,
+            feed: 500.0,
+            plunge_feed: 150.0,
+            ramp_angle: 30.0,
+            smoothing: None,
+            rest: true,
+            max_bite: Some(100.0),
+        };
+        let xs: Vec<f64> = (0..=200).map(|i| -15.0 + i as f64 * 0.05).collect();
+        let clg: Vec<Vec<f64>> = xs.iter().map(|_| vec![7.0; 60]).collect();
+        let takes = |x: f64, _: f64, a: f64, _: f64, r: f64| {
+            let (rr, least) = if r < 0.0 { (-r, 0.5) } else { (r, 0.05) };
+            let (tip, dir) = pose(x, 0.0, rr, a);
+            if bar.inside(&tool, tip, dir) > least {
+                rr
+            } else {
+                0.0
+            }
+        };
+        let mut live = bar.clone();
+        let mut b = Builder::new();
+        b.tool_change(1, 12000);
+        rest_along(
+            &mut b,
+            &op,
+            &xs,
+            6.0,
+            &clg,
+            &[],
+            &[9.0],
+            25.0,
+            &cl,
+            0.01,
+            (500.0, 150.0),
+            &takes,
+            Some(Bite {
+                stock: &mut live,
+                tool,
+                limit: 100.0,
+            }),
+        );
+        // (the first pass is the slot's, at A 0)
+        let first_down = b.moves.iter().find_map(|m| match *m {
+            Move::Rapid { r: Some(r), .. } if r < 24.0 => Some(r),
+            _ => None,
+        });
+        let tp = crate::toolpath::Toolpath {
+            name: "rest".into(),
+            title: "rest".into(),
+            tool: Some((1, "ball".into())),
+            notes: Vec::new(),
+            reset_a: true,
+            safe_r: 25.0,
+            moves: b.moves,
+            origin_comment: None,
+            plunge_limit: None,
+            ramp_angle: None,
+            post: None,
+        };
+        let mut fine = Dexel::bar(12.0, 20.0, 0.05);
+        cut(&mut fine);
+        let segs = crate::sim::segments(std::slice::from_ref(&tp));
+        let r = replay(
+            &mut fine,
+            &segs,
+            &|_| Some(tool),
+            0.1,
+            crate::sim::RAPID_DEPTH,
+        );
+        assert!(
+            r.rapid_hits.is_empty() && r.rapid_grazes.is_empty(),
+            "rapids into the stock: {:?}, grazing it: {:?} (the first down to R{first_down:?})",
+            r.rapid_hits,
+            r.rapid_grazes
+        );
     }
 }

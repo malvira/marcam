@@ -26,17 +26,20 @@ fn upright(x: f64, y: f64, z: f64, a: f64, feed: Option<f64>) -> Move {
 
 /// A slot cut down beside the axis (the tool 8 mm off it, its tip 3 mm up, along X from -20
 /// to -10): under the bar's stock that still stands over it seen from the axis. Then a rapid
-/// back along the slot (clear), and one along the bar where nothing was cut (through it).
-fn program(through: bool) -> Toolpath {
+/// to X `to` with the tool `dy` off the slot's line: back along the slot (clear), back along
+/// it but a few hundredths into its wall (a graze), into its wall by a tenth, or on along the
+/// bar where nothing was cut (through it).
+fn program(to: f64, dy: f64) -> Toolpath {
     let mut b = Builder::new();
     b.tool_change(1, 12000);
     b.moves.push(upright(-20.0, 8.0, 30.0, 0.0, None));
     b.moves.push(upright(-20.0, 8.0, 3.0, 0.0, Some(60.0)));
     b.moves.push(upright(-10.0, 8.0, 3.0, 0.0, Some(300.0)));
-    // the rapid: back along the slot, or on along the bar past it
-    let to = if through { -2.0 } else { -19.0 };
-    b.moves.push(upright(to, 8.0, 3.0, 0.0, None));
-    b.moves.push(upright(to, 8.0, 30.0, 0.0, None));
+    // (over to the rapid's line at feed: only the rapid along it is looked at)
+    b.moves
+        .push(upright(-10.0, 8.0 + dy, 3.0, 0.0, Some(300.0)));
+    b.moves.push(upright(to, 8.0 + dy, 3.0, 0.0, None));
+    b.moves.push(upright(to, 8.0 + dy, 30.0, 0.0, None));
     Toolpath {
         name: "p".into(),
         title: "p".into(),
@@ -68,20 +71,34 @@ fn a_rapid_in_a_slot_cut_from_the_side_is_clear_one_through_the_bar_is_not() {
             .len()
     };
     assert_eq!(
-        radial(&program(false)),
+        radial(&program(-19.0, 0.0)),
         1,
         "the radial map sees the slot's rapid in stock"
     );
-    assert_eq!(radial(&program(true)), 1);
-    // confirmed in 3D: the one in the slot is clear, the one through the bar is not
-    let hits = |tp: Toolpath| {
+    assert_eq!(radial(&program(-2.0, 0.0)), 1);
+    // confirmed in 3D: the one in the slot is clear, one a few hundredths into its wall a
+    // graze (said, in yellow, not counted as clear), one a tenth into it or on through the
+    // bar through stock
+    let sim = |tp: Toolpath| {
         let s = marcam::simulate_job(&job, &[tp], None, 0.1, 240, 0.02).unwrap();
-        s.programs[0].1.rapid_hits.len()
+        let st = &s.programs[0].1;
+        (st.rapid_hits.len(), st.rapid_grazes.len())
     };
     assert_eq!(
-        hits(program(false)),
-        0,
-        "the rapid back along the slot it cut"
+        sim(program(-19.0, 0.0)),
+        (0, 0),
+        "back along the slot it cut"
     );
-    assert_eq!(hits(program(true)), 1, "the rapid on through the bar");
+    assert_eq!(
+        sim(program(-19.0, 0.03)),
+        (0, 1),
+        "0.03 mm into the slot's wall"
+    );
+    assert_eq!(
+        sim(program(-19.0, -0.03)),
+        (0, 1),
+        "0.03 mm into its other wall"
+    );
+    assert_eq!(sim(program(-19.0, 0.12)), (1, 0), "0.12 mm into its wall");
+    assert_eq!(sim(program(-2.0, 0.0)).0, 1, "on through the bar");
 }

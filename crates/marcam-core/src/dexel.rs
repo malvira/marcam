@@ -166,12 +166,33 @@ impl ToolSolid {
 impl Dexel {
     /// A round bar of `radius` on the A axis, X from `-length` to 0, rays `h` apart.
     pub fn bar(radius: f64, length: f64, h: f64) -> Dexel {
-        let lo = [-length - h, -radius - h, -radius - h];
-        let n = [
+        Dexel::bar_within(
+            radius,
+            length,
+            h,
+            [f64::NEG_INFINITY; 3],
+            [f64::INFINITY; 3],
+        )
+    }
+
+    /// [`Dexel::bar`] with only the rays that pass through the box `lo`..`hi` (on the same
+    /// grid): what is in the box, for less.
+    pub fn bar_within(radius: f64, length: f64, h: f64, lo: [f64; 3], hi: [f64; 3]) -> Dexel {
+        let full = [-length - h, -radius - h, -radius - h];
+        let full_n = [
             ((length + 2.0 * h) / h).ceil() as usize + 1,
             ((2.0 * radius + 2.0 * h) / h).ceil() as usize + 1,
             ((2.0 * radius + 2.0 * h) / h).ceil() as usize + 1,
         ];
+        let skip = [0, 1, 2].map(|k| {
+            let s = ((lo[k] - full[k]) / h).floor().clamp(0.0, 1e9) as usize;
+            s.min(full_n[k] - 1)
+        });
+        let lo = [0, 1, 2].map(|k| full[k] + skip[k] as f64 * h);
+        let n = [0, 1, 2].map(|k| {
+            let want = (((hi[k] - lo[k]) / h).ceil().max(0.0) + 1.0).min(1e9) as usize;
+            want.clamp(1, full_n[k] - skip[k])
+        });
         let mut dx = Dexel {
             h,
             lo,
@@ -445,15 +466,66 @@ impl Dexel {
     }
 }
 
+/// A rapid into the stock by less than this (mm) is clear of it: the tool along a wall it cut,
+/// the stock's rays and the sampling of the cut leaving thousandths of it.
+pub const GRAZE: f64 = 0.01;
+
 /// What a replay of moves through the stock found.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Replay {
     /// Rapid moves that would pass through the stock (more than a trace): their move index
     /// and program.
     pub rapid_hits: Vec<(u16, usize)>,
+    /// Rapid moves not through it by the slack but into it by more than [`GRAZE`]: a graze.
+    pub rapid_grazes: Vec<(u16, usize)>,
     /// Per operation (its tag, as [`crate::sim::Segment::op`]): the biggest bite, stock taken
     /// per mm of travel (mm3/mm), and the move index where.
     pub worst_bite: Vec<(u16, f64, usize)>,
+}
+
+/// The tool's tip and direction a fraction `f` along a move from `from`.
+fn seg_at(seg: &crate::sim::Segment, from: [f64; 3], f: f64) -> ([f64; 3], [f64; 3]) {
+    let p = [0, 1, 2].map(|k| from[k] + (seg.to[k] - from[k]) * f);
+    match seg.index_a {
+        // (a pose that turns as it goes: A from where it started)
+        Some(a) => pose(
+            p[0],
+            p[1],
+            p[2],
+            seg.a_from.map_or(a, |a0| a0 + (a - a0) * f),
+        ),
+        None => pose(p[0], 0.0, p[1], p[2]),
+    }
+}
+
+/// The box round the tool `t` all along a move (sampled at most 0.25 mm apart), grown by
+/// `margin`.
+pub fn sweep_box(
+    seg: &crate::sim::Segment,
+    t: &ToolSolid,
+    margin: f64,
+) -> Option<([f64; 3], [f64; 3])> {
+    let from = seg.from?;
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    let (a, _) = seg_at(seg, from, 0.0);
+    let (b, _) = seg_at(seg, from, 1.0);
+    let chord = (0..3).map(|k| (b[k] - a[k]).powi(2)).sum::<f64>().sqrt();
+    let turn = match seg.index_a {
+        Some(a) => seg.a_from.map_or(0.0, |a0| (a - a0).abs()),
+        None => (seg.to[2] - from[2]).abs(),
+    };
+    let reach = from[1].abs().max(seg.to[1].abs()) + t.height + t.radius;
+    let n = ((chord.max(turn.to_radians() * reach) / 0.25).ceil() as usize).clamp(1, 100_000);
+    for i in 0..=n {
+        let (tip, dir) = seg_at(seg, from, i as f64 / n as f64);
+        let (l, h) = t.bounds(tip, dir);
+        for k in 0..3 {
+            lo[k] = lo[k].min(l[k] - margin);
+            hi[k] = hi[k].max(h[k] + margin);
+        }
+    }
+    Some((lo, hi))
 }
 
 /// Replays `segs` (in order) through the stock: feed moves take the tool out of it, sampled
@@ -473,19 +545,7 @@ pub fn replay(
             continue;
         };
         // tip and direction at a parameter along the move
-        let at = |f: f64| -> ([f64; 3], [f64; 3]) {
-            let p = [0, 1, 2].map(|k| from[k] + (seg.to[k] - from[k]) * f);
-            match seg.index_a {
-                // (a pose that turns as it goes: A from where it started)
-                Some(a) => pose(
-                    p[0],
-                    p[1],
-                    p[2],
-                    seg.a_from.map_or(a, |a0| a0 + (a - a0) * f),
-                ),
-                None => pose(p[0], 0.0, p[1], p[2]),
-            }
-        };
+        let at = |f: f64| seg_at(seg, from, f);
         // its length as the tool's tip travels (the arc at its radius for turns)
         let len = match seg.index_a {
             Some(_) => (0..3)
@@ -503,21 +563,26 @@ pub fn replay(
         let n = ((len / step).ceil() as usize).max(1);
         let d = len / n as f64;
         if seg.rapid {
-            let thin = ToolSolid {
-                radius: (t.radius - slack).max(0.01),
-                ..t
+            // (the tool thinned by `by` and lifted as much: in the stock deeper than that)
+            let into = |by: f64| {
+                let thin = ToolSolid {
+                    radius: (t.radius - by).max(0.01),
+                    ..t
+                };
+                (0..=n).any(|i| {
+                    let (tip, dir) = at(i as f64 / n as f64);
+                    let tip = [
+                        tip[0] + dir[0] * by,
+                        tip[1] + dir[1] * by,
+                        tip[2] + dir[2] * by,
+                    ];
+                    dx.inside(&thin, tip, dir) > 1e-3
+                })
             };
-            let hit = (0..=n).any(|i| {
-                let (tip, dir) = at(i as f64 / n as f64);
-                let tip = [
-                    tip[0] + dir[0] * slack,
-                    tip[1] + dir[1] * slack,
-                    tip[2] + dir[2] * slack,
-                ];
-                dx.inside(&thin, tip, dir) > 1e-3
-            });
-            if hit {
+            if into(slack) {
                 out.rapid_hits.push((seg.program, seg.move_index));
+            } else if slack > GRAZE && into(GRAZE) {
+                out.rapid_grazes.push((seg.program, seg.move_index));
             }
             last = Some(at(1.0).0);
             continue;

@@ -1193,7 +1193,7 @@ fn stamp(
 
 /// How much of the stock a rapid move must take off (mm) to count as through it; less (a
 /// graze, or the sampling's trace where a cut ended) is said as a warning.
-const RAPID_DEPTH: f64 = 0.05;
+pub(crate) const RAPID_DEPTH: f64 = 0.05;
 
 /// Comparison of a simulated stock with the finished part.
 #[derive(Debug, Clone, PartialEq)]
