@@ -1588,21 +1588,21 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             (Operation::RotaryRough(o), _) => {
                 // (Mar's impeller: the hub under the blades, which no index of the roughing
                 // reached) rest roughing: the bar as the operations before left it, simulated
-                let rest_bar = o.rest.then(|| {
-                    let mut map = indexed_bar(job, &ctx.prior);
-                    let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
-                    let tp = bar_toolpath(job, &b.moves);
-                    for seg in sim::segments(std::slice::from_ref(&tp)) {
-                        let cut = seg.tool.and_then(cutter_of);
-                        sim::apply_segment(
-                            &mut map,
-                            &seg,
-                            cut.as_ref(),
-                            indexed_step(cut.as_ref()),
-                        );
-                    }
-                    map
-                });
+                // (in 3D: the radial map kept what the indexed roughing took from the side,
+                // and the rest went round air for 4 h)
+                let rest3d = if o.rest {
+                    indexed_dexel(job, &ctx.prior).map(|mut dx| {
+                        let segs: Vec<sim::Segment> = sim::segments(&[bar_toolpath(job, &b.moves)])
+                            .into_iter()
+                            .filter(|s| !s.rapid)
+                            .collect();
+                        dexel::replay(&mut dx, &segs, &|t| tool_solid(job, t), 0.25, 0.0);
+                        dx
+                    })
+                } else {
+                    None
+                };
+                let rest_bar: Option<sim::RadialMap> = None;
                 let mesh = ctx.surface(&prog.name)?;
                 let c = grown_for(cutter.expect("set above"), o.leave_axial, &prog.name)?;
                 let dc = DropCutter::new(mesh, c);
@@ -1653,9 +1653,34 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         }
                     }
                 }
+                // (rest roughing in 3D: the stock's top round the axis at each X, a quarter mm
+                // apart, from 36 angles)
+                let rest_tops: Option<(f64, Vec<f64>)> = rest3d.as_ref().map(|dx| {
+                    let (x0, x1) = (
+                        o.x_range[0].min(o.x_range[1]) - tr,
+                        o.x_range[0].max(o.x_range[1]) + tr,
+                    );
+                    let n = ((x1 - x0) / 0.25).ceil() as usize + 1;
+                    let tops = (0..n)
+                        .map(|i| {
+                            let x = x0 + i as f64 * 0.25;
+                            (0..36)
+                                .map(|k| {
+                                    dx.radial_top(x, k as f64 * 10.0, job.stock.radius + 0.5, 0.1)
+                                })
+                                .fold(0.0f64, f64::max)
+                        })
+                        .collect();
+                    (x0, tops)
+                });
                 let stock_at = |x: f64| {
                     if !on_bar(x) {
                         return 0.0;
+                    }
+                    if let Some((x0, t)) = &rest_tops {
+                        let i = (((x - x0) / 0.25).round().max(0.0) as usize).min(t.len() - 1);
+                        let j = (i + 1).min(t.len() - 1);
+                        return t[i].max(t[j]);
                     }
                     match (column, &tops) {
                         (Some(m), Some(t)) => {
@@ -1671,7 +1696,25 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 };
                 // (a carried piece is not round about the axis: where round a level there is
                 // none of it, under the tool's width) the highest of it in a window
+                // (rest roughing in 3D: at the stock's radius, its top along the ray the tool
+                // meets at that angle; lower, whether the tool's end there takes any of it)
+                let near_tool = tool_solid(job, o.tool).map(|t| dexel::ToolSolid {
+                    height: 2.0 * t.radius + o.step_down,
+                    ..t
+                });
                 let stock_near = |x0: f64, x1: f64, a0: f64, a1: f64, r: f64| -> f64 {
+                    if let (Some(dx), Some(t)) = (rest3d.as_ref(), near_tool) {
+                        if r >= job.stock.radius - 1e-9 {
+                            return dx.radial_top(x0, 90.0 - a0, job.stock.radius + 0.5, 0.1);
+                        }
+                        let any = [(x0, a0), (x1, a1), (0.5 * (x0 + x1), 0.5 * (a0 + a1))]
+                            .iter()
+                            .any(|&(x, a)| {
+                                let (tip, dir) = dexel::pose(x, 0.0, r, a);
+                                dx.inside(&t, tip, dir) > 1e-3
+                            });
+                        return if any { r } else { 0.0 };
+                    }
                     let Some(m) = column else {
                         return job.stock.radius;
                     };
@@ -1708,7 +1751,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     safe_r,
                     o,
                     Some(&stock_at as &dyn Fn(f64) -> f64),
-                    column.map(|_| &stock_near as strategy::StockNear),
+                    (column.is_some() || rest3d.is_some())
+                        .then_some(&stock_near as strategy::StockNear),
                 )
                 .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
