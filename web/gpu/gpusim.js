@@ -238,7 +238,7 @@ export class GpuStock {
     return this.read(this.keys, lo * this.cols * 4, (hi - lo + 1) * this.cols * 4);
   }
 
-  /** Per segment: 1 if it was a rapid that cut material. */
+  /** Per segment: 2 if it was a rapid through the stock, 1 one that grazed it. */
   readHits() {
     return this.read(this.hits, 0, Math.max(1, this.segments) * 4);
   }
@@ -273,9 +273,13 @@ export async function simulateOnGpu(gpu, open, stats) {
       gs.seek(b);
       const keys = await gs.readRows(0, gs.rows - 1);
       const hits = await gs.readHits();
-      let rapid = 0;
-      for (let s = a; s < b; s++) rapid += hits[s] ? 1 : 0;
-      const st = await stats({ rapid_hits: rapid }, new Uint8Array(keys.buffer));
+      // (2: through the stock; 1: a graze only, said as a warning)
+      let rapid = 0, graze = 0;
+      for (let s = a; s < b; s++) {
+        if (hits[s] >= 2) rapid++;
+        else if (hits[s] === 1) graze++;
+      }
+      const st = await stats({ rapid_hits: rapid, rapid_grazes: graze }, new Uint8Array(keys.buffer));
       const { h } = gs.decode(keys);
       stocks.push({ name: open.programs[p], samples: gs.segStart[b] - gs.segStart[a], ...st, [gs.kind === "xyz" ? "z" : "r"]: h });
     }

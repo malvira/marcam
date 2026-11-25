@@ -438,6 +438,9 @@ pub struct SimStats {
     pub cells_cut: usize,
     /// Rapid moves that would have removed material (crashes), with the move index.
     pub rapid_hits: Vec<usize>,
+    /// Rapid moves that would have taken off a trace of material only (under
+    /// [`RAPID_DEPTH`]): said as a warning, to look at.
+    pub rapid_grazes: Vec<usize>,
 }
 
 /// One straight tool move in a job, in order: what playback steps through.
@@ -663,6 +666,7 @@ pub fn apply_banded(
                 let q = p[i];
                 e.cells_cut += q.cells_cut;
                 e.rapid_hit |= q.rapid_hit;
+                e.rapid_graze |= q.rapid_graze;
                 if let Some((lo, hi)) = q.rows {
                     e.rows = Some(e.rows.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
                 }
@@ -679,6 +683,8 @@ pub struct SegmentEffect {
     pub cells_cut: usize,
     /// A rapid that removed material.
     pub rapid_hit: bool,
+    /// A rapid that removed a trace only (under [`RAPID_DEPTH`]).
+    pub rapid_graze: bool,
     /// Rows (x cells) touched: `(first, last)`.
     pub rows: Option<(usize, usize)>,
 }
@@ -741,7 +747,7 @@ fn sample_rotary(
     let n = ((len / step).ceil() as usize).max(1);
     for k in (if first { 0 } else { 1 })..=n {
         let t = k as f64 / n as f64;
-        let (cut, rows) = stamp(
+        let (cut, rows, deep) = stamp(
             stock,
             c,
             x0 + (x1 - x0) * t,
@@ -753,8 +759,11 @@ fn sample_rotary(
         if let Some((lo, hi)) = rows {
             e.rows = Some(e.rows.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
         }
-        if seg.rapid && cut > 0 {
-            e.rapid_hit = true;
+        // (a rapid: through the stock only where it would take off more than a trace, not
+        // the sampling's last thousandths where a cut ended)
+        if seg.rapid {
+            e.rapid_hit |= deep > 0;
+            e.rapid_graze |= cut > 0;
         } else {
             e.cells_cut += cut;
         }
@@ -784,13 +793,14 @@ fn apply_indexed(
         for k in 0..=n {
             let t = k as f64 / n as f64;
             let at = [0, 1, 2].map(|i| p[i] + (q[i] - p[i]) * t);
-            let (cut, rows) = stamp_indexed(stock, c, at, a, seg.op);
+            let (cut, rows, deep) = stamp_indexed(stock, c, at, a, seg.op);
             e.samples += 1;
             if let Some((lo, hi)) = rows {
                 e.rows = Some(e.rows.map_or((lo, hi), |(u, v)| (u.min(lo), v.max(hi))));
             }
-            if seg.rapid && cut > 0 {
-                e.rapid_hit = true;
+            if seg.rapid {
+                e.rapid_hit |= deep > 0;
+                e.rapid_graze |= cut > 0;
             } else {
                 e.cells_cut += cut;
             }
@@ -809,14 +819,14 @@ fn stamp_indexed(
     tip: [f64; 3],
     a_deg: f64,
     tag: u16,
-) -> (usize, Option<(usize, usize)>) {
+) -> (usize, Option<(usize, usize)>, usize) {
     let g = stock.g;
     let rad = c.radius();
     let lim = rad * (1.0 - 1e-9);
     let i0 = (((tip[0] - rad - g.x0) / g.dx - 0.5).ceil()).max(0.0) as usize;
     let i1 = ((tip[0] + rad - g.x0) / g.dx - 0.5).floor();
     if i1 < 0.0 || i0 >= g.nx {
-        return (0, None);
+        return (0, None, 0);
     }
     // only this band's rows
     let (i0, i1) = (
@@ -826,7 +836,7 @@ fn stamp_indexed(
             .min(stock.row1.saturating_sub(1)),
     );
     if stock.row1 == 0 || i0 > i1 {
-        return (0, None);
+        return (0, None, 0);
     }
     let dphi = TAU / g.na as f64;
     let a = a_deg.to_radians();
@@ -845,6 +855,7 @@ fn stamp_indexed(
     };
     let na = g.na as i64;
     let mut changed = 0;
+    let mut deep = 0;
     let mut rows: Option<(usize, usize)> = None;
     for i in i0..=i1 {
         let u = g.x(i) - tip[0];
@@ -883,6 +894,9 @@ fn stamp_indexed(
                 if cur - rho > 1e-3 {
                     changed += 1;
                 }
+                if cur - rho > RAPID_DEPTH {
+                    deep += 1;
+                }
                 if cur - rho > 1e-6 {
                     stock.op[k] = tag;
                     rows = Some(rows.map_or((i, i), |(p, q)| (p.min(i), q.max(i))));
@@ -891,7 +905,7 @@ fn stamp_indexed(
             }
         }
     }
-    (changed, rows)
+    (changed, rows, deep)
 }
 
 /// Remove material along a toolpath. `cutter_for(tool)` gives each tool's shape; moves made
@@ -925,6 +939,8 @@ pub fn simulate_threads(
         st.cells_cut += e.cells_cut;
         if e.rapid_hit {
             st.rapid_hits.push(seg.move_index);
+        } else if e.rapid_graze {
+            st.rapid_grazes.push(seg.move_index);
         }
     }
     st
@@ -1083,14 +1099,14 @@ fn stamp(
     r: f64,
     a_deg: f64,
     tag: u16,
-) -> (usize, Option<(usize, usize)>) {
+) -> (usize, Option<(usize, usize)>, usize) {
     let g = stock.g;
     let rad = c.radius();
     let phi_t = (PI / 2.0 - a_deg.to_radians()).rem_euclid(TAU);
     let i0 = (((x - rad - g.x0) / g.dx - 0.5).ceil()).max(0.0) as usize;
     let i1 = ((x + rad - g.x0) / g.dx - 0.5).floor();
     if i1 < 0.0 || i0 >= g.nx {
-        return (0, None);
+        return (0, None, 0);
     }
     // only this band's rows
     let (i0, i1) = (
@@ -1100,7 +1116,7 @@ fn stamp(
             .min(stock.row1.saturating_sub(1)),
     );
     if stock.row1 == 0 || i0 > i1 {
-        return (0, None);
+        return (0, None, 0);
     }
     let mut rows: Option<(usize, usize)> = None;
     let half = if r <= rad {
@@ -1112,6 +1128,7 @@ fn stamp(
     let j0 = ((phi_t - half) / dphi - 0.5).ceil() as i64;
     let j1 = ((phi_t + half) / dphi - 0.5).floor() as i64;
     let mut changed = 0;
+    let mut deep = 0;
     for i in i0..=i1 {
         let u = g.x(i) - x;
         // touching the tool's edge is not cutting (cells exactly at a wall)
@@ -1151,6 +1168,9 @@ fn stamp(
                     if cur - rho > 1e-3 {
                         changed += 1;
                     }
+                    if cur - rho > RAPID_DEPTH {
+                        deep += 1;
+                    }
                     if cur - rho > 1e-6 {
                         stock.op[k] = tag;
                         rows = Some(rows.map_or((i, i), |(a, b)| (a.min(i), b.max(i))));
@@ -1160,8 +1180,12 @@ fn stamp(
             }
         }
     }
-    (changed, rows)
+    (changed, rows, deep)
 }
+
+/// How much of the stock a rapid move must take off (mm) to count as through it; less (a
+/// graze, or the sampling's trace where a cut ended) is said as a warning.
+const RAPID_DEPTH: f64 = 0.05;
 
 /// Comparison of a simulated stock with the finished part.
 #[derive(Debug, Clone, PartialEq)]
@@ -1413,7 +1437,7 @@ mod tests {
         let mut s = RadialMap::filled(g, 10.0);
         let c = Cutter::Flat { radius: 1.0 };
         // tool at A0 sits over part angle 90 deg
-        let (n, rows) = stamp(&mut s.band(), &c, 0.0, 8.0, 0.0, 7);
+        let (n, rows, _) = stamp(&mut s.band(), &c, 0.0, 8.0, 0.0, 7);
         assert!(rows.is_some());
         assert!(s.op.contains(&7));
         assert!(n > 0);
@@ -1522,6 +1546,63 @@ mod tests {
         };
         let st = simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1);
         assert_eq!(st.rapid_hits, vec![2]);
+    }
+
+    /// A rapid along X skimming the stock mid-move: 0.03 mm into it is a graze (said as a
+    /// warning), 0.2 mm is through it; just clear of it, neither.
+    #[test]
+    fn a_rapid_grazing_the_stock_mid_move_is_still_said() {
+        let run = |r: f64| {
+            let g = Grid::new(-6.0, 6.0, 0.1, 180);
+            // the bar's top at 10 only in the middle (X -1..1): the rapid meets it mid-move
+            let mut s = RadialMap::filled(g, 9.0);
+            for i in 0..g.nx {
+                if g.x(i).abs() < 1.0 {
+                    for j in 0..g.na {
+                        s.r[i * g.na + j] = 10.0;
+                    }
+                }
+            }
+            s.top = 10.0;
+            let tp = Toolpath {
+                name: "t".into(),
+                title: "t".into(),
+                tool: None,
+                notes: vec![],
+                reset_a: false,
+                safe_r: 12.0,
+                moves: vec![
+                    Move::ToolChange { tool: 1, rpm: 1 },
+                    Move::Rapid {
+                        x: Some(-5.0),
+                        r: Some(r),
+                        a: Some(90.0),
+                    },
+                    Move::Rapid {
+                        x: Some(5.0),
+                        r: None,
+                        a: None,
+                    },
+                ],
+                origin_comment: None,
+                plunge_limit: None,
+                ramp_angle: None,
+                post: None,
+            };
+            simulate(&mut s, &tp, &|_| Some(Cutter::Flat { radius: 1.0 }), 0.1)
+        };
+        let graze = run(9.97);
+        assert!(
+            graze.rapid_hits.is_empty() && graze.rapid_grazes == vec![2],
+            "{graze:?}"
+        );
+        let through = run(9.8);
+        assert_eq!(through.rapid_hits, vec![2], "{through:?}");
+        let clear = run(10.05);
+        assert!(
+            clear.rapid_hits.is_empty() && clear.rapid_grazes.is_empty(),
+            "{clear:?}"
+        );
     }
 }
 

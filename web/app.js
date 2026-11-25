@@ -1245,6 +1245,7 @@ function selectTab(i) {
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}
     ${sim && !sim.samples ? `<div class="small muted">Not simulated: its tool has no full shape (a V-bit needs a diameter). The stock shown is from the programs before it.</div>` : ""}
     ${sim && sim.hidden ? `<div class="small muted" id="simHidden">${sim.hidden} operation${sim.hidden === 1 ? "" : "s"} hidden: not simulated (their material is left)</div>` : ""}
+    ${sim && sim.rapid_grazes ? `<div class="limits small" id="rapidGrazes">Warning: ${sim.rapid_grazes} rapid(s) graze the stock (under 0.05 mm of it): look at where the rapids pass close to the stock</div>` : ""}
     ${sim && noPart() ? `<div class="small">Simulated stock: no model in this setup to compare it with; ${sim.rapid_hits} rapid(s) through stock</div>` : ""}
     ${sim && !noPart() ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;
   $("gcode").value = p.gcode;

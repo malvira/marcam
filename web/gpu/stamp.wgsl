@@ -69,10 +69,14 @@ fn key(h: f32, tag: u32) -> u32 {
     return (u32(max(h, 0.0) * 1000.0) << 8u) | (tag & 255u);
 }
 
-/// Keep the lower key; a rapid that lowers a cell by more than 1 µm flags its segment.
+/// Keep the lower key; a rapid that lowers a cell flags its segment: 2 by more than 50 µm
+/// (through the stock), 1 by more than 1 µm only (a graze, said as a warning:
+/// sim::RAPID_DEPTH).
 fn cut(k: u32, nk: u32, p: Pos) {
     let old = atomicMin(&keys[k], nk);
-    if (p.rapid == 1u && (old >> 8u) > (nk >> 8u) + 1u) {
+    if (p.rapid == 1u && (old >> 8u) > (nk >> 8u) + 50u) {
+        atomicMax(&hits[p.seg], 2u);
+    } else if (p.rapid == 1u && (old >> 8u) > (nk >> 8u) + 1u) {
         atomicMax(&hits[p.seg], 1u);
     }
 }

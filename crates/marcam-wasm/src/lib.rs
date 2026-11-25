@@ -712,6 +712,7 @@ pub mod api {
                 "samples": st.samples,
                 "cells_cut": st.cells_cut,
                 "rapid_hits": st.rapid_hits.len(),
+                "rapid_grazes": st.rapid_grazes.len(),
                 "max_left": dev.max_left,
                 "mean_left": dev.mean_left,
                 "max_gouge": dev.max_gouge,
@@ -1258,6 +1259,7 @@ pub mod api {
                 "samples": st.samples,
                 "cells_cut": st.cells_cut,
                 "rapid_hits": st.rapid_hits.len(),
+                "rapid_grazes": st.rapid_grazes.len(),
                 "max_left": dev.max_left,
                 "mean_left": dev.mean_left,
                 "max_gouge": dev.max_gouge,
@@ -1601,6 +1603,7 @@ pub mod api {
                 "gouge_cells": dev.gouge_cells,
                 "feature_cells": dev.feature_cells,
                 "rapid_hits": opts["rapid_hits"].as_u64().unwrap_or(0),
+                "rapid_grazes": opts["rapid_grazes"].as_u64().unwrap_or(0),
             })
         })
     }
