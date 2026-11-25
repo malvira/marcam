@@ -998,7 +998,7 @@ pub fn accepts(op_type: &str) -> &'static [&'static str] {
             &["surface", "flat_face", "pocket", "hole", "side_face"]
         }
         "rotary_finish" | "rotary_parallel" => &["cylindrical_band", "revolved_band", "surface"],
-        "rotary_flowline" => &["cylindrical_band", "revolved_band", "surface"],
+        "rotary_flowline" | "rotary_wall" => &["cylindrical_band", "revolved_band", "surface"],
         "rotary_rough" | "rotary_turning" => &["cylindrical_band", "revolved_band", "surface"],
         "helical_knurl" => &["revolved_band", "cylindrical_band"],
         "flank_chamfer" => &["circular_edge"],

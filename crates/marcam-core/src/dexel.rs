@@ -401,6 +401,37 @@ impl Dexel {
         Some((top, top))
     }
 
+    /// The stock's surface as the rays see it: each interval's two ends, in the part frame.
+    /// (Intervals less than a ray's spacing apart count as one: a tool grazing a ray leaves a
+    /// hairline gap in it, not a surface; a check of what is left read those inside the part
+    /// as stock left on it.)
+    pub fn surface_points(&self) -> Vec<[f64; 3]> {
+        let mut out = Vec::new();
+        for d in 0..3 {
+            let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+            for (k, ray) in self.rays[d].iter().enumerate() {
+                let (ia, ib) = (k / self.n[b], k % self.n[b]);
+                let mut merged: Vec<[f32; 2]> = Vec::with_capacity(ray.len());
+                for &[s0, s1] in ray {
+                    match merged.last_mut() {
+                        Some(m) if (s0 - m[1]) < self.h as f32 => m[1] = m[1].max(s1),
+                        _ => merged.push([s0, s1]),
+                    }
+                }
+                for &[s0, s1] in &merged {
+                    for s in [s0, s1] {
+                        let mut p = [0.0; 3];
+                        p[a] = self.coord(a, ia);
+                        p[b] = self.coord(b, ib);
+                        p[d] = s as f64;
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Whether a point is in the stock (the X-family ray nearest it).
     pub fn solid_at(&self, p: [f64; 3]) -> bool {
         let iy = ((p[1] - self.lo[1]) / self.h).round();

@@ -78,6 +78,12 @@ USAGE:
       (default fine: 0.05 mm x 720 cells around; coarse 0.2 x 180, normal
       0.1 x 240, ultra 0.025 x 1440), compare with the part, and write a
       <program>_stock.png per program. Fails on rapids through stock or gouges.
+  marcam left3d <project> [--h <mm>] [--reach <mm>] [--json]
+      What is left on the finished part in 3D: every program replayed through a
+      tri-dexel stock (--h, default 0.1 mm), each point of its surface measured
+      against the part's mesh (a rotary job). Inside corners a ball of --reach
+      (default: the job's smallest ball's radius) cannot reach are counted apart.
+      Exits 1 when more than 0.05 mm is left anywhere it can reach.
   marcam mesh-info <file.stl|file.3mf>
       Print triangle count, bounding box and largest radius about X.
 ";
@@ -676,6 +682,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         }
         "mesh-info" => cmd_mesh_info(&parse(rest, &[])?),
         "simulate" => cmd_simulate(&parse(rest, &["out", "dx", "na", "sim-res", "gpu?"])?),
+        "left3d" => cmd_left3d(&parse(rest, &["h", "reach", "json?"])?),
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
@@ -978,6 +985,67 @@ fn plan_job_with_mesh(
     let mesh = load_mesh(job, dir).map_err(|e| e.to_string())?;
     let tps = plan_with_mesh(job, mesh.as_ref()).map_err(|e| e.to_string())?;
     Ok((tps, mesh))
+}
+
+fn cmd_left3d(o: &Opts) -> Result<ExitCode, String> {
+    let job_path = o.one_input()?;
+    let job = load_job(job_path)?;
+    let (tps, mesh) = plan_job_with_mesh(&job, job_path)?;
+    let mesh = mesh.ok_or("left3d needs the part's mesh")?;
+    let h: f64 = o
+        .flag("h")
+        .map_or(Ok(0.1), |v| v.parse().map_err(|_| format!("--h: {v}")))?;
+    let ball = job
+        .tools
+        .iter()
+        .filter_map(|t| match t.shape {
+            marcam::job::ToolShape::Ball { diameter } => Some(diameter / 2.0),
+            _ => None,
+        })
+        .fold(f64::INFINITY, f64::min);
+    let reach: f64 = o
+        .flag("reach")
+        .map_or(Ok(if ball.is_finite() { ball } else { 1.5875 }), |v| {
+            v.parse().map_err(|_| format!("--reach: {v}"))
+        })?;
+    let l = marcam::left3d::left_in_3d(&job, &tps, &mesh, h, reach);
+    if o.has("json") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&l).map_err(|e| e.to_string())?
+        );
+    } else {
+        println!(
+            "stock surface points on the part's length: {} (grid {h} mm)",
+            l.points
+        );
+        println!(
+            "left where the tool reaches: max {:.3} mm{}; points over 0.05 / 0.1 / 0.2 / 0.5 mm: {} / {} / {} / {}",
+            l.max_left,
+            l.max_at
+                .map(|a| format!(" at X {:.2}, radius {:.2}, part angle {:.1}", a[0], a[1], a[2]))
+                .unwrap_or_default(),
+            l.over[0],
+            l.over[1],
+            l.over[2],
+            l.over[3]
+        );
+        println!(
+            "inside corners a {reach} mm ball cannot reach: {} points over 0.05 mm, deepest {:.3} mm",
+            l.unreachable, l.max_unreachable
+        );
+        for w in l.worst.iter().take(10) {
+            println!(
+                "  {:.3} mm at X {:.2}, radius {:.2}, part angle {:.1}",
+                w[0], w[1], w[2], w[3]
+            );
+        }
+    }
+    Ok(if l.max_left > 0.05 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 fn cmd_simulate(o: &Opts) -> Result<ExitCode, String> {

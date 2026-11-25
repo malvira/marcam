@@ -21,6 +21,7 @@ pub mod geometry;
 pub mod gpu_input;
 pub mod job;
 pub mod kinematics;
+pub mod left3d;
 pub mod machine;
 pub mod mesh;
 pub mod numeric;
@@ -121,6 +122,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::RotaryFinish(_) => "rotary_finish",
         Operation::RotaryParallel(_) => "rotary_parallel",
         Operation::RotaryFlowline(_) => "rotary_flowline",
+        Operation::RotaryWall(_) => "rotary_wall",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
@@ -1325,6 +1327,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 Operation::RotaryFinish(_)
                 | Operation::RotaryParallel(_)
                 | Operation::RotaryFlowline(_)
+                | Operation::RotaryWall(_)
                 | Operation::RotaryRough(_)
                 | Operation::Raster3d(_)
                 | Operation::Rough3d(_)
@@ -1564,6 +1567,14 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 o.x -= o.leave_axial;
                 let r_min = strategy::parting(&mut b, t, job.stock.radius, safe_r, &o)
                     .map_err(|e| Error::Invalid(format!("program {}: parting: {e}", prog.name)))?;
+                check_flute(tool, job.stock.radius, r_min)?;
+            }
+            (Operation::RotaryWall(o), _) => {
+                let mesh = ctx.surface(&prog.name)?;
+                let c = grown_for(cutter.expect("set above"), o.leave_axial, &prog.name)?;
+                let dc = DropCutter::new(mesh, c);
+                let r_min = strategy::rotary_wall(&mut b, &dc, safe_r, o)
+                    .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
             }
             (Operation::RotaryFlowline(o), _) => {
@@ -2653,6 +2664,7 @@ pub fn gouge_check(
                         | Operation::RotaryFinish(_)
                         | Operation::RotaryParallel(_)
                         | Operation::RotaryFlowline(_)
+                        | Operation::RotaryWall(_)
                         | Operation::RotaryRough(_)
                 )
             })

@@ -692,6 +692,9 @@ pub enum Operation {
     /// Rotary flowline (morph): passes following the channels between the part's walls,
     /// A and X together.
     RotaryFlowline(RotaryFlowline),
+    /// Rotary wall finishing: waterlines on the walls radiating from the axis, A and X
+    /// together along their twist.
+    RotaryWall(RotaryWall),
     RotaryRough(RotaryRough),
     Face(Face),
     Pocket(Pocket),
@@ -1394,6 +1397,7 @@ impl Operation {
             Operation::FlankChamfer(o) => Some(o.ramp_angle),
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => Some(o.ramp_angle),
             Operation::RotaryFlowline(o) => Some(o.ramp_angle),
+            Operation::RotaryWall(o) => Some(o.ramp_angle),
             Operation::RotaryRough(o) => Some(o.ramp_angle),
             Operation::Bore(o) => Some(o.ramp_angle),
             Operation::Parting(o) => Some(o.ramp_angle),
@@ -1410,6 +1414,7 @@ impl Operation {
             Operation::FlankChamfer(o) => (o.smoothing, true),
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => (o.smoothing, true),
             Operation::RotaryFlowline(o) => (o.smoothing, true),
+            Operation::RotaryWall(o) => (o.smoothing, true),
             Operation::RotaryRough(o) => (o.smoothing, false),
             Operation::Raster3d(o) => (o.smoothing, true),
             Operation::Rough3d(o) => (o.smoothing, false),
@@ -1429,6 +1434,7 @@ impl Operation {
         match self {
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => o.tool,
             Operation::RotaryFlowline(o) => o.tool,
+            Operation::RotaryWall(o) => o.tool,
             Operation::RotaryRough(o) => o.tool,
             Operation::Face(o) => o.tool,
             Operation::Pocket(o) => o.tool,
@@ -1719,6 +1725,39 @@ pub struct RotaryFlowline {
     /// wall's top to the next (the passes climbing the walls along their twist).
     #[serde(default)]
     pub span: FlowSpan,
+    /// Radial stock to leave (mm).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_radial: f64,
+    /// Largest allowed dip of a straight move below the surface (mm).
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    /// The tip never goes below this radius (mm, >= 0).
+    #[serde(default)]
+    pub min_radius: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
+}
+
+/// Rotary wall finishing: finish the walls that radiate from the axis (an impeller's blade
+/// faces) with waterlines on them, `step_down` apart in radius, A and X together along their
+/// twist, both faces of every wall.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RotaryWall {
+    pub tool: u32,
+    /// Stock to leave on the faces across the bar, along X (mm).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_axial: f64,
+    /// Axial extent `[start, end]` of the tool tip.
+    pub x_range: [f64; 2],
+    /// Radial distance between waterlines (mm).
+    pub step_down: f64,
+    /// Point spacing along X (mm).
+    #[serde(default = "default_flow_sample")]
+    pub sample_mm: f64,
     /// Radial stock to leave (mm).
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub leave_radial: f64,

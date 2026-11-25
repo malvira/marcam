@@ -12,6 +12,7 @@ mod rotary_finish;
 pub mod rotary_flowline;
 mod rotary_rough;
 mod rotary_turning;
+mod rotary_wall;
 pub mod three_axis;
 
 pub use flank_chamfer::flank_chamfer;
@@ -21,6 +22,7 @@ pub use rotary_finish::{rotary_finish, rotary_finish_on};
 pub use rotary_flowline::rotary_flowline;
 pub use rotary_rough::{rotary_rough, Bite, StockNear};
 pub use rotary_turning::rotary_turning;
+pub use rotary_wall::rotary_wall;
 
 use crate::toolpath::Builder;
 

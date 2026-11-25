@@ -29,11 +29,20 @@ pub struct Channel {
 /// The stretches round the axis (degrees) where `row` (the surface at angles `SEARCH_DEG`
 /// apart) is within `wall` of its lowest: circular, as `[start, end]` with end > start.
 fn low_runs(row: &[f64], wall: f64) -> Vec<[f64; 2]> {
-    let n = row.len();
     let floor = row.iter().copied().fold(f64::INFINITY, f64::min);
-    let low: Vec<bool> = row.iter().map(|&r| r <= floor + wall).collect();
+    runs_below(row, floor + wall)
+}
+
+/// The stretches round the axis (degrees) where `row` is at or below `thr` (none: all
+/// above; `[0, 360]`: all below).
+fn runs_below(row: &[f64], thr: f64) -> Vec<[f64; 2]> {
+    let n = row.len();
+    let low: Vec<bool> = row.iter().map(|&r| r <= thr).collect();
     if low.iter().all(|&l| l) {
         return vec![[0.0, 360.0]];
+    }
+    if !low.iter().any(|&l| l) {
+        return Vec::new();
     }
     // start from a high sample so no run wraps over the start
     let s = low.iter().position(|&l| !l).expect("one is high");
@@ -46,7 +55,6 @@ fn low_runs(row: &[f64], wall: f64) -> Vec<[f64; 2]> {
             (false, Some(b)) => {
                 // (each end where the surface crosses the wall's foot, between the samples:
                 // a pass following a twisting channel turns smoothly)
-                let thr = floor + wall;
                 let cross = |lo_i: usize, hi_i: usize| {
                     let (p, q) = (row[lo_i % n], row[hi_i % n]);
                     if (q - p).abs() < 1e-12 {
@@ -94,19 +102,35 @@ fn sectors(runs: &[[f64; 2]]) -> Vec<[f64; 2]> {
 /// The channels over `xs`: each X's low stretches (with `sector`, each widened to the walls'
 /// tops either side), joined to the last X's by overlap.
 pub fn channels(cl: &dyn Fn(f64, f64) -> f64, xs: &[f64], wall: f64, sector: bool) -> Vec<Channel> {
+    channels_by(cl, xs, sector, &|row| low_runs(row, wall))
+}
+
+/// The channels at one radius `level` over `xs`: where the tool's tip at that radius stands
+/// clear of the part, between the walls that rise above it. Their edges are where the tool
+/// at that radius touches a wall (a waterline on it).
+pub fn channels_at(cl: &dyn Fn(f64, f64) -> f64, xs: &[f64], level: f64) -> Vec<Channel> {
+    channels_by(cl, xs, false, &|row| runs_below(row, level))
+}
+
+fn channels_by(
+    cl: &dyn Fn(f64, f64) -> f64,
+    xs: &[f64],
+    sector: bool,
+    runs_of: &dyn Fn(&[f64]) -> Vec<[f64; 2]>,
+) -> Vec<Channel> {
     let n = (360.0 / SEARCH_DEG).round() as usize;
     let mut done: Vec<Channel> = Vec::new();
     let mut open: Vec<Channel> = Vec::new();
     for &x in xs {
         let row: Vec<f64> = (0..n).map(|k| cl(x, k as f64 * SEARCH_DEG)).collect();
-        let mut runs = low_runs(&row, wall);
+        let mut runs = runs_of(&row);
         if sector && !(runs.len() == 1 && runs[0][1] - runs[0][0] >= 360.0 - 1e-9) {
             runs.sort_by(|p, q| p[0].total_cmp(&q[0]));
             runs = sectors(&runs);
         }
-        // (no walls at this X, low all round: no channel; the impeller's hub in front of its
-        // blades)
-        if runs.len() == 1 && runs[0][1] - runs[0][0] >= 360.0 - 1e-9 {
+        // (no walls at this X, low all round, or none low: no channel; the impeller's hub in
+        // front of its blades)
+        if runs.is_empty() || (runs.len() == 1 && runs[0][1] - runs[0][0] >= 360.0 - 1e-9) {
             done.append(&mut open);
             continue;
         }
