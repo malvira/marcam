@@ -1861,6 +1861,35 @@ try {
       op?.type === "face" && op.clear_to_stock === true && op.outward_only === true && at.every((n) => n >= 4) && (!res.gouge || /deepest 0\.0+ mm/.test(res.gouge)) && !res.red.length && !res.error, JSON.stringify({ op: op && { clear: op.clear_to_stock, outward: op.outward_only, depth: op.depth }, at, res }));
     await clean("facing to the stock's edge");
   }
+  // ---------------------------------------------------------------- roughing round a flat piece
+  // (Mar's knob4: 4 h of a rough round a carried piece mostly in the air) the plate cut in the
+  // vise goes on the 4th axis (a flat piece, 40 x 10 across); Rotary roughing (mesh) added, its
+  // depth kept to the flutes (min radius typed); where the tool meets none of the piece round a
+  // level it goes faster: its G-code at a feed above its own, planned clean, its time shown
+  {
+    const pickSel = (id, v) => read(`(() => { const s = document.getElementById('${id}'); s.value = [...s.options].find((o) => o.value === '${v}')?.value ?? ''; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()`);
+    await pickSel("treeAddKind", "rotary");
+    await pickSel("treeAddFrom", "carry");
+    await click("#treeAddSetup");
+    await settled();
+    await pickSel("treeAddType", "rotary_rough");
+    await click("#treeAdd");
+    const lib = await waitFor(() => where("dialog[open] .tp-row", "3\.175"), "the library", 15000).catch(() => null);
+    if (lib) await click("dialog[open] .tp-row", "3\.175");
+    await waitFor(() => where("#opForm [name=min_radius]"), "the roughing's form", 60000);
+    await settled();
+    await click("#opForm [name=min_radius]");
+    await key("a", 2);
+    for (const ch of "10") await type(ch);
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await settled();
+    const rr = await read(`(() => { const vis = ${VISIBLE}; const st = window.__marcam.state; const s = st.tree.doc.setups.find((x) => x.id === st.tree.setup); const op = s.operations.find((o) => o.type === 'rotary_rough'); const g = document.getElementById('gcode').value; const fs = [...g.matchAll(/F(\\d+(?:\\.\\d+)?)/g)].map((m) => +m[1]); const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { feed: op?.feed, fast: fs.filter((f) => f > (op?.feed || 1e9) * 1.01 && f <= 2000).length, feeds: fs.length, time: t.filter((x) => /^Estimated time: /.test(x)).sort((a, b) => a.length - b.length)[0] || '', tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    await shot("rough_flat_piece");
+    check("rotary roughing round a flat carried piece: planned clean, its time shown, the air round it crossed at a feed above its own (in its G-code)",
+      rr.fast > 20 && rr.feeds > rr.fast && /Estimated time: .*\d/.test(rr.time) && rr.tabs.some((x) => /OK/.test(x)) && !rr.error, JSON.stringify(rr));
+    await clean("roughing round a flat piece");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")
