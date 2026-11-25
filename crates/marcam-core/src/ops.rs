@@ -1790,7 +1790,28 @@ mod tests {
                     assert!(f <= 0.75 * 4000.0, "{}: {k} {f}", t.kind);
                 }
             }
-            // and it plans on the knob setup
+            // and it plans on the knob setup (a custom toolpath once given its program: a
+            // helix on the bar, or a slot on the vise)
+            let mut v = v.clone();
+            if t.kind == "custom" {
+                v["gcode"] = json!(if three {
+                    "G0 X10 Y10 Z5
+G1 Z-0.5 F60
+G1 X20 F300
+G1 Y15
+G1 X10
+G1 Y10
+G0 Z5
+"
+                } else {
+                    "G0 X-5 Z16 A0
+G1 Z11.8 F60
+G1 X-15 A720 F300
+G1 X-16 A900
+G0 Z16
+"
+                });
+            }
             let op: Operation = serde_json::from_value(v.clone()).unwrap();
             let mut one = job.clone();
             one.programs = vec![crate::job::Program {
@@ -1802,7 +1823,9 @@ mod tests {
             }];
             let tps = crate::plan_with_mesh(&one, three.then_some(&dome))
                 .unwrap_or_else(|e| panic!("{}: {e}", t.kind));
-            assert!(tps[0].moves.len() > 10, "{}", t.kind);
+            // (a custom toolpath: the few moves of the program given above)
+            let least = if t.kind == "custom" { 4 } else { 10 };
+            assert!(tps[0].moves.len() > least, "{}", t.kind);
         }
         // defaults follow the context: the knob's own values come out for the knob
         let cx = DefaultsContext {
