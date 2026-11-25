@@ -428,3 +428,110 @@ pub fn rotary_rough(
         })
         .fold(f64::INFINITY, f64::min))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// (Mar's impeller) a pass's ramp in from above that crosses a blade's wall: the ball's
+    /// path rises 10 mm in its radius, over the wall's edge, between two of the ramp's
+    /// points; no move may go into it.
+    #[test]
+    fn rest_ramp_into_a_wall_follows_it() {
+        let (edge, rb) = (-37.45 + 1.5875, 1.5875);
+        let wall = |x: f64| {
+            if x >= edge {
+                16.0
+            } else if x > edge - rb {
+                (16.0 - rb + (rb * rb - (x - edge) * (x - edge)).sqrt()).max(6.0)
+            } else {
+                6.0
+            }
+        };
+        let cl = |x: f64, _a: f64| wall(x);
+        let op = RotaryRough {
+            tool: 1,
+            leave_axial: 0.0,
+            x_range: [-40.0, -30.0],
+            step_down: 1.0,
+            step_x: 3.0,
+            leave_radial: 0.0,
+            sample_deg: 30.0,
+            tolerance: 0.01,
+            min_radius: 0.0,
+            feed: 500.0,
+            plunge_feed: 150.0,
+            ramp_angle: 2.0,
+            smoothing: None,
+            rest: true,
+        };
+        let xs: Vec<f64> = (0..=200).map(|i| -40.0 + i as f64 * 0.05).collect();
+        let seg = 30.0;
+        let clg: Vec<Vec<f64>> = xs.iter().map(|&x| vec![wall(x); 12]).collect();
+        // stock up to radius 9 everywhere over the part
+        let takes =
+            |_: f64, _: f64, _: f64, _: f64, r: f64| if r.abs() < 9.0 { r.abs() } else { 0.0 };
+        let mut b = Builder::new();
+        rest_along(
+            &mut b,
+            &op,
+            &xs,
+            seg,
+            &clg,
+            &[],
+            &[8.0],
+            25.0,
+            &cl,
+            0.01,
+            (500.0, 150.0),
+            &takes,
+        );
+        let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0);
+        let mut cuts = 0;
+        for m in &b.moves {
+            match *m {
+                Move::Rapid {
+                    x: nx,
+                    r: nr,
+                    a: na,
+                } => {
+                    x = nx.or(x);
+                    r = nr.or(r);
+                    a = na.unwrap_or(a);
+                }
+                Move::Plunge { r: nr, .. } => r = Some(nr),
+                Move::Cut {
+                    x: nx,
+                    r: nr,
+                    a: na,
+                    ..
+                } => {
+                    if let (Some(x0), Some(r0)) = (x, r) {
+                        cuts += 1;
+                        for k in 0..=20 {
+                            let t = k as f64 / 20.0;
+                            let (xi, ri) = (x0 + (nx - x0) * t, r0 + (nr - r0) * t);
+                            // (as the gouge check measures: below the part, and that far
+                            // along X from where the tool clears it)
+                            let deficit = wall(xi) - ri;
+                            let along = (0..=200)
+                                .map(|s| s as f64 * 0.001)
+                                .find(|d| wall(xi - d) <= ri || wall(xi + d) <= ri)
+                                .unwrap_or(0.2);
+                            assert!(
+                                deficit.min(along) < 0.02,
+                                "into the wall: X{xi:.3} R{ri:.3}, the part at {:.3} (from X{x0:.3} R{r0:.3} to X{nx:.3} R{nr:.3})",
+                                wall(xi)
+                            );
+                        }
+                    }
+                    x = Some(nx);
+                    r = Some(nr);
+                    a = na;
+                }
+                _ => {}
+            }
+        }
+        assert!(cuts > 10, "{cuts} cuts");
+    }
+}
