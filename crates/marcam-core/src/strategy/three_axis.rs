@@ -2414,9 +2414,19 @@ pub fn adaptive_rough(
         if crate::budget::over() {
             break;
         }
-        let allowed: Vec<bool> = surf.iter().map(|&s| s <= z + 1e-9).collect();
         // (material in this level's layer: above it and not all of it below)
         let layer = op.step_down.max(d * 0.05);
+        // (the overhang fixture past the part's end: the tool came along a level into stock
+        // standing 11 mm above it, where no level above had been able to reach: a slot as
+        // deep as its flutes) the tool stands only where nothing under it stands more than a
+        // layer above the level
+        let tall: Vec<bool> = mat_top.iter().map(|&t| t > z + layer + 0.05).collect();
+        let near_tall = crate::strategy::adaptive::distance(&g, &tall);
+        let allowed: Vec<bool> = surf
+            .iter()
+            .zip(&near_tall)
+            .map(|(&s, &dt)| s <= z + 1e-9 && dt > r)
+            .collect();
         let stock_here: Vec<bool> = top_at
             .iter()
             .zip(&bot_at)

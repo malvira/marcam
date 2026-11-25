@@ -272,3 +272,53 @@ fn the_overhang_fixture_replayed_through_the_dexel_stock() {
         eprintln!("op tag {op}: worst bite {bite:.2} mm3/mm at move {at} ({:.1}x a normal step of {normal:.2})", bite / normal);
     }
 }
+
+/// A project file's plans replayed through the dexel stock (a bar on the 4th axis): its
+/// rapids through the stock and each operation's biggest bite. Run by hand:
+/// MARCAM_REPLAY=<folder with project.toml> cargo test --release --test rapid_voxels replay_a_project -- --ignored --nocapture
+#[test]
+#[ignore]
+fn replay_a_project() {
+    use marcam::dexel::{replay, Dexel, ToolSolid};
+    let dir = PathBuf::from(std::env::var("MARCAM_REPLAY").expect("MARCAM_REPLAY"));
+    let text = std::fs::read_to_string(dir.join("project.toml")).unwrap();
+    let (p, _) = marcam::project::Project::from_json_any(&text).unwrap();
+    let v = serde_json::to_value(&p).unwrap();
+    let js = jobs(&v, &dir);
+    let job = &js[0].1;
+    let mesh = marcam::load_mesh(job, &dir).unwrap();
+    let tps = marcam::plan_with_mesh(job, mesh.as_ref()).unwrap();
+    let mut dx = Dexel::bar(job.stock.radius, job.stock.length, 0.1);
+    let tool_for = |t: u32| {
+        job.tool(t).map(|d| match d.shape {
+            marcam::job::ToolShape::Ball { diameter } => ToolSolid {
+                radius: diameter / 2.0,
+                ball: true,
+                height: 22.0,
+            },
+            marcam::job::ToolShape::Flat { diameter } => ToolSolid {
+                radius: diameter / 2.0,
+                ball: false,
+                height: 17.0,
+            },
+            _ => ToolSolid {
+                radius: 1.5875,
+                ball: false,
+                height: 17.0,
+            },
+        })
+    };
+    for (k, tp) in tps.iter().enumerate() {
+        let segs = marcam::sim::segments(std::slice::from_ref(tp));
+        let r = replay(&mut dx, &segs, &tool_for, 0.25, 0.15);
+        eprintln!(
+            "program {} ({}): {} rapid(s) through the stock",
+            k,
+            tp.name,
+            r.rapid_hits.len()
+        );
+        for (op, bite, at) in &r.worst_bite {
+            eprintln!("  op tag {op}: worst bite {bite:.2} mm3/mm at move {at}");
+        }
+    }
+}

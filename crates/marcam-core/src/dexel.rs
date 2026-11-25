@@ -321,6 +321,42 @@ impl Dexel {
         0.0
     }
 
+    /// Seen from above with the part turned to A `a_deg` (the tool along machine +Z): the
+    /// stock's top and bottom on the vertical line through machine (x, y), between `z_lo`
+    /// and `z_hi`, sampled every `step` mm; None where the line misses it.
+    pub fn column(
+        &self,
+        x: f64,
+        y: f64,
+        a_deg: f64,
+        z_lo: f64,
+        z_hi: f64,
+        step: f64,
+    ) -> Option<(f64, f64)> {
+        let at = |z: f64| {
+            let (p, _) = pose(x, y, z, a_deg);
+            self.solid_at(p)
+        };
+        let mut top = None;
+        let mut z = z_hi;
+        while z >= z_lo {
+            if at(z) {
+                top = Some(z);
+                break;
+            }
+            z -= step;
+        }
+        let top = top?;
+        let mut z = z_lo;
+        while z <= top {
+            if at(z) {
+                return Some((top, z));
+            }
+            z += step;
+        }
+        Some((top, top))
+    }
+
     /// Whether a point is in the stock (the X-family ray nearest it).
     pub fn solid_at(&self, p: [f64; 3]) -> bool {
         let iy = ((p[1] - self.lo[1]) / self.h).round();

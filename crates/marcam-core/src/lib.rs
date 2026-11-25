@@ -547,6 +547,80 @@ fn indexed_stock(
     Ok((hm, bots))
 }
 
+/// The rays of the 3D in-process stock of indexed roughing, this far apart (mm).
+const DEXEL_H: f64 = 0.2;
+
+/// A tool's solid for the 3D in-process stock (its flutes and shank: what may not pass
+/// through the stock).
+fn tool_solid(job: &Job, t: u32) -> Option<dexel::ToolSolid> {
+    let c = job.tool(t).and_then(|d| cutter_for(t, d.shape).ok())?;
+    Some(match c {
+        Cutter::Ball { radius } => dexel::ToolSolid {
+            radius,
+            ball: true,
+            height: 40.0,
+        },
+        c => dexel::ToolSolid {
+            radius: c.radius(),
+            ball: false,
+            height: 40.0,
+        },
+    })
+}
+
+/// (Mar's impeller; the overhang fixture's wall, 16 normal steps' worth) the bar as the
+/// programs before left it in 3D: what an indexed roughing's angles see from above. The
+/// radial map cannot hold what an angle before took from the side, under what stays above
+/// it. None: a piece carried in (the radial map, as before).
+fn indexed_dexel(job: &Job, prior: &[Vec<Move>]) -> Option<dexel::Dexel> {
+    if job.carried.is_some() {
+        return None;
+    }
+    let mut dx = dexel::Dexel::bar(job.stock.radius, job.stock.length, DEXEL_H);
+    let tps: Vec<Toolpath> = prior.iter().map(|m| bar_toolpath(job, m)).collect();
+    let segs: Vec<sim::Segment> = sim::segments(&tps)
+        .into_iter()
+        .filter(|s| !s.rapid)
+        .collect();
+    dexel::replay(&mut dx, &segs, &|t| tool_solid(job, t), 0.25, 0.0);
+    Some(dx)
+}
+
+/// [`indexed_stock`] from the 3D in-process stock.
+fn indexed_stock_dexel(
+    job: &Job,
+    dx: &mut dexel::Dexel,
+    applied: &mut usize,
+    before: &[Move],
+    sb: &job::StockBox,
+    cell: f64,
+    index: f64,
+) -> (sim3::Heightmap3, Vec<f64>) {
+    let segs: Vec<sim::Segment> = sim::segments(&[bar_toolpath(job, before)])
+        .into_iter()
+        .filter(|s| s.move_index >= *applied && !s.rapid)
+        .collect();
+    dexel::replay(dx, &segs, &|t| tool_solid(job, t), 0.25, 0.0);
+    *applied = before.len();
+    let mut hm = sim3::Heightmap3::new(sb, cell);
+    let mut bots = vec![hm.bottom; hm.nx * hm.ny];
+    for j in 0..hm.ny {
+        for i in 0..hm.nx {
+            let (x, y) = hm.centre(i, j);
+            let k = j * hm.nx + i;
+            match dx.column(x, y, index, sb.min[2], sb.max[2], 0.5 * DEXEL_H) {
+                Some((t, u)) => {
+                    hm.z[k] = t.min(sb.max[2]);
+                    bots[k] = u;
+                }
+                None => hm.z[k] = sb.min[2],
+            }
+        }
+    }
+    hm.top = hm.z.iter().copied().fold(sb.min[2], f64::max);
+    (hm, bots)
+}
+
 /// `n` A angles equally apart, the first where the part is lowest under the upright tool
 /// (between its blades): the part turned to each candidate as the indexed roughing turns
 /// it, the tool dropped on it along X at Y0; the angle whose `n` turns, and the turns a
@@ -1679,6 +1753,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 // (the bar as cut so far: the programs before simulated once, then each
                 // angle's moves on top as they come)
                 let mut bar = indexed_bar(job, &ctx.prior);
+                let mut stock3d = indexed_dexel(job, &ctx.prior);
                 let mut applied = 0;
                 let n_angles = angles.len();
                 for (k_angle, index) in angles.into_iter().enumerate() {
@@ -1694,9 +1769,15 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     let turned = mesh.rotated_x(index);
                     let dc = strategy::three_axis::DropCutter3::new(&turned, cg);
                     let cell = (c.radius() / 4.0).clamp(0.1, 0.5);
-                    let (hm, bots) =
-                        indexed_stock(job, &mut bar, &mut applied, &b.moves, &sb, cell, index)
-                            .map_err(err)?;
+                    let (hm, bots) = match stock3d.as_mut() {
+                        Some(dx) => {
+                            indexed_stock_dexel(job, dx, &mut applied, &b.moves, &sb, cell, index)
+                        }
+                        None => {
+                            indexed_stock(job, &mut bar, &mut applied, &b.moves, &sb, cell, index)
+                                .map_err(err)?
+                        }
+                    };
                     let bottom = |x: f64, y: f64| {
                         let i = (((x - hm.x0) / hm.cell).max(0.0) as usize).min(hm.nx - 1);
                         let j = (((y - hm.y0) / hm.cell).max(0.0) as usize).min(hm.ny - 1);
