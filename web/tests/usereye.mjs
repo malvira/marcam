@@ -1601,6 +1601,7 @@ try {
     // its own colour (none hidden by it being selected)
     // (a copy of the holes, as a person makes one with its ⧉ button: a new operation, selected;
     // drawn over its original, so one of the two colours is seen there)
+    const idsBefore = await read("window.__marcam.state.tree.doc.setups[0].operations.map((o) => o.id)");
     await click('#tree .tree-op[data-op="op3"] [data-act="dup"]');
     await waitFor(() => read("window.__marcam.state.tree.doc.setups[0].operations.length === " + (normal.length + 1)), "the copy added", 60000).catch(() => {});
     await settled();
@@ -1608,7 +1609,8 @@ try {
     await sleep(1500);
     const added = await coloursSeen("added");
     const tools = await read("[...new Set(window.__marcam.state.tree.doc.setups[0].operations.map((o) => o.tool))].length");
-    const copyOf = await read("(() => { const ops = window.__marcam.state.tree.doc.setups[0].operations; return ops[ops.length - 1].id; })()");
+    // (the copy goes in after its original: the id that is new)
+    const copyOf = await read(`window.__marcam.state.tree.doc.setups[0].operations.map((o) => o.id).find((id) => !${JSON.stringify(idsBefore)}.includes(id))`);
     const seenOf = (id) => added.find((o) => o.id === id)?.seen ?? 0;
     check("the view: a new operation added and selected, ops on several tools: every operation's path still in its own colour at its path (the copy's over its original)",
       tools >= 2 && added.length === normal.length + 1 && added.filter((o) => o.at >= 3 && o.id !== "op3" && o.id !== copyOf).every((o) => o.seen >= 0.5) && Math.max(seenOf("op3"), seenOf(copyOf)) >= 0.5, JSON.stringify({ tools, copyOf, added }));

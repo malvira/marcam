@@ -62,7 +62,8 @@ const INSTALL = `(() => {
     const machStock = mach && m.stockMesh && shown(m.stockMesh) ? 1 : 0;
     const simFinal = mach && g.simFinal ? drawables(g.simFinal) : 0;
     const toolModel = mach && g.toolModel && shown(g.toolModel) ? drawables(g.toolModel) : 0;
-    const strays = v.scene.children.filter((c) => !Object.values(g).includes(c) && c.visible && !c.isLight && !c.isCamera && c.type !== 'AxesHelper' && drawables(c)).length;
+    // (live picking: the part drawn for picking, while an operation that takes picks is selected)
+    const strays = v.scene.children.filter((c) => !Object.values(g).includes(c) && c !== window.__marcam.state.tree?.pickMesh && c.visible && !c.isLight && !c.isCamera && c.type !== 'AxesHelper' && drawables(c)).length;
     return {
       mach, legacy, shared, machPaths, machStock, simFinal, toolModel, strays,
       part: legacy.part > 0 || shared > 0,
