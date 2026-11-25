@@ -1,6 +1,7 @@
 // (Mar) Handles in the 3D view to move the part in its stock, or a carried piece (the cut
 // result of an earlier setup, its part with it) in the vise or the chuck: arrows along X, Y
-// and Z and rings about them, shown while the setup's Stock or Part is selected in the tree.
+// and Z and rings about them, shown only while the setup's Part is selected in the tree (Mar:
+// "only visible in the part modification screen"), hidden everywhere else.
 // Moves snap to 0.1 mm and turns to 90° (Shift: 1°), with the value shown beside the handle;
 // each drag is one edit (Undo takes it back), planned again as any edit is. On the rotary
 // axis only the turn about X and the slide along X apply.
@@ -151,17 +152,14 @@ export function setupHandles({ state, edit }) {
   function target() {
     const t = state.tree;
     const v = state.three;
-    // (Mar) a setup, its Stock or its Part selected (a setup selected or just added: its
-    // handles on show, nothing to find first)
-    if (!t?.doc || !v || v.failed || t.selected || t.picking || !(t.focus === "stock" || t.focus === "part" || t.focus === "setup" || !t.focus)) return null;
+    // (Mar: "the part modification gizmo should only be visible in the part modification
+    // screen"): the Part selected, nothing else (a carried piece's too: its part goes with it)
+    if (!t?.doc || !v || v.failed || t.selected || t.picking || t.focus !== "part") return null;
     const s = t.doc.setups?.find((x) => x.id === t.setup);
     if (!s) return null;
     const rotary = kindOf(s) !== "vise";
     if (carriedFrom(t.doc, s)) return { kind: "carried", rotary, setup: s };
-    // (the Part selected: its part; the Stock: its part too, moved in it, unless there is
-    // no part to move: then the stock itself)
     if (meshModelOf(t.doc, s)) return { kind: "part", rotary, setup: s };
-    if (s.stock && s.stock.shape !== "from_previous") return { kind: "stock", rotary, setup: s };
     return null;
   }
 

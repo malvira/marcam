@@ -98,7 +98,7 @@ export function stockPane(doc, s, esc, opts = {}) {
   let html = `<div id="stockPane" class="stock-pane" data-setup="${esc(s.id)}"><div class="tree-outname">Stock <span class="muted">${esc(s.name || s.id)}</span></div>
     <label>Stock <select id="stType" aria-label="The stock's type">${opts1.join("")}</select></label>`;
   if (from) {
-    html += `<div class="muted small">What ${esc(from.name || from.id)} left, cut, as a mesh: move and turn it in the ${vise ? "vise" : "chuck"} with the handles in the 3D view (its part goes with it).</div>`;
+    html += `<div class="muted small">What ${esc(from.name || from.id)} left, cut, as a mesh: move and turn it in the ${vise ? "vise" : "chuck"} with the handles in the 3D view, under its Part (its part goes with it).</div>`;
     // (Mar: "I can't get it to orient correctly ... the UI makes all of this very unclear") on
     // the 4th axis: which of the setup before's axes runs along A, end for end, a quarter turn
     // about A, and how far it sticks out of the chuck, in plain words, as buttons
@@ -188,7 +188,7 @@ export function partPane(doc, s, esc, opts = {}) {
       <span class="muted">Rotation</span>
       ${["X", "Y", "Z"].map((a) => `<button type="button" data-preset="turn" data-axis="${a}" data-deg="-90" title="A quarter turn back about ${a}">${a} −90°</button><button type="button" data-preset="turn" data-axis="${a}" data-deg="90" title="A quarter turn about ${a}">${a} +90°</button>`).join("")}
       <button type="button" data-preset="unturn" title="Not turned at all">0°</button></div>` : presets;
-  if (from) return html + `<div class="muted small">It goes with the stock ${esc(from.name || from.id)} left: move and turn them together with the Stock's handles.</div>${carriedPresets}</div>`;
+  if (from) return html + `<div class="muted small">It goes with the stock ${esc(from.name || from.id)} left: move and turn them together with the handles in the 3D view.</div>${carriedPresets}</div>`;
   if (!m) return html + `<div class="muted small">${s.part?.length ? "A revolved profile stays on the rotary axis." : "This setup has no model: its operations work on the stock."}</div></div>`;
   const t = m.translate || [0, 0, 0], r = m.rotate || [0, 0, 0];
   const rotary = kindOf(s) !== "vise";

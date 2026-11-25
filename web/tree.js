@@ -309,7 +309,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     } else if (t.focus === "fixture" && !t.selected) {
       html += fixturePane(t.doc, s, esc);
     } else if (!t.selected) {
-      // (Mar) everything about the setup here: its stock (with handles in the view), its
+      // (Mar) everything about the setup here: its stock, its
       // type, machine, holding, material, G-code options and work zero (applied as changed)
       const m = meshModelOf(t.doc, s);
       html += `<div class="tree-outname">${esc(s.name || s.id)} <span class="muted">setup</span></div>
@@ -342,7 +342,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         } catch {}
       }
     }
-    // (the 3D view's handles: on what the selected Stock or Part moves, or hidden)
+    // (the 3D view's handles: on the selected Part, or hidden)
     window.__marcam.handles?.refresh?.();
   }
 
@@ -367,8 +367,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     return got || null;
   }
 
-  /** (Mar) The setup's Stock and Part in the tree: selecting one shows its pane, and the
-   *  handles in the 3D view. */
+  /** (Mar) The setup's Stock and Part in the tree: selecting one shows its pane (the Part,
+   *  the handles in the 3D view too). */
   function setupStockRows(x) {
     const from = carriedFrom(t.doc, x);
     const st = from ? `what ${from.name || from.id} left` : describeStock(x.stock, x.holding?.chuck);
@@ -376,7 +376,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const part = from ? "with the stock" : m ? m.file : x.part?.length ? "revolved profile" : "no model";
     const row = (act, name, what, title) =>
       `<div class="tree-stock ${t.focus === act && !t.selected ? "sel" : ""}" data-node="${act}"><span class="tree-label" data-act="${act}" title="${esc(title)}">${name} <span class="muted">${esc(what)}</span></span></div>`;
-    return row("stock", "Stock", st, "The stock: its type and sizes (and handles to move it, carried)") + row("part", "Part", part, "Where the part sits in the stock (handles in the 3D view)") + row("fixture", "Fixture", FIXTURES[fixtureOf(x)], "What holds the stock: its preset and sizes (drawn, and the tool checked against it)");
+    return row("stock", "Stock", st, "The stock: its type and sizes") + row("part", "Part", part, "Where the part sits in the stock (handles in the 3D view)") + row("fixture", "Fixture", FIXTURES[fixtureOf(x)], "What holds the stock: its preset and sizes (drawn, and the tool checked against it)");
   }
 
   /** (Mar: "a way in 4th to center up a part") The part on the rotary axis placed in one edit:

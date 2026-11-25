@@ -3421,17 +3421,18 @@ try {
     check("a round bar standing up in the vise (Stock: Round bar, Axis Z): the block round it as tall as the bar",
       bar.stock.shape === "cylinder" && bar.holding.along === "z" && Math.abs(bframe.max[2] - bframe.min[2] - bar.stock.length) < 1e-6 && Math.abs(bframe.max[0] - 2 * bar.stock.radius) < 1e-6,
       `${JSON.stringify(bar.stock)} along ${bar.holding.along}; box ${JSON.stringify(bframe)}`);
-    // the knob's cut result in a vise: stood on end by the Stock's Y ring (stock and all)
+    // the knob's cut result in a vise: stood on end by its Y ring (stock and all)
     await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
     await settle(1500);
     await addSetup("vise", "carry");
-    await js("document.querySelector('#tree [data-act=stock]').click(); true");
+    // (its handles under its Part: Mar, only in the part modification screen)
+    await js("document.querySelector('#tree [data-act=part]').click(); true");
     await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible && window.__marcam.handles.target()?.kind === 'carried'"), "the carried piece's handles", 60000);
     const stood = await drag("rotate", "Y", -220, 160, 90);
     const ks = (await job()).setups[1];
     const kframe = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${ks.id}' }).then((r) => r.result.stock_box)`);
     await shot("42c_knob_stood");
-    check("the knob's cut result in a vise stood on end by the Stock's Y ring: turned 90° (stock and part together), the block round it 100 tall",
+    check("the knob's cut result in a vise stood on end by its Y ring: turned 90° (stock and part together), the block round it 100 tall",
       /Y: -?90\.00/.test(stood) && Math.abs(Math.abs(ks.stock.rotate?.[1] ?? 0) - 90) < 1e-9 && Math.abs(kframe.max[2] - kframe.min[2] - 100) < 1e-6,
       `"${stood}" ${JSON.stringify(ks.stock)}; box ${JSON.stringify(kframe)}`);
   }

@@ -301,7 +301,12 @@ try {
   let v = await views();
   check("exactly one 3D view drawn, and it is what is under the pointer", v.n === 1 && v.top === "CANVAS", JSON.stringify(v));
   let hc = handleColours(img, r);
-  check("the setup selected: handles in the view (red, green and blue)", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
+  // (Mar: "the part modification gizmo should only be visible in the part modification
+  // screen"): the handles only with the Part selected; none on the setup, the Stock, an
+  // operation, the simulation
+  const handlesOn = (hc) => hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40;
+  const handlesVisible = () => read("!!window.__marcam.handles?.state?.tc?.visible");
+  check("the setup selected: no handles in the view", !handlesOn(hc) && !(await handlesVisible()), JSON.stringify(hc.n));
   // the Stock: its handles; its X size typed digit by digit, drawn wider as typed
   await click("#tree [data-act=stock]");
   await sleep(1000);
@@ -309,7 +314,7 @@ try {
   check("clicking the Stock line (on its sizes) shows the Stock's pane", await paneShown("stockPane") && !(await paneShown("setupHost")));
   img = await shot("stock_selected");
   hc = handleColours(img, r);
-  check("the Stock selected: handles in the view", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
+  check("the Stock selected: no handles in the view", !handlesOn(hc) && !(await handlesVisible()), JSON.stringify(hc.n));
   // (how wide the stock is drawn, in the view's pixels: its box through the view's camera,
   // within the view. By its outline's colour the span came out short on CI: software GL draws
   // thin lines another way, and a long stock's edges were only partly found)
@@ -337,7 +342,7 @@ try {
   check("clicking the Part line (on its file name) shows the Part's pane", await paneShown("partPane"));
   img = await shot("part_selected");
   hc = handleColours(img, r);
-  check("the Part selected: handles in the view", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
+  check("the Part selected: handles in the view", handlesOn(hc) && (await handlesVisible()), JSON.stringify(hc.n));
   const before = (await partDrawn())?.cx;
   if (hc.pts.red.length) {
     // the red arrow: from its pixels' middle, outward from the handles' middle
@@ -553,12 +558,15 @@ try {
   const stockOf = await read("document.getElementById('stType') ? document.getElementById('stType').selectedOptions[0]?.textContent : ''");
   check("a setup added at once, its Stock shown: the cut result of the one before", /Cut result/.test(stockOf), stockOf);
   hc = handleColours(img, r);
-  check("the added setup's stock has handles in the view", hc.n.red > 40 && hc.n.green > 40 && hc.n.blue > 40, JSON.stringify(hc.n));
+  check("the added setup's Stock shown: no handles in the view", !handlesOn(hc) && !(await handlesVisible()), JSON.stringify(hc.n));
   v = await views();
   check("still exactly one 3D view", v.n === 1 && v.top === "CANVAS", JSON.stringify(v));
-  // setup 2 continuing from setup 1: the carried piece moved by the handles and typed values
+  // setup 2 continuing from setup 1: the carried piece moved by the handles (under its Part)
+  // and typed values
   await click("#tree .tree-setup.active [data-act=part]");
   await settled();
+  hc = handleColours(await shot("carried_part_selected"), r);
+  check("setup 2 (continuing): its Part selected, the carried piece's handles in the view", handlesOn(hc) && (await handlesVisible()), JSON.stringify(hc.n));
   res = await dragArrow();
   check("setup 2 (continuing): the carried piece dragged stays moved after the plan settles", res.moved, res.why);
   await click("#tree .tree-setup.active [data-act=stock]");
@@ -622,6 +630,33 @@ try {
   await settled();
   await click("#tree .tree-op[data-op=op2] .tree-label");
   await settled();
+  {
+    // the handles: none with an operation selected or the simulated stock shown; the Part
+    // selected, there; away from it, gone again
+    const vr = await viewRect();
+    const hcNow = async (name) => handleColours(await shot(name), vr);
+    let h = await hcNow("gizmo_op");
+    check("an operation selected: no part handles in the view", !handlesOn(h) && !(await handlesVisible()), JSON.stringify(h.n));
+    const simBtn = "[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))";
+    const simOn = () => read(`${simBtn}?.getAttribute('aria-pressed') === 'true'`);
+    if (!(await simOn())) await read(`(${simBtn})?.click(); true`);
+    await settled();
+    await sleep(1500);
+    h = await hcNow("gizmo_sim");
+    check("the simulated stock shown: no part handles in the view", (await simOn()) && !handlesOn(h) && !(await handlesVisible()), JSON.stringify(h.n));
+    await click("#tree .tree-setup.active [data-act=part]");
+    await settled();
+    await sleep(800);
+    h = await hcNow("gizmo_part");
+    check("the Part selected (part modification): its handles in the view", handlesOn(h) && (await handlesVisible()), JSON.stringify(h.n));
+    await click("#tree .tree-op[data-op=op2] .tree-label");
+    await settled();
+    await sleep(800);
+    h = await hcNow("gizmo_left");
+    check("back to the operation: the handles gone again", !handlesOn(h) && !(await handlesVisible()), JSON.stringify(h.n));
+    if (await simOn()) await read(`(${simBtn})?.click(); true`);
+    await settled();
+  }
   const sdCss = "#opForm [name=step_down]";
   check("the pocket's form: no Apply or Cancel button anywhere", !!(await where(sdCss)) && !(await where("button", "^(Apply|Cancel)$")));
   const diff = (a, b, [x0, y0, w, h]) => {
