@@ -92,7 +92,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   // for them, except the stock, which shows the background simulation's result (and runs
   // it if there is none yet).
   const VIEW_KEY = "marcam.view";
-  const VIEW_DEFAULT = { part: true, stock: false, paths: "all", rapids: false, tool: true, only: false, chuck: false, tailstock: false };
+  const VIEW_DEFAULT = { part: true, stock: false, paths: "all", rapids: false, tool: true, only: false, chuck: false, tailstock: false, outline: true };
   /** The stock shown: its toggle; (Mar's carry-through) or, in a setup with no model (a cut
    *  piece carried in), the part's toggle: the piece is the part there. */
   const stockOn = () => {
@@ -117,11 +117,14 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     $("showPart").checked = view.part;
     $("simStock").checked = view.stock;
     $("showRapids").checked = view.rapids;
+    $("showStock").checked = view.outline;
   };
   syncInputs();
   const TOGGLES = [
     { k: "part", key: "p", title: "Part", svg: '<path d="M4 7l6-3 6 3v7l-6 3-6-3z M4 7l6 3 6-3 M10 10v7"/>' },
     { k: "stock", key: "s", title: "Simulated stock (the background simulation's result; while playing, simulated along)", svg: '<path d="M3 8h14v8H3z M3 8l2-3h10l2 3 M7 8v3h6V8"/>' },
+    // (Mar) the stock the setup starts with (see-through, its edges; a carried piece solid): on or off
+    { k: "outline", key: "b", title: "The stock as the setup starts with it (its outline)", svg: '<path d="M3 6h14v9H3z" stroke-dasharray="2 1.5"/>' },
     { k: "paths", key: "t", title: "Toolpaths: all, up to the playhead, or off", svg: '<path d="M3 15l3-9 3 9 3-9 3 9 2-6"/>' },
     { k: "rapids", key: "r", title: "Rapid moves", svg: '<path d="M3 10h9 M3 10h1 M6 10h2 M10 10h2 M12 6l5 4-5 4" stroke-dasharray="2 2"/>' },
     { k: "tool", key: "c", title: "The tool (during playback)", svg: '<path d="M8 2h4v8H8z M9 10h2v6l-1 2-1-2z"/>' },

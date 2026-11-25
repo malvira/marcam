@@ -1859,6 +1859,28 @@ try {
     const res = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { gouge: t.filter((x) => /^Gouge check/.test(x)).sort((a, b) => a.length - b.length)[0] || '', red: t.filter((x) => /GOUGE/.test(x)).slice(0, 2), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
     check("facing ticked \"clear to stock\" and \"outward only\" (clicks, no typing): its path out at all four corners of the block, round the dome, no gouge",
       op?.type === "face" && op.clear_to_stock === true && op.outward_only === true && at.every((n) => n >= 4) && (!res.gouge || /deepest 0\.0+ mm/.test(res.gouge)) && !res.red.length && !res.error, JSON.stringify({ op: op && { clear: op.clear_to_stock, outward: op.outward_only, depth: op.depth }, at, res }));
+    // (Mar) the stock's outline: a view toggle, on by default; off, the block is not drawn
+    // (the view changes), on again, it is back
+    await read("window.__marcam.setView('iso', {})");
+    await sleep(1500);
+    const ol0 = await read("document.querySelector('#viewToggles button[data-v=outline]')?.getAttribute('aria-pressed')");
+    const vrO2 = await viewRect();
+    const withO = await shot("outline_on");
+    await click("#viewToggles button[data-v=outline]");
+    await sleep(1200);
+    const withoutO = await shot("outline_off");
+    const stockShown = await read("window.__marcam.state.three.groups.stock.visible");
+    await click("#viewToggles button[data-v=outline]");
+    await sleep(1200);
+    const backO = await read("window.__marcam.state.three.groups.stock.visible");
+    let dO = 0, nO = 0;
+    for (let y = vrO2[1]; y < vrO2[1] + vrO2[3]; y += 4)
+      for (let x = vrO2[0]; x < vrO2[0] + vrO2[2]; x += 4) {
+        const a = withO.at(x, y), b = withoutO.at(x, y);
+        nO++;
+        if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 40) dO++;
+      }
+    check("the stock's outline: a view toggle, on by default; off, the block is not drawn (the view changes); on, back", ol0 === "true" && !stockShown && backO && dO > nO * 0.005, JSON.stringify({ ol0, stockShown, backO, dO, nO }));
     await clean("facing to the stock's edge");
   }
   // ---------------------------------------------------------------- roughing round a flat piece
