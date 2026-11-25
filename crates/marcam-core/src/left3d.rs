@@ -41,6 +41,70 @@ pub struct Left3d {
     /// shank along the radius meets the part) but one offset in Y can; the most left there.
     pub needs_offset: usize,
     pub max_needs_offset: f64,
+    /// The part's mesh as the measure needs it (outward faces): its edges not shared by
+    /// two faces (0: closed), its shared edges whose two faces run them the same way (0:
+    /// consistently wound), and its volume by the faces' winding (negative: inside out, read
+    /// turned the right way round).
+    pub mesh: MeshCheck,
+}
+
+/// Whether a mesh is closed and its faces wound consistently outward.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct MeshCheck {
+    pub open_edges: usize,
+    pub flipped_edges: usize,
+    pub volume: f64,
+}
+
+impl MeshCheck {
+    /// Whether "outside" can be told by the nearest face's normal.
+    pub fn sound(&self) -> bool {
+        self.open_edges == 0 && self.flipped_edges == 0 && self.volume != 0.0
+    }
+}
+
+/// Check `mesh` (vertices matched within a micron).
+pub fn check_mesh(mesh: &Mesh) -> MeshCheck {
+    let key = |p: [f64; 3]| [0, 1, 2].map(|k| (p[k] * 1000.0).round() as i64);
+    let mut edges: std::collections::HashMap<([i64; 3], [i64; 3]), (i32, i32)> = Default::default();
+    let mut volume = 0.0;
+    for t in &mesh.triangles {
+        volume += dot(
+            t[0],
+            [
+                t[1][1] * t[2][2] - t[1][2] * t[2][1],
+                t[1][2] * t[2][0] - t[1][0] * t[2][2],
+                t[1][0] * t[2][1] - t[1][1] * t[2][0],
+            ],
+        ) / 6.0;
+        for k in 0..3 {
+            let (a, b) = (key(t[k]), key(t[(k + 1) % 3]));
+            if a == b {
+                continue;
+            }
+            // (counted by the edge's ends in order: forward and backward)
+            let e = if a < b { (a, b) } else { (b, a) };
+            let c = edges.entry(e).or_insert((0, 0));
+            if a < b {
+                c.0 += 1;
+            } else {
+                c.1 += 1;
+            }
+        }
+    }
+    let (mut open, mut flipped) = (0, 0);
+    for &(f, r) in edges.values() {
+        if f + r != 2 {
+            open += 1;
+        } else if f != 1 {
+            flipped += 1;
+        }
+    }
+    MeshCheck {
+        open_edges: open,
+        flipped_edges: flipped,
+        volume,
+    }
 }
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -209,6 +273,9 @@ pub fn left_in_3d(job: &Job, tps: &[Toolpath], mesh: &Mesh, h: f64, reach_r: f64
         replay(&mut dx, &segs, &|t| solid(job, t), h, 0.15);
     }
     let near = Near::new(mesh, 1.0, 2.0);
+    let check = check_mesh(mesh);
+    // (a mesh wound inside out: its normals read the other way)
+    let out_sign = if check.volume < 0.0 { -1.0 } else { 1.0 };
     let (lo, hi) = mesh.bounds().unwrap_or(([0.0; 3], [0.0; 3]));
     let mut out = Left3d {
         points: 0,
@@ -225,6 +292,7 @@ pub fn left_in_3d(job: &Job, tps: &[Toolpath], mesh: &Mesh, h: f64, reach_r: f64
         undercut_at: None,
         needs_offset: 0,
         max_needs_offset: 0.0,
+        mesh: check,
     };
     let mut worst: Vec<[f64; 4]> = Vec::new();
     for p in dx.surface_points() {
@@ -241,6 +309,7 @@ pub fn left_in_3d(job: &Job, tps: &[Toolpath], mesh: &Mesh, h: f64, reach_r: f64
             continue;
         }
         // (inside the part: on the inner side of its nearest face)
+        let n = [n[0] * out_sign, n[1] * out_sign, n[2] * out_sign];
         if dot(sub(p, q), n) <= 0.0 {
             out.inside += 1;
             continue;

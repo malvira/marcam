@@ -211,7 +211,13 @@ fn angular_span(angles: [f64; 3]) -> (f64, f64) {
 
 impl DropCutter {
     pub fn new(mesh: &Mesh, cutter: Cutter) -> DropCutter {
-        let r = cutter.radius();
+        DropCutter::reaching(mesh, cutter, 0.0)
+    }
+
+    /// [`DropCutter::new`] for tools up to `reach` mm off the axis in Y too
+    /// ([`DropCutter::radius_at_offset`]).
+    pub fn reaching(mesh: &Mesh, cutter: Cutter, reach: f64) -> DropCutter {
+        let r = cutter.radius() + reach.abs();
         let tris: Vec<Tri> = mesh
             .triangles
             .iter()
@@ -291,6 +297,14 @@ impl DropCutter {
     /// Tool-tip radius at axial position `x` and rotary angle `a_deg`; never below `floor`
     /// (which must be >= 0: the far side of the part is ignored).
     pub fn radius_at(&self, x: f64, a_deg: f64, floor: f64) -> f64 {
+        self.radius_at_offset(x, a_deg, 0.0, floor)
+    }
+
+    /// The tip's height (machine Z) of the tool upright `y` mm off the axis in Y, at X `x`
+    /// with the part at A `a_deg`, dropped onto it from above (the cutter's whole length
+    /// along its line, as [`DropCutter::radius_at`] along the radius). The cutter must have
+    /// been made [`DropCutter::reaching`] that far.
+    pub fn radius_at_offset(&self, x: f64, a_deg: f64, y: f64, floor: f64) -> f64 {
         let a = a_deg.to_radians();
         // the part direction under the tool: rotated angle φ + a == 90°
         let phi = (PI / 2.0 - a).rem_euclid(TAU);
@@ -316,7 +330,7 @@ impl DropCutter {
             // rotate into the tool frame: local (u, v, w) = (x - x_tool, y', z')
             let mut lt = [[0.0; 3]; 3];
             for (q, p) in lt.iter_mut().zip(&tri.t) {
-                *q = [p[0] - x, p[1] * c - p[2] * s, p[1] * s + p[2] * c];
+                *q = [p[0] - x, p[1] * c - p[2] * s - y, p[1] * s + p[2] * c];
             }
             let zmax = lt[0][2].max(lt[1][2]).max(lt[2][2]);
             if zmax <= best {

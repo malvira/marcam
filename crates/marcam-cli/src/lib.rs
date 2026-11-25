@@ -1019,6 +1019,18 @@ fn cmd_left3d(o: &Opts) -> Result<ExitCode, String> {
             "stock surface points on the part's length: {} (grid {h} mm)",
             l.points
         );
+        let m = l.mesh;
+        if m.sound() {
+            println!(
+                "the part's mesh: closed, its faces wound consistently outward (volume {:.0} mm3)",
+                m.volume.abs()
+            );
+        } else {
+            println!(
+                "WARNING the part's mesh: {} open edge(s), {} edge(s) between faces wound opposite ways, volume {:.0} mm3: where it is not closed or not consistently outward, \"outside the part\" may be misread",
+                m.open_edges, m.flipped_edges, m.volume
+            );
+        }
         println!(
             "left where the tool reaches: max {:.3} mm{}; points over 0.05 / 0.1 / 0.2 / 0.5 mm: {} / {} / {} / {}",
             l.max_left,

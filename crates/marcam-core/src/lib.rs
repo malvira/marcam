@@ -1572,9 +1572,15 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             (Operation::RotaryWall(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;
                 let c = grown_for(cutter.expect("set above"), o.leave_axial, &prog.name)?;
-                let dc = DropCutter::new(mesh, c);
-                let r_min = strategy::rotary_wall(&mut b, &dc, safe_r, o)
-                    .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
+                let r_min = if o.y_offset != 0.0 {
+                    // (the tool upright off the axis: the drop along its own line)
+                    let dc = DropCutter::reaching(mesh, c, o.y_offset.abs());
+                    strategy::rotary_wall_offset(&mut b, &dc, safe_r, o)
+                } else {
+                    let dc = DropCutter::new(mesh, c);
+                    strategy::rotary_wall(&mut b, &dc, safe_r, o)
+                }
+                .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
             }
             (Operation::RotaryFlowline(o), _) => {
@@ -2688,7 +2694,40 @@ pub fn gouge_check(
         let mut itool: Option<(u32, Cutter)> = None;
         let (mut x, mut r, mut a) = (None::<f64>, None::<f64>, 0.0);
         let mut tool: Option<u32> = None;
+        // (rotary wall finishing with the tool upright off the axis: its poses dropped on
+        // along the tool's own line)
+        let reach = prog
+            .operations
+            .iter()
+            .filter_map(|o| match o {
+                Operation::RotaryWall(w) => Some(w.y_offset.abs()),
+                _ => None,
+            })
+            .fold(0.0f64, f64::max);
+        let mut offset_dc: std::collections::HashMap<u32, DropCutter> = Default::default();
         for m in &tp.moves {
+            if let (Move::Pose { tip, axis, .. }, Some(t), true) = (m, tool, itool.is_none()) {
+                if reach > 0.0 {
+                    if let Ok(na) = kinematics::solve_a(*axis, a) {
+                        a = na;
+                        if let std::collections::hash_map::Entry::Vacant(e) = offset_dc.entry(t) {
+                            if let Some(c) = job.tool(t).and_then(|d| cutter_for(t, d.shape).ok()) {
+                                e.insert(DropCutter::reaching(surface, c, reach));
+                            }
+                        }
+                        if let Some(dc) = offset_dc.get(&t) {
+                            let q = kinematics::to_machine(*tip, na);
+                            rep.moves_checked += 1;
+                            let deficit = dc.radius_at_offset(q[0], na, q[1], 0.0) - q[2];
+                            if deficit > rep.max_depth {
+                                rep.max_depth = deficit;
+                                rep.at = Some((q[0], na));
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             if let Move::Pose { tip, axis, .. } = *m {
                 if let (Some((_, c)), Ok(na)) = (itool, kinematics::solve_a(axis, a)) {
                     a = na;

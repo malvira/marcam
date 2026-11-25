@@ -44,16 +44,22 @@ fn finned() -> Mesh {
                 let a = th(x);
                 [x, r * a.cos() - v * a.sin(), r * a.sin() + v * a.cos()]
             };
-            for (r0, r1, v0, v1) in [
-                (6.0, 12.0, 1.0, 1.0),
-                (6.0, 12.0, -1.0, -1.0),
-                (12.0, 12.0, -1.0, 1.0),
-            ] {
+            // (each face wound to face out: the +v side the other way round)
+            for (r0, r1, v0, v1) in [(6.0, 12.0, -1.0, -1.0), (12.0, 12.0, -1.0, 1.0)] {
                 quad(
                     &mut t,
                     [c(x0, r0, v0), c(x0, r1, v1), c(x1, r1, v1), c(x1, r0, v0)],
                 );
             }
+            quad(
+                &mut t,
+                [
+                    c(x1, 6.0, 1.0),
+                    c(x1, 12.0, 1.0),
+                    c(x0, 12.0, 1.0),
+                    c(x0, 6.0, 1.0),
+                ],
+            );
         }
     }
     Mesh {
@@ -164,4 +170,104 @@ fn a_radial_finish_leaves_the_fins_faces_and_the_wall_finish_takes_it() {
     );
     assert!(radial.max_left > 0.1, "{radial:?}");
     assert!(both.max_left <= 0.05 + 0.03, "{both:?}");
+}
+
+/// A hub of radius 6 from X -30 to 0 with four straight fins out to radius 12, 2 mm thick,
+/// leaning `lean` degrees off the radius (an impeller's blades leaning over their faces).
+fn leaning(lean: f64) -> Mesh {
+    let mesh = finned();
+    let mut t: Vec<[[f64; 3]; 3]> = mesh.triangles[..144].to_vec();
+    let tl = lean.to_radians().tan();
+    for k in 0..4 {
+        let th = (90.0 * k as f64 + 20.0f64).to_radians();
+        let (er, et) = ([th.cos(), th.sin()], [-th.sin(), th.cos()]);
+        // a fin's corner: radius along it r, v across its thickness, at X x
+        let c = |x: f64, r: f64, v: f64| {
+            let w = v + (r - 6.0) * tl;
+            [x, r * er[0] + w * et[0], r * er[1] + w * et[1]]
+        };
+        let (x0, x1) = (-30.0, 0.0);
+        let q = |t: &mut Vec<[[f64; 3]; 3]>, p: [[f64; 3]; 4]| {
+            t.push([p[0], p[1], p[2]]);
+            t.push([p[0], p[2], p[3]]);
+        };
+        // (each face wound to face out: the +v side the other way round)
+        for (r0, r1, v0, v1) in [(5.5, 12.0, -1.0, -1.0), (12.0, 12.0, -1.0, 1.0)] {
+            q(
+                &mut t,
+                [c(x0, r0, v0), c(x0, r1, v1), c(x1, r1, v1), c(x1, r0, v0)],
+            );
+        }
+        q(
+            &mut t,
+            [
+                c(x1, 5.5, 1.0),
+                c(x1, 12.0, 1.0),
+                c(x0, 12.0, 1.0),
+                c(x0, 5.5, 1.0),
+            ],
+        );
+        q(
+            &mut t,
+            [
+                c(x0, 5.5, -1.0),
+                c(x0, 12.0, -1.0),
+                c(x0, 12.0, 1.0),
+                c(x0, 5.5, 1.0),
+            ],
+        );
+        q(
+            &mut t,
+            [
+                c(x1, 5.5, 1.0),
+                c(x1, 12.0, 1.0),
+                c(x1, 12.0, -1.0),
+                c(x1, 5.5, -1.0),
+            ],
+        );
+    }
+    Mesh {
+        triangles: t,
+        faces: Vec::new(),
+    }
+}
+
+#[test]
+fn leaning_fins_need_the_tool_off_the_axis() {
+    let mesh = leaning(40.0);
+    let wall = |y: f64| {
+        json!({"type": "rotary_wall", "tool": 3, "x_range": [-30.5, 0.5], "step_down": 0.3,
+            "y_offset": y, "feed": 600.0, "plunge_feed": 100.0, "smoothing": 0.0})
+    };
+    let radial = measure(&mesh, json!([finish(0.0), wall(0.0)]));
+    eprintln!(
+        "radial wall finish: {:?}",
+        (
+            radial.max_left,
+            radial.max_at,
+            radial.over,
+            radial.needs_offset,
+            radial.max_needs_offset,
+            radial.undercut,
+            radial.unreachable
+        )
+    );
+    let offset = measure(&mesh, json!([finish(0.0), wall(6.0)]));
+    eprintln!(
+        "offset wall finish: {:?}",
+        (
+            offset.max_left,
+            offset.max_at,
+            offset.over,
+            offset.needs_offset,
+            offset.max_needs_offset,
+            offset.undercut,
+            offset.unreachable
+        )
+    );
+    assert!(
+        radial.max_left > 0.1 && radial.needs_offset > 0,
+        "{radial:?}"
+    );
+    assert!(offset.max_left <= 0.08, "{offset:?}");
 }
