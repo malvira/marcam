@@ -100,6 +100,9 @@ pub struct Cleared {
     pub steps: Vec<Step>,
     /// The cells the tool swept at this level (cut down to it).
     pub cut: Vec<bool>,
+    /// The cuts (their index in `steps`) with segments that take more than half again the
+    /// stepover's load (a slot or near one): a flag a segment.
+    pub heavy: Vec<(usize, Vec<bool>)>,
     /// Plunges into the material (no room for a helix).
     pub plunges: usize,
     /// Cells of material the tool could reach but left (crumbs too small to go after).
@@ -296,13 +299,16 @@ impl Level<'_> {
         mut dir: f64,
         steps_left: &mut usize,
         forced: bool,
-    ) -> (Vec<[f64; 2]>, bool) {
+    ) -> (Vec<[f64; 2]>, bool, Vec<bool>) {
         let h = self.g.h;
         let s = (0.25 * self.p.r).max(1.5 * h);
         // the cells a step should cut: the stepover's width along it
         let target = (self.p.ae * s / (h * h)).max(1.0);
         let side = if self.p.climb { 1.0 } else { -1.0 };
         let mut pts = vec![p];
+        // (each step: more than half again the stepover's width of new material: a slot,
+        // or nearly)
+        let mut heavy: Vec<bool> = Vec::new();
         // from the far left (away from the material) round to the far right (into it)
         const SWEEP: f64 = 150.0;
         const N: usize = 30;
@@ -354,7 +360,7 @@ impl Level<'_> {
                     let a = dir + side * t.to_radians();
                     let e = self.engagement([p[0] + s * a.dcos(), p[1] + s * a.dsin()]);
                     if e as f64 > 2.0 * target && !forced {
-                        return (pts, true);
+                        return (pts, true, heavy);
                     }
                     t
                 }
@@ -365,11 +371,13 @@ impl Level<'_> {
             dir += side * turn.to_radians();
             let q = [p[0] + s * dir.dcos(), p[1] + s * dir.dsin()];
             let mid = [0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1])];
-            self.removed += self.cut_at(mid, self.p.r) + self.cut_at(q, self.p.r);
+            let new = self.cut_at(mid, self.p.r) + self.cut_at(q, self.p.r);
+            heavy.push(new as f64 > 1.5 * target);
+            self.removed += new;
             pts.push(q);
             p = q;
         }
-        (pts, false)
+        (pts, false, heavy)
     }
 
     /// Cells where the tool may stand without cutting anything (nothing left within its
@@ -846,7 +854,7 @@ pub fn clear_level(
             }
         };
         let removed_before = lv.removed;
-        let (pts, slot) = lv.run(pos, dir, &mut steps_left, forced);
+        let (pts, slot, heavy) = lv.run(pos, dir, &mut steps_left, forced);
         if pts.len() < 2 && slot {
             // a slot from here: another start first
             if let Some(c) = g.cell(pos) {
@@ -888,6 +896,9 @@ pub fn clear_level(
         if bads > 0 {
             bad.iter_mut().for_each(|b| *b = false);
             bads = 0;
+        }
+        if heavy.iter().any(|&h| h) {
+            out.heavy.push((out.steps.len(), heavy));
         }
         out.steps.push(Step::Cut(pts));
     }

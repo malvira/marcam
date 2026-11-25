@@ -2132,6 +2132,10 @@ pub const ADAPTIVE_MAX_CELLS: usize = 1_500_000;
 /// The moves of a level's adaptive clearing at height `z` (the material from `z_top` down):
 /// rapids over the top between runs, helices at the ramp's angle (or plunges), cuts and
 /// links at depth. It ends at the safe height.
+/// A full-width slot's feed, as a fraction of the operation's: about the load a minute of
+/// a step at the usual stepover.
+const SLOT_FEED: f64 = 0.6;
+
 #[allow(clippy::too_many_arguments)]
 fn emit_adaptive(
     b: &mut Builder,
@@ -2177,13 +2181,18 @@ fn emit_adaptive(
                     Some(pts) if zs > z + 0.55 && len > 1.0 => {
                         let mut lp: Vec<[f64; 2]> = pts.clone();
                         lp.extend(pts.iter().rev().skip(1).copied());
-                        let (k, _) = ramp_along(b, safe, &lp, 0, zs, z, ramp, feed, plunge);
+                        // (into the material: at the slot feed)
+                        let f = feed * SLOT_FEED;
+                        let (k, _) = ramp_along(b, safe, &lp, 0, zs, z, ramp, f, plunge);
                         // back to the start at depth, then the cut
                         for q in lp.iter().skip(k + 1) {
-                            b.line3(q[0], q[1], z, UP, feed);
+                            b.line3(q[0], q[1], z, UP, f);
                         }
-                        for q in pts.iter().skip(1) {
-                            b.line3(q[0], q[1], z, UP, feed);
+                        let heavy = cl.heavy.iter().find(|h| h.0 == si + 1).map(|h| &h.1);
+                        for (i, q) in pts.iter().enumerate().skip(1) {
+                            let slow =
+                                heavy.is_some_and(|h| h.get(i - 1).copied().unwrap_or(false));
+                            b.line3(q[0], q[1], z, UP, if slow { f } else { feed });
                         }
                         ramped = Some(si + 1);
                     }
@@ -2214,8 +2223,17 @@ fn emit_adaptive(
                 }
             }
             Step::Cut(pts) | Step::Link(pts) => {
-                for q in pts.iter().skip(1) {
-                    b.line3(q[0], q[1], z, UP, feed);
+                // (a slot, full-width: slower, its load a minute as a step's at the stepover)
+                let heavy = cl.heavy.iter().find(|h| h.0 == si).map(|h| &h.1);
+                for (i, q) in pts.iter().enumerate().skip(1) {
+                    let slow = heavy.is_some_and(|h| h.get(i - 1).copied().unwrap_or(false));
+                    b.line3(
+                        q[0],
+                        q[1],
+                        z,
+                        UP,
+                        if slow { feed * SLOT_FEED } else { feed },
+                    );
                 }
             }
         }
