@@ -753,7 +753,11 @@ pub mod api {
         let Some(c) = job.carried.as_deref() else {
             return err("this setup's stock is not what a setup before left");
         };
-        let m = match c {
+        // (Mar: "the carried over cut stock is still really bad") the solid it was sampled
+        // from, when it went on as a mesh: drawn as it is (the samples are for simulating)
+        let solid = marcam::carry::solid_of(c);
+        let sampled_volume = marcam::carry::sampled_volume(c);
+        let m = if let Some(s) = &solid { (**s).clone() } else { match c {
             marcam::carry::Carried::Block {
                 x0,
                 y0,
@@ -764,13 +768,15 @@ pub mod api {
                 bot,
             } => marcam::carry_mesh::block_mesh(*x0, *y0, *cell, *nx, *ny, top, bot),
             marcam::carry::Carried::Bar(map) => marcam::carry_mesh::bar_mesh(map),
-        };
+        } };
         let tri: Vec<f32> = m
             .triangles
             .iter()
             .flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32)))
             .collect();
-        let mut out = json!({ "triangles": tri, "total": m.triangles.len(), "bounds": m.bounds() });
+        let mut out = json!({ "triangles": tri, "total": m.triangles.len(), "bounds": m.bounds(),
+            "solid": solid.is_some(),
+            "volume": {"drawn": marcam::carry::mesh_volume(&m), "simulated": sampled_volume} });
         if opts["stl"].as_bool() == Some(true) {
             out["stl"] = json!(b64(&marcam::carry_mesh::to_stl(
                 &m,

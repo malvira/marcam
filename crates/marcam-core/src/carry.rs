@@ -401,9 +401,18 @@ fn from_mesh(m: &Mesh, carry: &Carry, to: &Job) -> Carried {
     let tm = [[s[0], 0.0, 0.0], [0.0, s[1], 0.0], [0.0, 0.0, s[2]]];
     let r = crate::carry_mesh::mul(tm, crate::carry_mesh::rotation(carry.rotate));
     let m = crate::carry_mesh::transform(m, r, carry.shift);
+    let out = sampled(&m, to);
+    // (Mar: "the carried over cut stock is still really bad") the solid as it goes on, kept
+    // for drawing: the samples are for simulating
+    keep_solid(&out, m);
+    out
+}
+
+/// `m` (in `to`'s coordinates) sampled as `to`'s block or bar.
+fn sampled(m: &Mesh, to: &Job) -> Carried {
     match to.stock_box {
         Some(sb) => {
-            let (x0, y0, nx, ny, top, bot) = crate::carry_mesh::sample_block(&m, block_cell(&sb));
+            let (x0, y0, nx, ny, top, bot) = crate::carry_mesh::sample_block(m, block_cell(&sb));
             Carried::Block {
                 x0,
                 y0,
@@ -415,7 +424,7 @@ fn from_mesh(m: &Mesh, carry: &Carry, to: &Job) -> Carried {
             }
         }
         None => {
-            let mut map = crate::carry_mesh::sample_bar(&m, bar_grid(&to.stock));
+            let mut map = crate::carry_mesh::sample_bar(m, bar_grid(&to.stock));
             map.top = map.r.iter().fold(0.0f32, |a, &b| a.max(b)) as f64;
             Carried::Bar(map)
         }
@@ -437,6 +446,51 @@ thread_local! {
 
 /// Carried stocks worked out lately (by the setup before and the carry).
 const MEMO_SIZE: usize = 8;
+thread_local! {
+    /// The solids carried stocks were sampled from (by the stock's key): what is drawn.
+    static SOLID: std::cell::RefCell<Vec<(u64, std::sync::Arc<Mesh>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn keep_solid(c: &Carried, m: Mesh) {
+    let key = c.key();
+    SOLID.with(|s| {
+        let mut s = s.borrow_mut();
+        s.retain(|(k, _)| *k != key);
+        if s.len() >= MEMO_SIZE {
+            s.remove(0);
+        }
+        s.push((key, std::sync::Arc::new(m)));
+    });
+}
+
+/// The closed solid a carried stock was sampled from (turned and moved into its setup), when
+/// it was carried as a mesh: what to draw of it (its samples leave gaps where walls run along
+/// the rays).
+pub fn solid_of(c: &Carried) -> Option<std::sync::Arc<Mesh>> {
+    let key = c.key();
+    SOLID.with(|s| s.borrow().iter().find(|(k, _)| *k == key).map(|(_, m)| m.clone()))
+}
+
+/// A closed mesh's volume (the signed tetrahedra from the origin).
+pub fn mesh_volume(m: &Mesh) -> f64 {
+    m.triangles
+        .iter()
+        .map(|[a, b, c]| (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0)
+        .sum::<f64>()
+        .abs()
+}
+
+/// A carried stock's volume as sampled (a bar's wedges, a block's columns).
+pub fn sampled_volume(c: &Carried) -> f64 {
+    match c {
+        Carried::Block { cell, top, bot, .. } => top.iter().zip(bot).map(|(t, b)| (t - b).max(0.0) * cell * cell).sum(),
+        Carried::Bar(m) => {
+            let da = std::f64::consts::TAU / m.grid.na as f64;
+            m.r.iter().map(|&r| 0.5 * (r as f64).powi(2) * da * m.grid.dx).sum()
+        }
+    }
+}
 thread_local! {
     static MEMO: std::cell::RefCell<Vec<(u64, std::sync::Arc<Carried>)>> =
         const { std::cell::RefCell::new(Vec::new()) };
