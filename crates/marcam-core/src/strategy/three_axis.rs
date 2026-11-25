@@ -2132,9 +2132,7 @@ pub const ADAPTIVE_MAX_CELLS: usize = 1_500_000;
 /// The moves of a level's adaptive clearing at height `z` (the material from `z_top` down):
 /// rapids over the top between runs, helices at the ramp's angle (or plunges), cuts and
 /// links at depth. It ends at the safe height.
-/// A full-width slot's feed, as a fraction of the operation's: about the load a minute of
-/// a step at the usual stepover.
-const SLOT_FEED: f64 = 0.6;
+use crate::strategy::adaptive::SLOT_FEED;
 
 #[allow(clippy::too_many_arguments)]
 fn emit_adaptive(
@@ -2190,9 +2188,8 @@ fn emit_adaptive(
                         }
                         let heavy = cl.heavy.iter().find(|h| h.0 == si + 1).map(|h| &h.1);
                         for (i, q) in pts.iter().enumerate().skip(1) {
-                            let slow =
-                                heavy.is_some_and(|h| h.get(i - 1).copied().unwrap_or(false));
-                            b.line3(q[0], q[1], z, UP, if slow { f } else { feed });
+                            let k = heavy.and_then(|h| h.get(i - 1).copied()).unwrap_or(1.0);
+                            b.line3(q[0], q[1], z, UP, feed * k);
                         }
                         ramped = Some(si + 1);
                     }
@@ -2226,14 +2223,8 @@ fn emit_adaptive(
                 // (a slot, full-width: slower, its load a minute as a step's at the stepover)
                 let heavy = cl.heavy.iter().find(|h| h.0 == si).map(|h| &h.1);
                 for (i, q) in pts.iter().enumerate().skip(1) {
-                    let slow = heavy.is_some_and(|h| h.get(i - 1).copied().unwrap_or(false));
-                    b.line3(
-                        q[0],
-                        q[1],
-                        z,
-                        UP,
-                        if slow { feed * SLOT_FEED } else { feed },
-                    );
+                    let k = heavy.and_then(|h| h.get(i - 1).copied()).unwrap_or(1.0);
+                    b.line3(q[0], q[1], z, UP, feed * k);
                 }
             }
         }

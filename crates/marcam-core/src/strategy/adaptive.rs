@@ -94,15 +94,18 @@ pub enum Step {
     Link(Vec<[f64; 2]>),
 }
 
+/// The least feed a heavy segment gets, a fraction of the operation's (a full-width slot).
+pub const SLOT_FEED: f64 = 0.6;
+
 /// A level's clearing.
 #[derive(Debug, Clone, Default)]
 pub struct Cleared {
     pub steps: Vec<Step>,
     /// The cells the tool swept at this level (cut down to it).
     pub cut: Vec<bool>,
-    /// The cuts (their index in `steps`) with segments that take more than half again the
-    /// stepover's load (a slot or near one): a flag a segment.
-    pub heavy: Vec<(usize, Vec<bool>)>,
+    /// The cuts (their index in `steps`) with segments that take more than the stepover's
+    /// width: each segment's feed as a fraction of the operation's (a slot, [`SLOT_FEED`]).
+    pub heavy: Vec<(usize, Vec<f64>)>,
     /// Plunges into the material (no room for a helix).
     pub plunges: usize,
     /// Cells of material the tool could reach but left (crumbs too small to go after).
@@ -299,16 +302,16 @@ impl Level<'_> {
         mut dir: f64,
         steps_left: &mut usize,
         forced: bool,
-    ) -> (Vec<[f64; 2]>, bool, Vec<bool>) {
+    ) -> (Vec<[f64; 2]>, bool, Vec<f64>) {
         let h = self.g.h;
         let s = (0.25 * self.p.r).max(1.5 * h);
         // the cells a step should cut: the stepover's width along it
         let target = (self.p.ae * s / (h * h)).max(1.0);
         let side = if self.p.climb { 1.0 } else { -1.0 };
         let mut pts = vec![p];
-        // (each step: more than half again the stepover's width of new material: a slot,
-        // or nearly)
-        let mut heavy: Vec<bool> = Vec::new();
+        // (each step: its feed, as a fraction of the operation's: the stepover's width over
+        // the width it takes, between 0.6 and 1; a slot, 0.6)
+        let mut heavy: Vec<f64> = Vec::new();
         // from the far left (away from the material) round to the far right (into it)
         const SWEEP: f64 = 150.0;
         const N: usize = 30;
@@ -372,7 +375,13 @@ impl Level<'_> {
             let q = [p[0] + s * dir.dcos(), p[1] + s * dir.dsin()];
             let mid = [0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1])];
             let new = self.cut_at(mid, self.p.r) + self.cut_at(q, self.p.r);
-            heavy.push(new as f64 > 1.5 * target);
+            // (within a twentieth of the stepover: the feed as it is, not a feed a move)
+            let k = (target / (new as f64).max(1.0)).clamp(SLOT_FEED, 1.0);
+            heavy.push(if k > 0.95 {
+                1.0
+            } else {
+                (k * 20.0).round() / 20.0
+            });
             self.removed += new;
             pts.push(q);
             p = q;
@@ -897,7 +906,7 @@ pub fn clear_level(
             bad.iter_mut().for_each(|b| *b = false);
             bads = 0;
         }
-        if heavy.iter().any(|&h| h) {
+        if heavy.iter().any(|&h| h < 1.0) {
             out.heavy.push((out.steps.len(), heavy));
         }
         out.steps.push(Step::Cut(pts));
