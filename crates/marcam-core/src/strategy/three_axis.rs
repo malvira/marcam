@@ -2147,26 +2147,51 @@ fn emit_adaptive(
     use crate::strategy::adaptive::Step;
     // (each way in from just above what is there: the level above, or, where that level
     // never reached, the material still standing under the tool)
-    for st in &cl.steps {
+    let mut ramped: Option<usize> = None;
+    for (si, st) in cl.steps.iter().enumerate() {
+        if ramped == Some(si) {
+            continue;
+        }
         match st {
-            Step::Down(q) => enter(
-                b,
-                safe,
-                q[0],
-                q[1],
-                entry(q[0], q[1], 0.0).max(z + 0.5),
-                z,
-                plunge,
-            ),
-            Step::Plunge(q) => enter(
-                b,
-                safe,
-                q[0],
-                q[1],
-                entry(q[0], q[1], 0.0).max(z + 0.5),
-                z,
-                plunge,
-            ),
+            Step::Down(q) | Step::Plunge(q) => {
+                let zs = entry(q[0], q[1], 0.0).max(z + 0.5);
+                // (no full-width plunge where there is stock to go through: down a ramp along
+                // the cut that follows, out and back, then that cut from its start)
+                let next = match cl.steps.get(si + 1) {
+                    Some(Step::Cut(pts))
+                        if ramp > 0.0
+                            && pts.len() >= 2
+                            && (pts[0][0] - q[0]).abs() < 1e-6
+                            && (pts[0][1] - q[1]).abs() < 1e-6 =>
+                    {
+                        Some(pts)
+                    }
+                    _ => None,
+                };
+                let len: f64 = next.map_or(0.0, |pts| {
+                    pts.windows(2)
+                        .map(|w| (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]))
+                        .sum()
+                });
+                match next {
+                    Some(pts) if zs > z + 0.55 && len > 1.0 => {
+                        let mut lp: Vec<[f64; 2]> = pts.clone();
+                        lp.extend(pts.iter().rev().skip(1).copied());
+                        let (k, _) = ramp_along(b, safe, &lp, 0, zs, z, ramp, feed, plunge);
+                        // back to the start at depth, then the cut
+                        for q in lp.iter().skip(k + 1) {
+                            b.line3(q[0], q[1], z, UP, feed);
+                        }
+                        for q in pts.iter().skip(1) {
+                            b.line3(q[0], q[1], z, UP, feed);
+                        }
+                        ramped = Some(si + 1);
+                    }
+                    // (a way in with nothing to cut after it: a hole for nothing, left out)
+                    _ if !matches!(cl.steps.get(si + 1), Some(Step::Cut(_) | Step::Link(_))) => {}
+                    _ => enter(b, safe, q[0], q[1], zs, z, plunge),
+                }
+            }
             Step::Helix {
                 centre,
                 radius,
@@ -2422,6 +2447,12 @@ pub fn adaptive_rough(
         // layer above the level
         let tall: Vec<bool> = mat_top.iter().map(|&t| t > z + layer + 0.05).collect();
         let near_tall = crate::strategy::adaptive::distance(&g, &tall);
+        // (and no way in from above through it: a cell still standing that high is not open)
+        for (o, &t) in open.iter_mut().zip(&tall) {
+            if t {
+                *o = false;
+            }
+        }
         let allowed: Vec<bool> = surf
             .iter()
             .zip(&near_tall)

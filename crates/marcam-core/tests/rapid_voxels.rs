@@ -270,6 +270,10 @@ fn the_overhang_fixture_replayed_through_the_dexel_stock() {
     let normal = 1.25 * 1.6;
     for (op, bite, at) in &r.worst_bite {
         eprintln!("op tag {op}: worst bite {bite:.2} mm3/mm at move {at} ({:.1}x a normal step of {normal:.2})", bite / normal);
+        // (no wall, no plunge through stock: at most a full-width cut one layer deep, the
+        // first cut of a level, with a little of the stock's sampling)
+        let slot = 3.175 * 1.6;
+        assert!(*bite <= 1.1 * slot, "op {op}: a bite of {bite:.2} mm3/mm at move {at}, more than a full-width cut of one layer ({slot:.2})");
     }
 }
 
