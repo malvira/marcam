@@ -2123,6 +2123,17 @@ try {
     await shot("rotary_parallel_circular");
     check("rotary parallel's Style switched to Circular: rings round the axis (the A axis turning at fixed X), clean",
       circular.pattern === "circular" && circular.aOnly > 100 && okPlan(circular), JSON.stringify(circular));
+    // a Y offset needs a ball: the operation's tool a ball (from the library, in its form's
+    // tool list, if the setup's first tool was taken)
+    const isBall = () => read("(() => { const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'rotary_parallel'); const tl = (d.tools || []).find((t) => t.number === op?.tool); return /ball/i.test(tl?.description || tl?.tool || ''); })()");
+    if (!(await isBall())) {
+      await read("(() => { const s = document.querySelector('#opForm [name=tool]'); s.value = '__add'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+      await waitFor(() => where("dialog[open] .tp-row", "Ball nose 3\.175 x 22"), "the library", 15000).catch(() => null);
+      await click("dialog[open] .tp-row", "Ball nose 3\.175 x 22");
+      await settled();
+      await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+      await settled();
+    }
     // a Y offset typed in its form: the ball off the axis (its tool upright), the same cut
     await read("document.querySelector('#opForm [name=y_offset]')?.scrollIntoView({ block: 'center' }), true");
     await click("#opForm [name=y_offset]");
