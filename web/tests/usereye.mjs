@@ -1775,6 +1775,19 @@ try {
     const sim = await read(`(() => { const vis = ${VISIBLE}; return { status: document.getElementById('status').textContent.slice(0, 80), summary: [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent).find((t) => /Simulated stock/.test(t))?.slice(0, 120) || '' }; })()`);
     await shot("custom_toolpath_simulated");
     check("a custom toolpath: simulated, the stock it leaves on the screen", /Simulated stock/.test(sim.summary), JSON.stringify(sim));
+    // (Mar: "this operation colored the wrong thing on the stock": a cut at a column's top
+    // tinted its whole side down to the vise) the block's front face near its bottom, never
+    // cut there: the stock's own colour, not an operation's
+    {
+      await read("window.__marcam.setView('iso', {})");
+      await sleep(1500);
+      const face = await read("(async () => { const st = window.__marcam.state, v = st.three; const sb = (await window.__marcam.engine('setupFrame', st.tree.doc, { setup: st.tree.setup })).result.stock_box; const r = v.renderer.domElement.getBoundingClientRect(); const pts = []; for (const f of [0.3, 0.5, 0.7]) { const p = new v.THREE.Vector3(sb.min[0] + (sb.max[0] - sb.min[0]) * f, sb.min[1], sb.min[2] + 1).project(v.camera); pts.push([r.left + (p.x + 1) / 2 * r.width, r.top + (1 - p.y) / 2 * r.height]); } const ops = st.tree.doc.setups[0].operations; const PAL = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#a855f7', '#14b8a6', '#e11d48', '#84cc16']; return { pts, hexes: ops.map((o, i) => o.color || PAL[i % PAL.length]) }; })()");
+      const img = await shot("sim_sides_uncut");
+      const hs = ([r, g, b]) => { const mx = Math.max(r, g, b), d = mx - Math.min(r, g, b); if (!d) return [0, 0]; const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return [(h * 60 + 360) % 360, d / mx]; };
+      const opHues = face.hexes.map((x) => hs([1, 3, 5].map((k) => parseInt(x.slice(k, k + 2), 16)))).filter(([, s]) => s > 0.5).map(([h]) => h);
+      const hits = face.pts.map(([x, y]) => { const q = img.at(Math.round(x), Math.round(y)); const [h, s] = hs(q); return { q, op: s > 0.45 && opHues.some((h0) => Math.min(Math.abs(h - h0), 360 - Math.abs(h - h0)) < 15 && Math.abs(h - 210) > 25) }; });
+      check("the simulated block: its sides below the cuts in the stock's own colour (an operation's colour only where it cut)", hits.every((h) => !h.op), JSON.stringify({ hits, face }));
+    }
     // (left as it was)
     if (!simState.on) await drag(simToggle, simToggle, 1);
     await clean("a custom toolpath");

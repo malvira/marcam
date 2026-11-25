@@ -5,7 +5,7 @@
 // (rows = X cells, A turns the work); 3-axis (vise) setups on a block (rows = Y cells, the
 // tool moves in XYZ).
 
-import { blockSolid, heightmapSolid, stockObject, STOCK_LEFT } from "./meshes.js";
+import { blockSolid, heightmapSolid, stockObject, STOCK_LEFT, WALL_BAND } from "./meshes.js";
 import { GpuStock } from "./gpu/gpusim.js";
 import { colorNum, colorRgb } from "./colors.js";
 
@@ -451,7 +451,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     m.dr = new Float32Array(Math.ceil(R / m.stride) * Math.ceil(C / m.stride));
     m.dop = new Uint16Array(m.dr.length);
     fillRows(0, Math.ceil(R / m.stride) - 1);
-    const mesh = m.xyz ? blockSolid(m.dgrid, m.dr, s.stock_box.min[2], (k) => colorOf(m.dop[k])) : heightmapSolid(m.dgrid, m.dr, (k) => colorOf(m.dop[k]));
+    const mesh = m.xyz ? blockSolid(m.dgrid, m.dr, s.stock_box.min[2], (k) => colorOf(m.dop[k]), uncut()) : heightmapSolid(m.dgrid, m.dr, (k) => colorOf(m.dop[k]), uncut());
+    // (the block's sides: the cut's band under each top, moved with it)
+    m.wallMid = mesh.wallMid || null;
+    m.blockBottom = m.xyz ? s.stock_box.min[2] : null;
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
     g.setAttribute("color", new THREE.BufferAttribute(mesh.colors, 3));
@@ -561,7 +564,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (m.stockMesh) m.stockMesh.visible = stockOn();
     if (m.ghost) m.ghost.visible = stockOn() && $("simGhost").checked;
     // at rest with the stock on: the background simulation's stock instead of the part
-    const finalStock = !m.expanded && stockOn() && !!v.groups.simFinal?.children.length && !m.editing;
+    // (and only while it is in the scene, shown)
+    const inView = (o) => { for (let x = o; x; x = x.parent) if (!x.visible) return false; let p = o; while (p?.parent) p = p.parent; return p === v.scene; };
+    const finalStock = !m.expanded && stockOn() && !!v.groups.simFinal?.children.length && !m.editing && inView(v.groups.machining);
     for (const c of v.groups.work.children) if (c.userData.shared) c.visible = view.part && !finalStock;
   }
 
@@ -597,6 +602,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       v.groups.simFinal = new v.THREE.Group();
       v.groups.machining.add(v.groups.simFinal);
     }
+    // (Mar: "the part is gone and I can't get it back") a playback made again since: the
+    // stock goes with the one shown, never left on the old one (out of the scene, the part
+    // stepping aside for a stock no one sees)
+    if (v.groups.simFinal.parent !== v.groups.machining) v.groups.machining.add(v.groups.simFinal);
     const want = !m.expanded && stockOn() && state.sim ? state.sim : null;
     const key = want ? want : null;
     if (m.finalKey !== key || (want && !v.groups.simFinal.children.length)) {
@@ -732,6 +741,13 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         pos[3 * v + 2] = m.dr[v];
         col.set(colorOf(m.dop[v]), 3 * v);
       }
+      if (m.wallMid) {
+        const [lo, hi] = [j0 * nx, (j1 + 1) * nx];
+        for (let t = 0; t < m.wallMid.length; t += 2) {
+          const v = m.wallMid[t];
+          if (v >= lo && v < hi) pos[3 * m.wallMid[t + 1] + 2] = Math.max(m.blockBottom, m.dr[v] - WALL_BAND);
+        }
+      }
       m.stockMesh.geometry.attributes.position.needsUpdate = true;
       m.stockMesh.geometry.attributes.color.needsUpdate = true;
       blockNormals(m.stockMesh.geometry, j0 - 1, j1 + 1);
@@ -741,11 +757,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       const { na, nx } = m.dgrid;
       const pos = m.stockMesh.geometry.attributes.position.array;
       const col = m.stockMesh.geometry.attributes.color.array;
-      const setV = (vi, i, j) => {
+      const setV = (vi, i, j, paint = true) => {
         const k = i * na + j;
         const phi = ((j + 0.5) * 2 * Math.PI) / na;
         pos[3 * vi + 1] = m.dr[k] * Math.cos(phi);
         pos[3 * vi + 2] = m.dr[k] * Math.sin(phi);
+        if (!paint) return;
         const c = colorOf(m.dop[k]);
         col[3 * vi] = c[0];
         col[3 * vi + 1] = c[1];
@@ -753,8 +770,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       };
       for (let i = i0; i <= i1; i++) for (let j = 0; j < na; j++) setV(i * na + j, i, j);
       // end caps repeat the first and last rings
-      if (i0 === 0) for (let j = 0; j < na; j++) setV(nx * na + j, 0, j);
-      if (i1 === nx - 1) for (let j = 0; j < na; j++) setV(nx * na + na + 1 + j, nx - 1, j);
+      // (their faces in the stock's own colour: only moved)
+      if (i0 === 0) for (let j = 0; j < na; j++) setV(nx * na + j, 0, j, false);
+      if (i1 === nx - 1) for (let j = 0; j < na; j++) setV(nx * na + na + 1 + j, nx - 1, j, false);
       m.stockMesh.geometry.attributes.position.needsUpdate = true;
       m.stockMesh.geometry.attributes.color.needsUpdate = true;
       barNormals(m.stockMesh.geometry, i0 - 1, i1 + 1);
@@ -1261,9 +1279,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       const col = m.stockMesh.geometry.attributes.color.array;
       const paint = (vi, k) => col.set(colorOf(m.dop[k]), 3 * vi);
       for (let k = 0; k < nx * na; k++) paint(k, k);
+      // (the ends: the stock's own colour)
+      const u = uncut();
       for (let j = 0; j < na; j++) {
-        paint(nx * na + j, j);
-        paint(nx * na + na + 1 + j, (nx - 1) * na + j);
+        col.set(u, 3 * (nx * na + j));
+        col.set(u, 3 * (nx * na + na + 1 + j));
       }
       m.stockMesh.geometry.attributes.color.needsUpdate = true;
     }

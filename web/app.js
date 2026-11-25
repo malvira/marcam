@@ -2103,7 +2103,7 @@ function simMesh(THREE, sim, s) {
   // where there is no part: remaining stock, tinted (not the part's grey)
   const uncut = colorRgb("uncut");
   const color = (k) => (has(k) ? ramp((r[k] - sim.part[k]) / 0.5) : uncut);
-  const m = sim.kind === "xyz" ? blockSolid(sim.grid, r, sim.stock_box.min[2], color) : heightmapSolid(sim.grid, r, color);
+  const m = sim.kind === "xyz" ? blockSolid(sim.grid, r, sim.stock_box.min[2], color, uncut) : heightmapSolid(sim.grid, r, color, uncut);
   return new THREE.Mesh(toGeometry(THREE, m), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }));
 }
 

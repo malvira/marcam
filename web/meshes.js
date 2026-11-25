@@ -94,7 +94,7 @@ export function cylinder(r, x0, x1, segments = 96) {
  * Closed solid from a radial heightmap (grid {x0, dx, nx, na}, radii r[i * na + j]) with an
  * optional per-cell colour. Rings sit at cell centres; the ends are capped.
  */
-export function heightmapSolid(grid, r, color) {
+export function heightmapSolid(grid, r, color, uncut = null) {
   const { x0, dx, nx, na } = grid;
   const b = new Builder();
   if (nx < 1) return b.done();
@@ -105,8 +105,11 @@ export function heightmapSolid(grid, r, color) {
     if (prev) band(b, prev, cur);
     prev = cur;
   }
-  cap(b, x0 + 0.5 * dx, na, (j) => r[j], true, c(0));
-  cap(b, x0 + (nx - 0.5) * dx, na, (j) => r[(nx - 1) * na + j], false, c(nx - 1));
+  // (the bar's ends: its faces as they came, cutting only lowers the radius; the cut's colour
+  // on the round)
+  const end = (i) => (uncut ? () => uncut : c(i));
+  cap(b, x0 + 0.5 * dx, na, (j) => r[j], true, end(0));
+  cap(b, x0 + (nx - 0.5) * dx, na, (j) => r[(nx - 1) * na + j], false, end(nx - 1));
   return b.done();
 }
 
@@ -116,7 +119,7 @@ export function heightmapSolid(grid, r, color) {
  * centres and come first (vertex k is cell k), and the side walls share them, so updating
  * vertex k's Z moves the surface and the walls together.
  */
-export function blockSolid(grid, z, bottom, color) {
+export function blockSolid(grid, z, bottom, color, uncut = null) {
   const { x0, y0, cell, nx, ny } = grid;
   const b = new Builder();
   if (nx < 2 || ny < 2) return b.done();
@@ -136,18 +139,36 @@ export function blockSolid(grid, z, bottom, color) {
   for (let j = 0; j < ny - 1; j++) loop.push(j * nx + nx - 1);
   for (let i = nx - 1; i > 0; i--) loop.push((ny - 1) * nx + i);
   for (let j = ny - 1; j > 0; j--) loop.push(j * nx);
-  const low = loop.map((k) => b.vertex(b.pos[3 * k], b.pos[3 * k + 1], bottom, col(k)));
+  // (Mar: "this operation colored the wrong thing on the stock": a column cut at its top
+  // tinted its whole side down to the vise) the sides: a thin band under each top in its
+  // colour (the cut's edge), below that the stock as it came (cutting only lowers a top: its
+  // side below was never cut). `wallMid` pairs each top vertex with the band's lower edge, to
+  // move with it.
+  const side = uncut ? () => uncut : col;
+  const mid = loop.map((k) => b.vertex(b.pos[3 * k], b.pos[3 * k + 1], Math.max(bottom, b.pos[3 * k + 2] - WALL_BAND), side(k)));
+  const low = loop.map((k) => b.vertex(b.pos[3 * k], b.pos[3 * k + 1], bottom, side(k)));
   for (let t = 0; t < loop.length; t++) {
     const u = (t + 1) % loop.length;
-    const [p, q, P, Q] = [loop[t], loop[u], low[t], low[u]];
+    const [p, q, P, Q] = [loop[t], loop[u], mid[t], mid[u]];
     b.tri(q, p, P);
     b.tri(q, P, Q);
+    const [m0, m1, L0, L1] = [mid[t], mid[u], low[t], low[u]];
+    b.tri(m1, m0, L0);
+    b.tri(m1, L0, L1);
   }
   // bottom: fan from the centre (normal -Z)
-  const mid = b.vertex(x0 + (nx * cell) / 2, y0 + (ny * cell) / 2, bottom, col(0));
-  for (let t = 0; t < low.length; t++) b.tri(mid, low[(t + 1) % low.length], low[t]);
-  return b.done();
+  const centre = b.vertex(x0 + (nx * cell) / 2, y0 + (ny * cell) / 2, bottom, side(0));
+  for (let t = 0; t < low.length; t++) b.tri(centre, low[(t + 1) % low.length], low[t]);
+  const out = b.done();
+  out.wallMid = new Int32Array(loop.length * 2);
+  loop.forEach((k, t) => {
+    out.wallMid[2 * t] = k;
+    out.wallMid[2 * t + 1] = mid[t];
+  });
+  return out;
 }
+/** How deep a cut's colour runs down the block's sides (mm): its edge. */
+export const WALL_BAND = 0.2;
 
 /**
  * Check a mesh is a closed, consistently oriented surface: after welding equal positions,
