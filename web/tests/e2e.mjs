@@ -382,12 +382,13 @@ try {
       throw new Error(`${e.message}: ${why}`);
     }
   };
-  const cutCells = (tag) => js(`${M}.op.reduce((n, t) => n + (t === ${tag}), 0)`);
+  // (the stock in 3D: its tiles' vertices, each with the operation that last cut there)
+  const cutCells = (tag) => js(`[...${M}.tiles.values()].reduce((n, t) => n + (t.userData.ops ? t.userData.ops.reduce((k, o) => k + (o === ${tag}), 0) : 0), 0)`);
   const midRough = Math.round(nseg * 0.15);
   await seekTo(midRough);
   const rough1 = await cutCells(1);
-  const minR = await js(`Math.min(...${M}.r)`);
-  check("seeking cuts the stock (mid-roughing)", rough1 > 1000 && minR < 12.5, `${rough1} cells cut by roughing, min radius ${minR.toFixed(2)}`);
+  const minR = await js(`(() => { let r = Infinity; for (const t of ${M}.tiles.values()) { const a = t.geometry.attributes.position.array, o = t.userData.ops; for (let k = 0; k < a.length / 3; k++) if (o && o[k] === 1) r = Math.min(r, Math.hypot(a[3 * k + 1], a[3 * k + 2])); } return r; })()`);
+  check("seeking cuts the stock in 3D (mid-roughing)", (await js(`!!${M}.solid`)) && rough1 > 1000 && minR < 12.5, `${rough1} vertices cut by roughing, min radius ${Number(minR).toFixed(2)}`);
   await js("window.__marcam.setView('iso', {})");
   await sleep(300);
   await shot("09_machining_mid_roughing");
@@ -405,14 +406,15 @@ try {
   // after the knurl
   await seekTo(nseg);
   const k2 = await cutCells(2), k3 = await cutCells(3);
-  check("after the knurl, knurl and chamfer cells carry their operations", k2 > 10000 && k3 > 100, `knurl ${k2} cells, chamfer ${k3}`);
-  const closed = String(await js(`const { checkClosed } = await import('./meshes.js'); const g0 = ${M}.stockMesh.geometry; const c0 = checkClosed({ positions: g0.attributes.position.array, indices: g0.index.array }); c0.closed + ' ' + c0.badEdges + ' ' + c0.volume.toFixed(0)`));
+  check("after the knurl, knurl and chamfer cells carry their operations", k2 > 1000 && k3 > 50, `knurl ${k2} vertices, chamfer ${k3}`);
+  // (its tiles together, their shared vertices welded: one closed solid)
+  const closed = String(await js(`const { checkClosed } = await import('./meshes.js'); const pos = [], idx = [], at = new Map(); for (const t of ${M}.tiles.values()) { const a = t.geometry.attributes.position.array, ix = t.geometry.index.array; const map = new Uint32Array(a.length / 3); for (let k = 0; k < a.length / 3; k++) { const key = a[3 * k] + ',' + a[3 * k + 1] + ',' + a[3 * k + 2]; let v = at.get(key); if (v === undefined) { v = pos.length / 3; pos.push(a[3 * k], a[3 * k + 1], a[3 * k + 2]); at.set(key, v); } map[k] = v; } for (const i of ix) idx.push(map[i]); } const c0 = checkClosed({ positions: new Float32Array(pos), indices: new Uint32Array(idx) }); c0.closed + ' ' + c0.badEdges + ' ' + c0.volume.toFixed(0)`));
   check("the simulated solid stays watertight", closed.startsWith("true"), closed);
   await js("window.__marcam.setView('iso', {})");
   await sleep(300);
   await shot("10_machining_after_knurl");
   // operation colour
-  const colorAt = `(() => { const s = ${M}; const i = s.op.indexOf(2); return Array.from(s.stockMesh.geometry.attributes.color.array.slice(3 * i, 3 * i + 3)).map(c => c.toFixed(2)).join(','); })()`;
+  const colorAt = `(() => { for (const t of ${M}.tiles.values()) { const o = t.userData.ops; const i = o ? o.indexOf(2) : -1; if (i >= 0) return Array.from(t.geometry.attributes.color.array.slice(3 * i, 3 * i + 3)).map(c => c.toFixed(2)).join(','); } return ''; })()`;
   const before = await js(colorAt);
   await js("const c = document.querySelector('#opLegend input[data-tag=\"2\"]'); c.value = '#ff0000'; c.dispatchEvent(new Event('input', { bubbles: true })); true");
   const after = await js(colorAt);
