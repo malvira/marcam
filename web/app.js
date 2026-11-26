@@ -318,6 +318,34 @@ function opKey(o) {
 }
 /** "planned", "pending" (changed: planned again in a moment), "planning", "error" or "none"
  *  (live updating off and never planned) for operation `opId` of setup `setupId`. */
+/** A setup's operations in the order they are planned: its G-code files' in turn (else as
+ *  listed). */
+function planOrder(s) {
+  const ids = s.outputs?.length ? s.outputs.flatMap((o) => o.operations || []) : s.operations.map((o) => o.id);
+  return ids.map((id) => s.operations.find((o) => o.id === id)).filter(Boolean);
+}
+/** The place, in planning order, of the first operation of setup `setupId` that differs
+ *  between `doc` and `was` (0: the setup itself differs; null: none do). */
+function firstChanged(doc, was, setupId) {
+  const a = doc?.setups?.find((x) => x.id === setupId);
+  const b = was?.setups?.find((x) => x.id === setupId);
+  if (!a || !b || setupKey(doc, a) !== setupKey(was, b)) return 0;
+  const oa = planOrder(a), ob = planOrder(b);
+  const n = Math.max(oa.length, ob.length);
+  for (let i = 0; i < n; i++) {
+    const x = oa[i], y = ob[i];
+    if (!x || !y || x.id !== y.id || opKey(x) !== opKey(y)) return i;
+  }
+  return null;
+}
+/** Whether operation `opId` of setup `s` is planned before place `k` (null: none changed,
+ *  all planned again). */
+function before(k, s, opId) {
+  if (k == null) return false;
+  const i = planOrder(s).findIndex((o) => o.id === opId);
+  return i >= 0 && i < k;
+}
+
 function opState(setupId, opId) {
   let doc;
   try {
@@ -334,7 +362,10 @@ function opState(setupId, opId) {
     return !!ps && setupKey(planned, ps) === setupKey(doc, s) && opKey(ps.operations.find((o) => o.id === opId)) === opKey(op);
   };
   if (state.planError && same(state.planError.doc)) return "error";
-  if (state.planning && same(state.planning)) return "planning";
+  // (Mar: "changing a parameter in a later operation seems to force a regeneration of all the
+  // toolpaths") while planning, an operation before the first one changed in its setup is
+  // kept as planned (the engine reuses it): only that one and the ones after are planned
+  if (state.planning && same(state.planning)) return state.result && same(state.job) && before(firstChanged(state.planning, state.job, setupId), s, opId) ? "planned" : "planning";
   if (state.result && same(state.job)) return "planned";
   return autoOn() ? "pending" : "none";
 }

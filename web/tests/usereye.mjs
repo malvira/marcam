@@ -699,6 +699,39 @@ try {
   const d2 = diff(v0, v2, lr);
   const back = await read(`document.querySelector('${sdCss}')?.value`);
   check("Ctrl+Z: the old toolpath back on the screen (one step for the typing)", back === sd0 && d2 < d1 / 3, `field ${back} (was ${sd0}); pixels off the old ${d2} (edit ${d1})`);
+  {
+    // (Mar: "changing a parameter in a later operation seems to force a regeneration of all
+    // the toolpaths. Only the current toolpath and later toolpaths should get regenerated")
+    // the plate's last operation (the dome, planned last) edited: while it is planned, the
+    // operations before it keep their planned mark (never "being planned"); it is planned
+    await settled();
+    await quiet();
+    await click("#tree .tree-op[data-op=op5] .tree-label");
+    await settled();
+    const states = () => read("JSON.stringify(Object.fromEntries([...document.querySelectorAll('#tree .op-state')].map((e) => [e.dataset.stateFor, e.dataset.state])))").then(JSON.parse);
+    const s0 = await states();
+    await click("#opForm [name=stepover]");
+    await key("a", 2);
+    for (const ch of "0.35") await type(ch);
+    const seen = {};
+    const t0 = Date.now();
+    while (Date.now() - t0 < 15000) {
+      const s = await states();
+      for (const [k, v] of Object.entries(s)) (seen[k] ||= new Set()).add(v);
+      if (seen.op5?.has("planning") && s.op5 === "planned") break;
+      await sleep(80);
+    }
+    await settled();
+    const earlier = ["op1", "op2", "op3", "op6", "op4"];
+    const saved = await read("JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.id === 'op5').stepover");
+    const seenOut = Object.fromEntries(Object.entries(seen).map(([k, v]) => [k, [...v]]));
+    check("the plate's last operation edited (the dome's stepover): it is planned again; the five before it stay planned, never shown as being planned",
+      saved === 0.35 && earlier.every((id) => s0[id] === "planned" && !seen[id]?.has("planning")) && (await states()).op5 === "planned",
+      JSON.stringify({ saved, s0, seen: seenOut }));
+    await read("document.activeElement?.blur?.(); true");
+    await key("z", 2);
+    await settled();
+  }
   // ---------------------------------------------------------------- the playback's controls
   // (Mar: "the play stop and rewind controls are gone") after a plan lands: the small play
   // button opens the controls; Play, Step, the end, the speed and the playhead on the screen

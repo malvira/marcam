@@ -217,6 +217,16 @@ fn moves_key(prior: &[Vec<Move>], before: &[Move]) -> u64 {
     w.0.finish()
 }
 
+/// Whether an operation is planned on the stock the moves before it left (so its plan
+/// depends on them).
+fn uses_prior(op: &Operation) -> bool {
+    match op {
+        Operation::Rough3d(r) => r.rest || !r.indexes.is_empty() || r.index_count > 0,
+        Operation::RotaryRough(r) => r.rest,
+        _ => false,
+    }
+}
+
 /// Where the moves before cut (not how fast), for an in-process operation's cache key: a
 /// feed changed before it does not plan it again.
 fn cuts_key(prior: &[Vec<Move>], before: &[Move]) -> u64 {
@@ -1467,9 +1477,11 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     b.r.map(f64::to_bits),
                     b.a.to_bits(),
                     b.p3.map(|p| p.map(f64::to_bits)),
-                    // a rest roughing: and the moves before it
-                    matches!(op, Operation::Rough3d(r) if r.rest)
-                        .then(|| moves_key(&ctx.prior, &b.moves)),
+                    // a rest roughing, or one on the stock the moves before left (indexed
+                    // roughing, rotary rest roughing): and the moves before it (an earlier
+                    // operation changed, it is planned again; changed itself or after, the
+                    // ones before are kept)
+                    uses_prior(op).then(|| moves_key(&ctx.prior, &b.moves)),
                     // in-process stock: and the moves before it (what they left)
                     aware.then(|| cuts_key(&ctx.prior, &b.moves)),
                 ))
