@@ -3353,12 +3353,22 @@ try {
     // (a ring: turned `turn` degrees round it, on its band: 5° steps)
     const drag = async (mode, axis, dx, dy, turn = 120, apart = false) => {
       // (a ring: from a point round it that no arrow covers)
-      // (`apart`: of those, the point furthest on the screen from the other rings: the knob's
-      // carried piece framed close, its Y ring's 45° point sat on its Z ring; else at 45°)
+      // (`apart`: of those, the point furthest on the screen from the other rings and the
+      // arrows: the knob's carried piece, its Y ring's 45° point near its Z ring, a press there
+      // read before its handles settled taken by the Z ring or an arrow; else at 45°)
       let p = null, a0 = 45, best = -1;
       const at = async (ax, ang) => JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('${mode}', '${ax}', ${ang}))`));
       const others = [];
-      if (mode === "rotate" && apart) for (const ax of "XYZ".replace(axis, "")) for (let g = 0; g < 360; g += 10) { const q = await at(ax, g); if (q) others.push(q); }
+      if (mode === "rotate" && apart) {
+        for (const ax of "XYZ".replace(axis, "")) for (let g = 0; g < 360; g += 10) { const q = await at(ax, g); if (q) others.push(q); }
+        // (and the arrows, which take a press before the rings: points along each, from the
+        // handles' middle out past its head)
+        const c = JSON.parse(await js("(() => { const v = window.__marcam.state.three; const p = window.__marcam.handles.state.proxy.position.clone().project(v.camera); const r = v.renderer.domElement.getBoundingClientRect(); return JSON.stringify([r.left + ((p.x + 1) / 2) * r.width, r.top + ((1 - p.y) / 2) * r.height]); })()"));
+        for (const ax of "XYZ") {
+          const m = JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('translate', '${ax}'))`));
+          if (m) for (let t = 0; t <= 2.2; t += 0.1) others.push([c[0] + (m[0] - c[0]) * t, c[1] + (m[1] - c[1]) * t]);
+        }
+      }
       for (const ang of mode === "rotate" && apart ? [45, 60, 30, 75, 15, 120, 150, 210, 240, 300, 330] : [45]) {
         const q = await at(axis, ang);
         if (!q) continue;
@@ -3440,6 +3450,8 @@ try {
     // (its handles under its Part: Mar, only in the part modification screen)
     await js("document.querySelector('#tree [data-act=part]').click(); true");
     await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible && window.__marcam.handles.target()?.kind === 'carried'"), "the carried piece's handles", 60000);
+    // (the carried piece drawn and its handles on it before they are read off the screen)
+    await settle(1500);
     const stood = await drag("rotate", "Y", -220, 160, 90, true);
     const ks = (await job()).setups[1];
     const kframe = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${ks.id}' }).then((r) => r.result.stock_box)`);
