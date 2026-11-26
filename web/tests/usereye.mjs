@@ -2353,6 +2353,22 @@ try {
     }
     await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
     await settled();
+    // (passes along X 2 mm apart, each the bar's whole depth: far more than the tool's bite)
+    const finishId = await read("JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.type === 'rotary_finish').id");
+    await click(`#tree .tree-op[data-op=${finishId}] .tree-label`);
+    await settled();
+    await read("(() => { const s = document.querySelector('#opForm [name=pattern]'); s.value = 'along'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await sleep(800);
+    await settled();
+    await click("#opForm [name=stepover_mm]");
+    await key("a", 2);
+    for (const ch of "2") await type(ch);
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await sleep(1200);
+    await settled();
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
     // its stock simulated, as a person turns it on (the view's Simulated stock), at Coarse
     await read("(() => { const s = document.getElementById('simRes'); s.value = 'coarse'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     const stockOn = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed') === 'true'");
