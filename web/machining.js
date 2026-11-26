@@ -825,8 +825,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       }
       const pos = f32(t.positions);
       if (!pos.length) continue;
-      const ib = b64ToBytes(t.indices);
-      const idx = new Uint32Array(ib.buffer, ib.byteOffset, ib.byteLength / 4);
+      const idx = t.indices instanceof Uint32Array ? t.indices : (() => {
+        const ib = b64ToBytes(t.indices);
+        return new Uint32Array(ib.buffer, ib.byteOffset, ib.byteLength / 4);
+      })();
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
       const ops = t.ops ? u16(t.ops) : null;
@@ -834,7 +836,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       for (let k = 0; k < pos.length / 3; k++) col.set(colorOf(ops ? ops[k] : 0), 3 * k);
       g.setAttribute("color", new THREE.BufferAttribute(col, 3));
       g.setIndex(new THREE.BufferAttribute(idx, 1));
-      g.computeVertexNormals();
+      // (its normals from the worker; made here only when it sent none)
+      if (t.normals?.length === pos.length) g.setAttribute("normal", new THREE.BufferAttribute(t.normals, 3));
+      else g.computeVertexNormals();
       const mesh = new THREE.Mesh(g, mat);
       mesh.userData.tile = key;
       mesh.userData.ops = ops;

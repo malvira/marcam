@@ -31,7 +31,50 @@ const BASE64 = {
   carriedMesh: [["stl"]],
 };
 
+/** A mesh's vertex normals (each the sum of its triangles' area-weighted normals, unit), as
+ *  three.js's computeVertexNormals makes them. */
+function vertexNormals(p, ix) {
+  const n = new Float32Array(p.length);
+  for (let t = 0; t < ix.length; t += 3) {
+    const a = 3 * ix[t], b = 3 * ix[t + 1], c = 3 * ix[t + 2];
+    const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+    const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    for (const k of [a, b, c]) {
+      n[k] += nx;
+      n[k + 1] += ny;
+      n[k + 2] += nz;
+    }
+  }
+  for (let k = 0; k < n.length; k += 3) {
+    const l = Math.hypot(n[k], n[k + 1], n[k + 2]) || 1;
+    n[k] /= l;
+    n[k + 1] /= l;
+    n[k + 2] /= l;
+  }
+  return n;
+}
+
 function prepare(cmd, result, transfer) {
+  // (the playback's stock in 3D: its tiles decoded and their normals made here, not on the
+  // main thread, where a scrub's tiles held the view 100 ms and more)
+  const tiles = cmd === "simSeek" ? result.tiles : cmd === "simOpen" ? result.solid?.tiles : null;
+  for (const t of tiles || []) {
+    if (typeof t.positions === "string") {
+      const b = bytes(t.positions);
+      t.positions = new Float32Array(b.buffer, 0, b.byteLength / 4);
+    }
+    if (typeof t.indices === "string") {
+      const b = bytes(t.indices);
+      t.indices = new Uint32Array(b.buffer, 0, b.byteLength / 4);
+    }
+    if (typeof t.ops === "string") {
+      const b = bytes(t.ops);
+      t.ops = new Uint16Array(b.buffer, 0, b.byteLength / 2);
+    }
+    t.normals = vertexNormals(t.positions, t.indices);
+    for (const a of [t.positions, t.indices, t.ops, t.normals]) if (a?.buffer && !transfer.includes(a.buffer)) transfer.push(a.buffer);
+  }
   const at = (path) => {
     let o = result;
     for (const k of path.slice(0, -1)) o = o?.[k];
