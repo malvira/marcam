@@ -102,6 +102,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const s = t?.doc?.setups?.find((x) => x.id === t.setup);
     return !!s && !s.part?.length;
   };
+  /** The part's own screen (its handles to move it): the part shown there, never the
+   *  simulated stock over it (the stock of where the part was, hiding the one being moved). */
+  const partScreen = () => state.tree?.focus === "part" && !state.tree?.selected;
   const view = { ...VIEW_DEFAULT };
   try {
     const saved = JSON.parse(recall(VIEW_KEY) || "null");
@@ -643,8 +646,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // stock goes with the one shown, never left on the old one (out of the scene, the part
     // stepping aside for a stock no one sees)
     if (v.groups.simFinal.parent !== v.groups.machining) v.groups.machining.add(v.groups.simFinal);
-    const want = !m.expanded && stockOn() && state.sim ? state.sim : null;
-    const key = want ? want : null;
+    const want = !m.expanded && stockOn() && !partScreen() && state.sim ? state.sim : null;
+    // (Mar: "unclear what it's displaying") the stock shown but not simulated yet: the bar as
+    // it starts (the setup's stock, solid), never an empty view; the simulated one in its
+    // place when it lands
+    const bar = !m.expanded && stockOn() && !partScreen() && !state.sim ? v.groups.stock : null;
+    const key = want || (bar ? `bar|${v.modelKey}|${bar.children.length}` : null);
     if (m.finalKey !== key || (want && !v.groups.simFinal.children.length)) {
       m.finalKey = key;
       for (const c of [...v.groups.simFinal.children]) {
@@ -653,9 +660,21 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       }
       const last = want?.stocks?.[want.stocks.length - 1];
       if (last && simMeshOf) v.groups.simFinal.add(simMeshOf(v.THREE, want, last));
+      else if (bar) {
+        const mat = new v.THREE.MeshStandardMaterial({ color: new v.THREE.Color(...uncut()), roughness: 0.55, metalness: 0.15 });
+        // (the stock group's solids, not its edge lines nor a carried piece's guide)
+        bar.traverse((o) => {
+          if (!o.isMesh || o.userData.guide) return;
+          o.updateWorldMatrix(true, false);
+          const g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+          const mesh = new v.THREE.Mesh(g, mat);
+          mesh.userData.bar = true;
+          v.groups.simFinal.add(mesh);
+        });
+      }
       applyLayers();
     }
-    v.groups.simFinal.visible = !!want && !m.editing;
+    v.groups.simFinal.visible = (!!want || !!bar) && !m.editing;
   }
 
   /** Only the machining view while it is open. */
@@ -775,8 +794,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (m.stock && m.busy) say = `Simulating the stock along the playback: ${Math.round(done)}% of the moves, to ${Math.round(want)}%`;
     else if (ring?.active) {
       const t = (performance.now() - ring.t0) / 1000;
-      say = ring.estimate > 0 ? `Simulating the stock: ${Math.min(97, Math.round((100 * t) / ring.estimate))}%` : "Simulating the stock...";
-    } else if (sim?.surfacing) say = "The stock in 3D: being made (the stock shown meanwhile is the quick one)";
+      // (the work done when the engine says it; else the time estimate)
+      say = ring.work != null ? `Simulating the stock: ${Math.round(100 * ring.work)}%` : ring.estimate > 0 ? `Simulating the stock: ${Math.min(97, Math.round((100 * t) / ring.estimate))}%` : "Simulating the stock...";
+    } else if (sim?.surfacing) say = `The stock in 3D: being made${sim.surfaceWork != null ? `, ${Math.round(100 * sim.surfaceWork)}%` : ""} (the stock shown meanwhile is the quick one)`;
     else if (sim?.surface) say = "Ready: the stock in 3D";
     else if (sim) say = "Ready";
     let el = $("simProgress");

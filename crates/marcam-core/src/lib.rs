@@ -575,7 +575,13 @@ const DEXEL_FINE_H: f64 = 0.05;
 pub fn heavy_bites(job: &Job, tps: &[Toolpath]) -> Vec<Vec<dexel::Heavy>> {
     let tool = |t: u32| tool_solid(job, t);
     let mut solid = dexel::Dexel::bar(job.stock.radius, job.stock.length, DEXEL_H);
-    tps.iter()
+    let moves: usize = tps
+        .iter()
+        .map(|tp| sim::segments(std::slice::from_ref(tp)).len())
+        .sum();
+    let began = work_begin(moves);
+    let out = tps
+        .iter()
         .enumerate()
         .map(|(k, tp)| {
             let sg = sim::segments(std::slice::from_ref(tp));
@@ -588,7 +594,9 @@ pub fn heavy_bites(job: &Job, tps: &[Toolpath]) -> Vec<Vec<dexel::Heavy>> {
                 })
                 .collect()
         })
-        .collect()
+        .collect();
+    work_end(began);
+    out
 }
 
 /// The rapids the radial map flags as through stock or grazing it, confirmed on the 3D stock
@@ -1327,6 +1335,46 @@ pub fn set_phase_hook(f: fn(&str)) {
 pub fn phase(what: &str) {
     if let Some(f) = PHASE.get() {
         f(what);
+    }
+}
+
+/// How much of a long job is done: (units in all, done, the last per mille told).
+static WORK: std::sync::Mutex<(usize, usize, usize)> = std::sync::Mutex::new((0, 0, usize::MAX));
+
+/// A long job of `total` units (moves simulated, rows meshed) begins: [`work`] counts them
+/// and the phase hook is told `[work d/1000]` as each per mille passes (the page's progress
+/// from work done, not a time estimate). Only the outermost job counts (its parts, begun
+/// inside it, are already in its total): true when this one is it, to pass to [`work_end`].
+pub fn work_begin(total: usize) -> bool {
+    let mut w = WORK.lock().unwrap_or_else(|e| e.into_inner());
+    if w.0 != 0 || total == 0 {
+        return false;
+    }
+    *w = (total, 0, usize::MAX);
+    drop(w);
+    work(0);
+    true
+}
+
+/// `n` more units of the job begun done (nothing without one).
+pub fn work(n: usize) {
+    let mut w = WORK.lock().unwrap_or_else(|e| e.into_inner());
+    if w.0 == 0 {
+        return;
+    }
+    w.1 = (w.1 + n).min(w.0);
+    let pm = w.1 * 1000 / w.0;
+    if pm != w.2 {
+        w.2 = pm;
+        drop(w);
+        phase(&format!("[work {pm}/1000]"));
+    }
+}
+
+/// The job [`work_begin`] began (when it said true) over.
+pub fn work_end(began: bool) {
+    if began {
+        *WORK.lock().unwrap_or_else(|e| e.into_inner()) = (0, 0, usize::MAX);
     }
 }
 
@@ -3128,6 +3176,16 @@ pub fn simulate_job(
     let mut programs = Vec::new();
     let mut collisions = Vec::new();
     let mut after = Vec::new();
+    // (its work: each move simulated, then each replayed on the 3D stock that confirms rapids)
+    let moves: usize = tps
+        .iter()
+        .map(|tp| sim::segments(std::slice::from_ref(tp)).len())
+        .sum();
+    let began = work_begin(if job.carried.is_none() {
+        2 * moves
+    } else {
+        moves
+    });
     for tp in tps {
         let (st, rep) = collision::simulate_rotary(
             &mut stock,
@@ -3152,6 +3210,7 @@ pub fn simulate_job(
     if job.carried.is_none() {
         confirm_rapids_3d(job, tps, &mut programs);
     }
+    work_end(began);
     Ok(JobSim {
         stock,
         part,

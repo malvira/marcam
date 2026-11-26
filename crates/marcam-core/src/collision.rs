@@ -591,6 +591,9 @@ fn worst(
     out
 }
 
+/// Moves cut together at most, between tellings of the work done (a whole program was one).
+const WORK_RUN: usize = 1024;
+
 /// [`sim::simulate`] that also checks the tool bodies: moves whose tip stays high enough that
 /// nothing above the flutes can reach the stock (`bar.0`, the starting radius, bounds it) are
 /// cut in bulk; the others are checked against the stock before they cut it. With
@@ -659,7 +662,8 @@ pub fn simulate_rotary(
         }
         // a run of moves that cannot touch (or the rest, once the count is full): cut together
         let mut e = k;
-        while e < end && (rep.full() || risky(&segs[e]).is_none()) {
+        // (in runs of at most WORK_RUN: the work done told as it goes)
+        while e < end && e - k < WORK_RUN && (rep.full() || risky(&segs[e]).is_none()) {
             e += 1;
         }
         if e > k {
@@ -672,6 +676,7 @@ pub fn simulate_rotary(
             )) {
                 tally(&mut st, seg, &eff);
             }
+            crate::work(e - k);
             k = e;
             since = f64::INFINITY;
             continue;
@@ -695,6 +700,7 @@ pub fn simulate_rotary(
         }
         let eff = sim::apply_segment(stock, seg, cutters[k].as_ref(), step);
         tally(&mut st, seg, &eff);
+        crate::work(1);
         k += 1;
     }
     (st, rep)

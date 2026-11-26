@@ -46,6 +46,9 @@ function startWorker(which = "main") {
     if (ev.data.phase) {
       p.phase = ev.data.phase;
       p.phaseT = performance.now();
+      // (the work a long simulation has done, per mille of its moves and rows: its progress)
+      const w = /^\[work (\d+)\/1000\]$/.exec(ev.data.phase);
+      if (w) return void workSaid(p.cmd, +w[1] / 1000);
       // (Mar: "a real progress wheel") how far a plan has got: operation i of n, and angle k
       // of m in indexed roughing; one operation with nothing within it: not known
       const m = p.cmd === "planAndPost" && /\[op (\d+)\/(\d+)\](?: \[angle (\d+)\/(\d+)\])?/.exec(ev.data.phase);
@@ -103,10 +106,26 @@ function cancelEngine(why = "cancelled") {
 // ---- the simulation's progress: a ring in a corner of the 3D view while the engine
 // simulates (from its time estimate); a click on it cancels
 const SIM_CMDS = new Set(["simulate", "simOpen", "simSeek", "gpuOpen"]);
-const simRing = { active: 0, t0: 0, estimate: 0, timer: 0 };
+// (work: the share of the simulation done, as the engine or the GPU says; null: not known, the
+// time estimate then)
+const simRing = { active: 0, t0: 0, estimate: 0, timer: 0, work: null };
+/** A long call's work done (0..1): the simulation's in the ring, the stock in 3D's in the
+ *  playback's line. (Mar's impeller: a time estimate sat at 97% for minutes.) */
+function workSaid(cmd, f) {
+  if (cmd === "simSurface") {
+    if (state.sim) state.sim.surfaceWork = f;
+    window.__marcam.machining?.renderSimProgress?.();
+  } else if (cmd === "simulate" && simRing.active) {
+    simRing.work = f;
+    showSimRing();
+  }
+}
 function simCallStart(cmd) {
   if (!SIM_CMDS.has(cmd)) return;
-  if (!simRing.active++) simRing.t0 = performance.now();
+  if (!simRing.active++) {
+    simRing.t0 = performance.now();
+    simRing.work = null;
+  }
   if (!simRing.timer) simRing.timer = setInterval(showSimRing, 200);
 }
 function simCallDone(cmd) {
@@ -137,14 +156,15 @@ function showSimRing() {
     });
     $("view3d").appendChild(el);
   }
-  // from the estimate (never quite full until done); without one, a turning quarter
+  // from the work done when the engine says it; else from the estimate (never quite full
+  // until done); without either, a turning quarter
   const est = simRing.estimate;
-  const f = est > 0 ? Math.min(0.97, s / est) : null;
+  const f = simRing.work != null ? simRing.work : est > 0 ? Math.min(0.97, s / est) : null;
   el.classList.remove("hidden");
   el.classList.toggle("spin", f === null);
   el.style.setProperty("--p", f === null ? "0.25" : f.toFixed(3));
-  const left = est > 0 ? Math.max(0, Math.ceil(est - s)) : null;
-  const label = `Simulating${f !== null ? ` (${Math.round(f * 100)}%, about ${left} s left)` : ""}: click to cancel`;
+  const left = simRing.work > 0.02 ? Math.max(0, Math.ceil((s * (1 - simRing.work)) / simRing.work)) : simRing.work == null && est > 0 ? Math.max(0, Math.ceil(est - s)) : null;
+  const label = `Simulating${f !== null ? ` (${Math.round(f * 100)}%${left != null ? `, about ${left} s left` : ""})` : ""}: click to cancel`;
   el.title = label;
   el.setAttribute("aria-label", label);
 }
@@ -1176,7 +1196,7 @@ async function simulateLocked(opts = {}) {
         // while the GPU simulated)
         simCallStart("simulate");
         try {
-          result = await simulateOnGpu(gpu, open, async (o, bytes) => (await eng("gpuStats", o, bytes)).result);
+          result = await simulateOnGpu(gpu, open, async (o, bytes) => (await eng("gpuStats", o, bytes)).result, (f) => workSaid("simulate", f));
         } finally {
           simCallDone("simulate");
         }
@@ -2209,8 +2229,10 @@ function legacyLayers() {
   const paths = view ? view.paths !== "off" : true;
   const rapids = view ? view.rapids : $("showRapids").checked;
   const tool = view ? view.tool : true;
-  const simShown = !!groups.sim.children.length && sim;
-  groups.sim.visible = sim;
+  // (the part's own screen: the part, never the simulated stock over it)
+  const partScreen = state.tree?.focus === "part" && !state.tree?.selected;
+  const simShown = !!groups.sim.children.length && sim && !partScreen;
+  groups.sim.visible = sim && !partScreen;
   // (picking: the faces to pick on stand in for the part)
   groups.part.visible = part && !simShown && !state.tree?.pickMesh;
   groups.stock.visible = $("showStock").checked && (view ? view.part || view.stock : true) && !simShown;

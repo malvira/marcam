@@ -264,12 +264,23 @@ export class GpuStock {
  * part, stock_radius | stock_box, stocks: [{name, r | z, max_left, ..., rapid_hits}]}.
  * `stats(opts, keyBytes)` is the engine's gpuStats.
  */
-export async function simulateOnGpu(gpu, open, stats) {
+export async function simulateOnGpu(gpu, open, stats, progress) {
   const gs = new GpuStock(gpu, open);
   try {
     const stocks = [];
+    // (the work done told as it goes: the moves in steps of a hundredth, each waited for)
+    const all = gs.segments || 1;
+    const step = Math.max(1, Math.ceil(all / 100));
+    progress?.(0);
     for (let p = 0; p < open.programs.length; p++) {
       const [a, b] = [gs.progSeg[p], gs.progSeg[p + 1]];
+      if (progress) {
+        for (let s = Math.min(b, a + step); s < b; s = Math.min(b, s + step)) {
+          gs.seek(s);
+          await gpu.device.queue.onSubmittedWorkDone();
+          progress(s / all);
+        }
+      }
       gs.seek(b);
       const keys = await gs.readRows(0, gs.rows - 1);
       const hits = await gs.readHits();
@@ -282,6 +293,7 @@ export async function simulateOnGpu(gpu, open, stats) {
       const st = await stats({ rapid_hits: rapid, rapid_grazes: graze }, new Uint8Array(keys.buffer));
       const { h } = gs.decode(keys);
       stocks.push({ name: open.programs[p], samples: gs.segStart[b] - gs.segStart[a], ...st, [gs.kind === "xyz" ? "z" : "r"]: h });
+      progress?.(b / all);
     }
     return { kind: open.kind, grid: open.grid, part: open.part, stock_radius: open.stock_radius, stock_box: open.stock_box, stocks };
   } finally {

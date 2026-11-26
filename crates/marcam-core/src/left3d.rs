@@ -277,12 +277,20 @@ pub struct StockSurface {
 /// See [`StockSurface`].
 pub fn stock_surface(job: &Job, tps: &[Toolpath], mesh: Option<&Mesh>, h: f64) -> StockSurface {
     let mut dx = Dexel::bar(job.stock.radius, job.stock.length, h);
-    for tp in tps {
-        let segs = crate::sim::segments(std::slice::from_ref(tp));
-        replay(&mut dx, &segs, &|t| solid(job, t), h, 0.15);
+    // (its work: each move replayed, then the surface made and measured, a quarter as much
+    // each)
+    let segs: Vec<_> = tps
+        .iter()
+        .map(|tp| crate::sim::segments(std::slice::from_ref(tp)))
+        .collect();
+    let moves: usize = segs.iter().map(Vec::len).sum();
+    let began = crate::work_begin(moves + moves / 2);
+    for sg in &segs {
+        replay(&mut dx, sg, &|t| solid(job, t), h, 0.15);
     }
-    let surf = dx.surface_mesh();
+    let surf = dx.surface_mesh_working(moves / 4);
     let mut left = vec![f32::NAN; surf.positions.len() / 3];
+    let per = (left.len() / (moves / 4).max(1)).max(1);
     if let Some(m) = mesh.filter(|m| !m.triangles.is_empty()) {
         let near = Near::new(m, 1.0, 2.0);
         let out_sign = if check_mesh(m).volume < 0.0 {
@@ -292,6 +300,9 @@ pub fn stock_surface(job: &Job, tps: &[Toolpath], mesh: Option<&Mesh>, h: f64) -
         };
         let (lo, hi) = m.bounds().unwrap_or(([0.0; 3], [0.0; 3]));
         for (v, l) in left.iter_mut().enumerate() {
+            if v % per == 0 {
+                crate::work(1);
+            }
             let p = [0, 1, 2].map(|k| surf.positions[3 * v + k] as f64);
             if p[0] < lo[0] - h || p[0] > hi[0] + h {
                 continue;
@@ -309,6 +320,7 @@ pub fn stock_surface(job: &Job, tps: &[Toolpath], mesh: Option<&Mesh>, h: f64) -
             };
         }
     }
+    crate::work_end(began);
     StockSurface {
         mesh: surf,
         left,

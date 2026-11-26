@@ -531,10 +531,19 @@ impl Dexel {
         self.surface_mesh_region([0, 0, 0], self.n)
     }
 
+    /// [`Dexel::surface_mesh`], `units` of work ([`crate::work`]) told as its rows are made.
+    pub fn surface_mesh_working(&self, units: usize) -> SurfaceMesh {
+        self.mesh_region([0, 0, 0], self.n, units)
+    }
+
     /// [`Dexel::surface_mesh`] of a region only: the triangles across the edges from the grid
     /// points `lo` (in) to `hi` (out), each axis; the regions of a partition of the grid give
     /// the whole surface between them (a playback remeshes only where the tool went).
     pub fn surface_mesh_region(&self, lo: [usize; 3], hi: [usize; 3]) -> SurfaceMesh {
+        self.mesh_region(lo, hi, 0)
+    }
+
+    fn mesh_region(&self, lo: [usize; 3], hi: [usize; 3], units: usize) -> SurfaceMesh {
         let n = self.n;
         let h = self.h;
         let hi = [0, 1, 2].map(|k| hi[k].min(n[k]));
@@ -670,7 +679,12 @@ impl Dexel {
             vert.insert(c, v);
             v
         };
+        let rows = hi[0] - lo[0];
         for i in lo[0]..hi[0] {
+            if units > 0 {
+                let r = i - lo[0];
+                crate::work(units * (r + 1) / rows - units * r / rows);
+            }
             for j in lo[1]..hi[1] {
                 for k in lo[2]..hi[2] {
                     let g = [i, j, k];
@@ -835,6 +849,7 @@ pub fn replay(
     // (a bite is what the tool takes per mm its tip moved since the last place it cut from)
     let mut last: Option<[f64; 3]> = None;
     for seg in segs {
+        crate::work(1);
         let (Some(from), Some(t)) = (seg.from, seg.tool.and_then(tool_for)) else {
             continue;
         };
