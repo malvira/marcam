@@ -729,6 +729,45 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     const clock = s.times?.length ? ` · ${fmtClock(timeAt(at))} / ${fmtClock(s.times[s.times.length - 1])}` : "";
     if (m.playing) $("simScrub").value = String(at);
     $("simLabel").textContent = `move ${at.toLocaleString("en")} / ${s.segments.toLocaleString("en")}${clock}${op ? ` · ${op.program}: ${op.kind.replace(/_/g, " ")}` : ""} · ${where} · ${m.stock ? (m.gpu ? "GPU" : "CPU") : "no stock"}${m.note ? ` · ${m.note}` : ""}`;
+    renderSimProgress();
+  }
+
+  /** (Mar: "It's also very unclear as to what its displaying and when it's still rendering.
+   *  I think the progress bar should be used to visualize what has been rendered / simulated
+   *  and what is still to go") The playback's bar: the stock simulated so far filled, where
+   *  it is still being simulated to striped, the rest plain; and a word of what is shown: the
+   *  stock simulating (how far), the smooth 3D stock being made, or ready. */
+  function renderSimProgress() {
+    const bar = $("simScrub");
+    const s = m.session;
+    if (!bar) return;
+    const n = s?.segments || 0;
+    const pct = (k) => (n ? Math.max(0, Math.min(100, (100 * k) / n)) : 0);
+    const done = m.stock ? pct(m.pos) : 0;
+    const want = m.stock && m.busy ? pct(Math.max(m.target ?? m.pos, m.pos)) : done;
+    bar.style.setProperty("--sim-done", `${done.toFixed(2)}%`);
+    bar.style.setProperty("--sim-want", `${want.toFixed(2)}%`);
+    bar.classList.toggle("sim-progress", !!m.stock);
+    // what is shown, in words
+    const ring = window.__marcam.simRing;
+    const sim = state.sim;
+    let say = "";
+    if (m.stock && m.busy) say = `Simulating the stock along the playback: ${Math.round(done)}% of the moves, to ${Math.round(want)}%`;
+    else if (ring?.active) {
+      const t = (performance.now() - ring.t0) / 1000;
+      say = ring.estimate > 0 ? `Simulating the stock: ${Math.min(97, Math.round((100 * t) / ring.estimate))}%` : "Simulating the stock...";
+    } else if (sim?.surfacing) say = "The stock in 3D: being made (the stock shown meanwhile is the quick one)";
+    else if (sim?.surface) say = "Ready: the stock in 3D";
+    else if (sim) say = "Ready";
+    let el = $("simProgress");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "simProgress";
+      el.className = "small sim-progress-label";
+      el.setAttribute("role", "status");
+      $("simLabel")?.after(el);
+    }
+    if (el.textContent !== say) el.textContent = say;
   }
 
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
@@ -921,6 +960,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
           continue;
         }
         const goal = m.target;
+        renderSimProgress();
         const from = goal < m.pos ? 0 : m.pos;
         // (back: the engine starts again from the top, run to the place in one go, so no
         // state on the way there is drawn; Mar's scrub glitch)
@@ -1449,5 +1489,5 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   }
 
   renderToggles();
-  return { open, close, seek, jumpTo, reset, applyHidden, colorOf, lost, recolor, syncFrame, expand, collapse, toggle, renderToggles, state: m };
+  return { open, close, seek, jumpTo, renderSimProgress, reset, applyHidden, colorOf, lost, recolor, syncFrame, expand, collapse, toggle, renderToggles, state: m };
 }

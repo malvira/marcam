@@ -29,7 +29,7 @@ const $ = (id) => document.getElementById(id);
 // Two workers, each with the engine: one plans and answers the editor (forms, picks, the
 // part), the other simulates (the batch simulation, the playback), so a simulation running
 // in the background never holds up an edit. A cancel ends the simulating one only.
-const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simClose", "gpuOpen", "gpuStats"]);
+const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simClose", "gpuOpen", "gpuStats", "simSurface"]);
 const workers = { main: null, sim: null };
 const TEST_SIM_DELAY = Math.max(0, +new URLSearchParams(location.search).get("testSimDelayMs") || 0);
 let nextId = 1;
@@ -115,6 +115,7 @@ function simCallDone(cmd) {
   showSimRing();
 }
 function showSimRing() {
+  window.__marcam.machining?.renderSimProgress?.();
   let el = $("simRing");
   if (!simRing.active) {
     el?.classList.add("hidden");
@@ -149,7 +150,7 @@ function showSimRing() {
 }
 /** Engine calls by command, since the page loaded (window.__marcam.calls). */
 const calls = {};
-const WITH_LIBRARIES = new Set(["gapDepths", "opDefaults", "setMaterial", "simulate", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
+const WITH_LIBRARIES = new Set(["gapDepths", "opDefaults", "setMaterial", "simulate", "simSurface", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
 function engine(cmd, ...args) {
   return engineOn(SIM_WORKER.has(cmd) ? "sim" : "main", cmd, ...args);
 }
@@ -164,7 +165,7 @@ const planKey = (job, setup, libs) => JSON.stringify([state.meshesGen, setup ?? 
 const SIMULATING = new Set(["sim", "stats"]);
 
 /** The engine calls that plan the project they are given. */
-const PLANS = new Set(["simulate", "simOpen", "simGrid", "gpuOpen", "carriedMesh", "planAndPost"]);
+const PLANS = new Set(["simulate", "simSurface", "simOpen", "simGrid", "gpuOpen", "carriedMesh", "planAndPost"]);
 /** An engine call on worker `which` ("main", "sim", or one of the pool's, see [`pool`]). */
 function engineOn(which, cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
@@ -1188,6 +1189,10 @@ async function simulateLocked(opts = {}) {
     selectTab(state.tab);
     const s = result.stocks[state.tab];
     say(`Simulated in ${(ms / 1000).toFixed(1)} s`, "done");
+    // (Mar: "the simulation should be more realistic: there is no way these weird rectangular
+    // spiky slices would happen") a bar on the rotary axis: its stock in 3D next, drawn
+    // smooth in place of the radial map's when it comes (the view as it is meanwhile)
+    if (result.grid && result.kind !== "xyz") smoothStock(result, forJob, epoch, opts.res);
     const hits = result.stocks.reduce((n, st) => n + (st.collisions?.count || 0), 0);
     if (s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
   } catch (e) {
@@ -1204,6 +1209,28 @@ async function simulateLocked(opts = {}) {
     }
   } finally {
     if (!opts.quiet) $("generate").disabled = $("simulate").disabled = false;
+  }
+}
+
+/** The simulated stock's 3D surface (a tri-dexel of the bar, every program cut), for the
+ *  view: asked of the simulating worker after the radial simulation, kept on it. */
+async function smoothStock(sim, forJob, epoch, res) {
+  try {
+    sim.surfacing = true;
+    window.__marcam.machining?.renderSimProgress?.();
+    const { result } = await engineOn("stats", "simSurface", forJob, simOpts(res), state.mesh);
+    if (state.sim !== sim || epoch !== state.epoch || forJob !== state.job || result.error) return;
+    sim.surface = result;
+    const m = window.__marcam.machining;
+    if (m) {
+      m.state.finalKey = null;
+      m.syncFrame();
+    }
+  } catch (e) {
+    if (e.message !== "superseded" && e.message !== "replanning" && e.message !== "cancelled") console.warn(`3D stock: ${e.message}`);
+  } finally {
+    sim.surfacing = false;
+    window.__marcam.machining?.renderSimProgress?.();
   }
 }
 
@@ -1674,9 +1701,13 @@ async function drawDraft(pts) {
 window.__marcam.previewDraft = previewDraft;
 /** The stock's numbers (material left, gouges, rapids through it) when the viewer shows the
  *  stock: the batch simulation in the background, nothing asked (skipped when long). */
+// (Mar: "the sim is kinda glitchy to get started. I have to click on the window to get the
+// machining sim to get the stock") a job whose chosen grid takes longer than SIM_ASK_SECONDS
+// was never simulated in the background: no stock until something was clicked. At Coarse
+// first, always (then the chosen grid when quick), as after an edit
 window.__marcam.statsInBackground = () => {
   if (!state.result || state.sim) return;
-  setTimeout(() => simLock.run("batch", () => simulateQuiet(SIM_ASK_SECONDS), { quiet: true }), 0);
+  setTimeout(backgroundSimulate, 0);
 };
 
 /** Machine (x, r, a) -> part frame xyz: the tool at A sits over part angle 90 - A. */
@@ -2243,6 +2274,29 @@ function toGeometry(THREE, m) {
 /** Simulated stock -> closed solid (a bar around X, or a 3-axis block), coloured by material
  * left over the part (grey where there is no part). */
 function simMesh(THREE, sim, s) {
+  // (the bar's stock in 3D, when it has come: smooth, its overhangs and hollows as they are)
+  if (sim.surface && s === sim.stocks[sim.stocks.length - 1]) {
+    const f = sim.surface;
+    const pos = f.positions instanceof Float32Array ? f.positions : new Float32Array(f.positions.buffer, f.positions.byteOffset, f.positions.byteLength / 4);
+    const left = f.left instanceof Float32Array ? f.left : new Float32Array(f.left.buffer, f.left.byteOffset, f.left.byteLength / 4);
+    const idx = f.indices instanceof Uint32Array ? f.indices : new Uint32Array(f.indices.buffer, f.indices.byteOffset, f.indices.byteLength / 4);
+    const uncut = colorRgb("uncut");
+    const col = new Float32Array(pos.length);
+    for (let k = 0; k < left.length; k++) {
+      const c = Number.isFinite(left[k]) ? ramp(left[k] / 0.5) : uncut;
+      col[3 * k] = c[0];
+      col[3 * k + 1] = c[1];
+      col[3 * k + 2] = c[2];
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.computeVertexNormals();
+    const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }));
+    mesh.userData.surface = true;
+    return mesh;
+  }
   const r = sim.kind === "xyz" ? s.z : s.r;
   const has = (k) => (sim.kind === "xyz" ? sim.part[k] != null : sim.part[k] > 0);
   // where there is no part: remaining stock, tinted (not the part's grey)

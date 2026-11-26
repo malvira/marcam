@@ -1773,6 +1773,55 @@ pub mod api {
         out
     }
 
+    /// The simulated stock's surface in 3D, for the view (rotary: see
+    /// [`marcam::left3d::stock_surface`]): its vertices, triangles, and the material left at
+    /// each vertex (NaN past the part's ends). `opts`: as [`simulate`]'s, and `h` (mm, the
+    /// rays' spacing; by default the finest that keeps the bar under 6 million cells, at
+    /// least 0.25).
+    pub fn sim_surface(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        if job.stock_box.is_some() || job.carried.is_some() {
+            return json!({"error": "the 3D stock is for a bar on the rotary axis", "unsupported": true});
+        }
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let tps = match plan_for_sim(&job, mesh.as_ref(), &opts) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        let r = job.stock.radius;
+        let cells = (2.0 * r) * (2.0 * r) * job.stock.length.max(1.0);
+        let h = opts["h"]
+            .as_f64()
+            .unwrap_or_else(|| (cells / 6.0e6).cbrt().max(0.25));
+        let s = marcam::left3d::stock_surface(&job, &tps, mesh.as_ref(), h);
+        let idx: Vec<u8> = s
+            .mesh
+            .indices
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect();
+        json!({
+            "h": s.h,
+            "positions": f32s(&s.mesh.positions),
+            "indices": b64(&idx),
+            "left": f32s(&s.left),
+            "vertices": s.mesh.positions.len() / 3,
+            "triangles": s.mesh.indices.len() / 3,
+        })
+    }
+
     /// Drop the open playback and GPU sessions (their stock grids): a new project starts clean.
     pub fn sim_close() -> Value {
         let had = SESSION.with(|s| s.borrow_mut().take().is_some());
@@ -2396,6 +2445,7 @@ pub mod api {
                 plan_and_post(&d(a), &m, c, &s(b))
             }
             "simulate" => simulate(&d(a), &s(b), c),
+            "sim_surface" => sim_surface(&d(a), &s(b), c),
             "profile_list" => profile_list(),
             "face_regions" => face_regions(&d(a), &s(b), c),
             "wizard_knurl" => wizard_knurl(&d(a), &s(b), c),

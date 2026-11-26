@@ -2427,6 +2427,62 @@ try {
     await settled();
     await clean("knurl pattern");
   }
+  // ---------------------------------------------------------------- the stock without a click
+  // (Mar: "the sim is kinda glitchy to get started. I have to click on the window to get the
+  // machining sim to get the stock and show the cuts") the grid set Ultra (too slow to run by
+  // itself), the stock shown, the knob's mesh roughing and finish loaded: its simulated stock
+  // on the screen, with nothing clicked or moved over the view; and the playback's line says
+  // what is shown
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const r = document.getElementById('simRes'); r.value = 'ultra'; r.dispatchEvent(new Event('change', { bubbles: true })); const s = document.getElementById('example'); s.value = 'knob_finish'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    const on = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed') === 'true'");
+    if (!on) await click(".view-toggles button[title^='Simulated stock']");
+    // (from here nothing is clicked, nothing moved over the view)
+    const shown = await waitFor(() => read("(() => { const v = window.__marcam.state.three; const g = v?.groups?.simFinal; return !!window.__marcam.state.sim && !!g && g.visible && g.children.length > 0; })()"), "the stock, by itself", 240000 * SLACK).catch(() => false);
+    await sleep(1500);
+    const img = await shot("stock_without_a_click");
+    const vr = await viewRect();
+    // (the stock drawn: coloured pixels in the view, not just the background)
+    let px = 0;
+    for (let y = vr[1]; y < vr[1] + vr[3]; y += 3)
+      for (let x = vr[0]; x < vr[0] + vr[2]; x += 3) {
+        const c = img.at(x, y);
+        if (c[2] > 120 && c[0] < 140) px++;
+      }
+    check("the stock simulated and drawn after the plan with nothing clicked (the grid too slow to run by itself: Coarse first)", shown && px > 300, JSON.stringify({ shown, px }));
+    await read("(() => { const r = document.getElementById('simRes'); r.value = 'normal'; r.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await clean("the stock without a click");
+  }
+  // ---------------------------------------------------------------- Alt+Up after a click
+  // (an operation clicked by its name, then Alt+Up: the keys went to the page, not the tree,
+  // and nothing moved) the plate's third operation clicked, Alt+Up: one place up; Ctrl+Z back
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'plate'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    const order = () => read("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].outputs[0].operations)").then(JSON.parse);
+    const before = await order();
+    const third = before[2];
+    await click(`#tree .tree-op[data-op=${third}] .tree-label`);
+    await sleep(300);
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowUp", code: "ArrowUp", modifiers: 1, windowsVirtualKeyCode: 38 });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowUp", code: "ArrowUp", modifiers: 1, windowsVirtualKeyCode: 38 });
+    await sleep(800);
+    await settled();
+    const after = await order();
+    check("an operation clicked by its name, then Alt+Up: one place up", after.indexOf(third) === 1 && after.length === before.length, JSON.stringify({ before, after }));
+    await key("z", 2);
+    await settled();
+    await clean("Alt+Up after a click");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")

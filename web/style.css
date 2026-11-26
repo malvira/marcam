@@ -349,3 +349,12 @@ details.menu[open] > summary { border-color: var(--accent); }
 .carry-quick { margin: 4px 0; }
 .carry-quick .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 3px 0; }
 .carry-quick button.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+
+/* the playback's bar: the stock simulated so far filled, to be simulated striped */
+#simScrub.sim-progress {
+  background: linear-gradient(to right, var(--ok) 0 var(--sim-done, 0%), transparent var(--sim-done, 0%)),
+    repeating-linear-gradient(45deg, color-mix(in srgb, var(--ok) 45%, transparent) 0 4px, transparent 4px 8px) 0 0 / var(--sim-want, 0%) 100% no-repeat;
+  border-radius: 3px;
+}
+.sim-progress-label { min-height: 1.2em; }
+#tree:focus { outline: none; }

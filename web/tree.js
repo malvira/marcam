@@ -1836,6 +1836,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.typeNote = null;
       t.selected = t.selected === id ? null : id;
       render();
+      // (Alt+Up / Down move the selected operation: the keys go to the tree, so the focus is
+      // put there, where the click left it on the page)
+      const tr = document.getElementById("tree");
+      if (t.selected && tr && !tr.contains(document.activeElement)) tr.focus({ preventScroll: true });
     } else if (act === "dup") {
       await duplicateOp(id);
     } else if (act === "delete") {

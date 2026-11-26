@@ -263,6 +263,59 @@ fn solid(job: &Job, t: u32) -> Option<ToolSolid> {
     })
 }
 
+/// The simulated stock in 3D, for the view: the surface of a tri-dexel of the bar (`h` mm
+/// apart) every program cut, and at each of its vertices what is left over the part (mm; 0 on
+/// the part or inside it, NaN past the part's ends or with no part). Not a radial map: a
+/// blade over a hollow stays a blade and the hollow stays hollow (Mar's impeller: the radial
+/// map's one radius a ray filled under its leaning blades and stepped along their edges).
+pub struct StockSurface {
+    pub mesh: crate::dexel::SurfaceMesh,
+    pub left: Vec<f32>,
+    pub h: f64,
+}
+
+/// See [`StockSurface`].
+pub fn stock_surface(job: &Job, tps: &[Toolpath], mesh: Option<&Mesh>, h: f64) -> StockSurface {
+    let mut dx = Dexel::bar(job.stock.radius, job.stock.length, h);
+    for tp in tps {
+        let segs = crate::sim::segments(std::slice::from_ref(tp));
+        replay(&mut dx, &segs, &|t| solid(job, t), h, 0.15);
+    }
+    let surf = dx.surface_mesh();
+    let mut left = vec![f32::NAN; surf.positions.len() / 3];
+    if let Some(m) = mesh.filter(|m| !m.triangles.is_empty()) {
+        let near = Near::new(m, 1.0, 2.0);
+        let out_sign = if check_mesh(m).volume < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        let (lo, hi) = m.bounds().unwrap_or(([0.0; 3], [0.0; 3]));
+        for (v, l) in left.iter_mut().enumerate() {
+            let p = [0, 1, 2].map(|k| surf.positions[3 * v + k] as f64);
+            if p[0] < lo[0] - h || p[0] > hi[0] + h {
+                continue;
+            }
+            *l = match near.nearest(p) {
+                Some((d, q, n)) => {
+                    let n = n.map(|c| c * out_sign);
+                    if dot(sub(p, q), n) <= 0.0 {
+                        0.0
+                    } else {
+                        d as f32
+                    }
+                }
+                None => 2.0,
+            };
+        }
+    }
+    StockSurface {
+        mesh: surf,
+        left,
+        h,
+    }
+}
+
 /// Replay `tps` (a rotary job on its bar) through a tri-dexel of `h` mm and measure what is
 /// left on `mesh`'s surfaces. `reach_r`: the finishing ball's radius, for the inside corners
 /// it cannot reach.

@@ -25,6 +25,7 @@ function bytes(s) {
 const BASE64 = {
   gpuOpen: [["input", "words"], ["input", "seg_start"], ["input", "seg_rapid"], ["keys"]],
   simOpen: [["path"], ["times"], ["moves"]],
+  simSurface: [["positions"], ["indices"], ["left"]],
   simSeek: [["r"], ["z"], ["op"]],
   faceRegions: [["triangles"], ["region_of"]],
   carriedMesh: [["stl"]],

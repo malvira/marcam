@@ -25,6 +25,8 @@ pub struct Dexel {
     pub lo: [f64; 3],
     pub n: [usize; 3],
     rays: [Vec<Vec<[f32; 2]>>; 3],
+    /// The bar's radius: nothing of it lies further from the axis.
+    radius: f64,
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -208,6 +210,7 @@ impl Dexel {
             lo,
             n,
             rays: [Vec::new(), Vec::new(), Vec::new()],
+            radius,
         };
         let inside_yz = |y: f64, z: f64| y * y + z * z <= radius * radius;
         for d in 0..3 {
@@ -276,6 +279,34 @@ impl Dexel {
                 }
             }
         }
+    }
+
+    /// The tool at a pose cut to the part of it inside the bar's radius (None: none of it).
+    pub fn within_bar(&self, t: &ToolSolid, tip: [f64; 3], dir: [f64; 3]) -> Option<ToolSolid> {
+        // (along the tool from its tip: where it leaves the bar's cylinder, grown by its radius)
+        let r = self.radius + t.radius + self.h;
+        let (py, pz, dy, dz) = (tip[1], tip[2], dir[1], dir[2]);
+        let a = dy * dy + dz * dz;
+        let b = 2.0 * (py * dy + pz * dz);
+        let c = py * py + pz * pz - r * r;
+        if a < 1e-12 {
+            // (along the axis: in or out all its length)
+            return (c <= 0.0).then_some(*t);
+        }
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
+            return None;
+        }
+        let q = disc.sqrt();
+        let (s0, s1) = ((-b - q) / (2.0 * a), (-b + q) / (2.0 * a));
+        if s1 < 0.0 || s0 > t.height {
+            return None;
+        }
+        // (the tip end kept as it is: a tool reaching in from outside keeps all of it)
+        Some(ToolSolid {
+            height: t.height.min(s1.max(0.0)).max(t.radius.min(t.height)),
+            ..*t
+        })
     }
 
     /// Takes the tool at a pose out of the stock; returns the volume taken (mm3, the mean of
@@ -463,6 +494,160 @@ impl Dexel {
         out
     }
 
+    /// The stock's surface as a triangle mesh (surface nets on the rays' grid): a vertex in
+    /// each cell the surface passes through, at the mean of where it crosses the cell's edges
+    /// (each edge lies on a ray, so where is exact, not guessed), and two triangles across
+    /// each edge it crosses, wound outward. Gaps in a ray narrower than half its spacing
+    /// (a tool grazing it) are closed first.
+    pub fn surface_mesh(&self) -> SurfaceMesh {
+        let n = self.n;
+        let h = self.h;
+        let merged: [Vec<Vec<[f32; 2]>>; 3] = [0, 1, 2].map(|d| {
+            self.rays[d]
+                .iter()
+                .map(|ray| {
+                    let mut m: Vec<[f32; 2]> = Vec::with_capacity(ray.len());
+                    for &[s0, s1] in ray {
+                        match m.last_mut() {
+                            Some(l) if s0 - l[1] < 0.5 * h as f32 => l[1] = l[1].max(s1),
+                            _ => m.push([s0, s1]),
+                        }
+                    }
+                    m
+                })
+                .collect()
+        });
+        // the grid's points inside (from the X rays)
+        let idx = |i: usize, j: usize, k: usize| (i * n[1] + j) * n[2] + k;
+        let mut inside = vec![0u64; (n[0] * n[1] * n[2]).div_ceil(64)];
+        for j in 0..n[1] {
+            for k in 0..n[2] {
+                for &[s0, s1] in &merged[0][j * n[2] + k] {
+                    let i0 = (((s0 as f64) - self.lo[0]) / h).ceil().max(0.0) as usize;
+                    let i1 = (((s1 as f64) - self.lo[0]) / h).floor();
+                    if i1 < 0.0 {
+                        continue;
+                    }
+                    for i in i0..=(i1 as usize).min(n[0] - 1) {
+                        let q = idx(i, j, k);
+                        inside[q / 64] |= 1 << (q % 64);
+                    }
+                }
+            }
+        }
+        let at = |i: usize, j: usize, k: usize| {
+            let q = idx(i, j, k);
+            inside[q / 64] >> (q % 64) & 1 == 1
+        };
+        // where the surface crosses the edge from grid point (i, j, k) along axis d
+        let crossing = |d: usize, i: usize, j: usize, k: usize| -> [f64; 3] {
+            let g = [i, j, k];
+            let mut p = [0, 1, 2].map(|c| self.coord(c, g[c]));
+            let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+            let ray = &merged[d][g[a] * n[b] + g[b]];
+            let (lo, hi) = (p[d], p[d] + h);
+            let mut s = lo + 0.5 * h;
+            let mut best = f64::INFINITY;
+            for &[s0, s1] in ray {
+                for e in [s0 as f64, s1 as f64] {
+                    if e >= lo - 1e-9 && e <= hi + 1e-9 {
+                        let off = (e - (lo + 0.5 * h)).abs();
+                        if off < best {
+                            best = off;
+                            s = e;
+                        }
+                    }
+                }
+            }
+            p[d] = s.clamp(lo, hi);
+            p
+        };
+        let cells = (n[0].max(1) - 1, n[1].max(1) - 1, n[2].max(1) - 1);
+        let mut vert: std::collections::HashMap<usize, u32> = Default::default();
+        let mut out = SurfaceMesh::default();
+        // a cell's vertex: the mean of its edges' crossings (made when first wanted)
+        let mut vertex = |out: &mut SurfaceMesh, c: [usize; 3]| -> u32 {
+            let key = (c[0] * cells.1 + c[1]) * cells.2 + c[2];
+            if let Some(&v) = vert.get(&key) {
+                return v;
+            }
+            let mut sum = [0.0; 3];
+            let mut cnt = 0.0;
+            for d in 0..3 {
+                let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+                for (ua, ub) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let mut g0 = c;
+                    g0[a] += ua;
+                    g0[b] += ub;
+                    let mut g1 = g0;
+                    g1[d] += 1;
+                    if at(g0[0], g0[1], g0[2]) != at(g1[0], g1[1], g1[2]) {
+                        let p = crossing(d, g0[0], g0[1], g0[2]);
+                        for t in 0..3 {
+                            sum[t] += p[t];
+                        }
+                        cnt += 1.0;
+                    }
+                }
+            }
+            let p = if cnt > 0.0 {
+                sum.map(|v| v / cnt)
+            } else {
+                [0, 1, 2].map(|t| self.coord(t, c[t]) + 0.5 * h)
+            };
+            let v = (out.positions.len() / 3) as u32;
+            out.positions.extend(p.map(|x| x as f32));
+            vert.insert(key, v);
+            v
+        };
+        for i in 0..n[0] {
+            for j in 0..n[1] {
+                for k in 0..n[2] {
+                    let here = at(i, j, k);
+                    let g = [i, j, k];
+                    for d in 0..3 {
+                        if g[d] + 1 >= n[d] {
+                            continue;
+                        }
+                        let mut g1 = g;
+                        g1[d] += 1;
+                        if here == at(g1[0], g1[1], g1[2]) {
+                            continue;
+                        }
+                        let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+                        if g[a] == 0
+                            || g[b] == 0
+                            || g[a] >= cells_of(cells, a)
+                            || g[b] >= cells_of(cells, b)
+                        {
+                            continue;
+                        }
+                        // the four cells round the edge, counter-clockwise about +d
+                        let cell = |ua: usize, ub: usize| {
+                            let mut c = g;
+                            c[a] = g[a] - 1 + ua;
+                            c[b] = g[b] - 1 + ub;
+                            c
+                        };
+                        let q = [
+                            vertex(&mut out, cell(0, 0)),
+                            vertex(&mut out, cell(1, 0)),
+                            vertex(&mut out, cell(1, 1)),
+                            vertex(&mut out, cell(0, 1)),
+                        ];
+                        // (outward: +d where the stock ends going up d)
+                        if here {
+                            out.indices.extend([q[0], q[1], q[2], q[0], q[2], q[3]]);
+                        } else {
+                            out.indices.extend([q[0], q[2], q[1], q[0], q[3], q[2]]);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Whether a point is in the stock (the X-family ray nearest it).
     pub fn solid_at(&self, p: [f64; 3]) -> bool {
         let iy = ((p[1] - self.lo[1]) / self.h).round();
@@ -479,6 +664,17 @@ impl Dexel {
 /// A rapid into the stock by less than this (mm) is clear of it: the tool along a wall it cut,
 /// the stock's rays and the sampling of the cut leaving thousandths of it.
 pub const GRAZE: f64 = 0.01;
+
+/// A triangle mesh: xyz per vertex, three vertices a triangle.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SurfaceMesh {
+    pub positions: Vec<f32>,
+    pub indices: Vec<u32>,
+}
+
+fn cells_of(cells: (usize, usize, usize), a: usize) -> usize {
+    [cells.0, cells.1, cells.2][a]
+}
 
 /// What a replay of moves through the stock found.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -628,7 +824,12 @@ pub fn replay(
                 ((tip[0] - q[0]).powi(2) + (tip[1] - q[1]).powi(2) + (tip[2] - q[2]).powi(2)).sqrt()
             });
             last = Some(tip);
-            let bite = dx.subtract(&t, tip, dir) / moved.max(0.05);
+            // (only as much of the tool as reaches into the bar: the rest of its length, out
+            // past the bar's radius, takes nothing, and its rays cost as much as any)
+            let Some(tc) = dx.within_bar(&t, tip, dir) else {
+                continue;
+            };
+            let bite = dx.subtract(&tc, tip, dir) / moved.max(0.05);
             most = most.max(bite);
             match out.worst_bite.iter_mut().find(|w| w.0 == seg.op) {
                 Some(w) if bite > w.1 => *w = (seg.op, bite, seg.move_index),
@@ -726,5 +927,40 @@ mod tests {
         assert!(d.solid_at([-10.0, -5.0, 1.0]));
         // along the ray from the axis at phi -90 (towards -Z), and at 90 (+Z): stock to 10
         assert!((d.radial_top(-10.0, 90.0, 12.0, 0.05) - 10.0).abs() < 0.2);
+    }
+
+    /// The stock's surface for the view (Mar: "there is no way these weird rectangular spiky
+    /// slices would happen"): a bar with a slot cut across it, as a closed mesh (each edge of
+    /// two triangles), every vertex on the bar or the slot, none sticking out of it.
+    #[test]
+    fn the_surface_is_closed_and_on_the_stock() {
+        let mut d = Dexel::bar(10.0, 20.0, 0.25);
+        let t = ToolSolid {
+            radius: 2.0,
+            ball: true,
+            height: 20.0,
+        };
+        for i in 0..=60 {
+            let (tip, dir) = pose(-15.0 + i as f64 * 0.1, 0.0, 6.0, 30.0);
+            d.subtract(&t, tip, dir);
+        }
+        let m = d.surface_mesh();
+        assert!(m.indices.len() > 3000, "{} triangles", m.indices.len() / 3);
+        let mut edges: std::collections::HashMap<(u32, u32), i32> = Default::default();
+        for f in m.indices.chunks(3) {
+            for k in 0..3 {
+                let (a, b) = (f[k], f[(k + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+        assert!(
+            edges.values().all(|&c| c == 2),
+            "open or overused edges: {}",
+            edges.values().filter(|&&c| c != 2).count()
+        );
+        for v in m.positions.chunks(3) {
+            let r = ((v[1] * v[1] + v[2] * v[2]) as f64).sqrt();
+            assert!(r <= 10.0 + 0.3 && v[0] >= -20.3 && v[0] <= 0.3, "{v:?}");
+        }
     }
 }
