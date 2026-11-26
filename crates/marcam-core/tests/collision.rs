@@ -340,3 +340,92 @@ fn a_holder_just_clear_of_the_stock_is_a_near_miss() {
     let touching = held(9.0);
     assert!(touching.count > 0 && touching.near == 0, "{touching:?}");
 }
+
+/// Indexed roughing deeper than the tool reaches: no deeper, at each angle, than its flutes
+/// (and its holder) clear the stock round the cut, the rest left and said (Mar's impeller on
+/// a 24 mm bar, roughed to Z 0 with a 3.175 x 12 tool: 6845 moves with the holder up to
+/// 6.7 mm in the bar). The finned hub on a 14 mm bar, roughed at 4 angles to Z 2 with a
+/// 2 x 8 mm tool: no collision and no near miss, each angle's floor raised and said.
+#[test]
+fn indexed_roughing_goes_no_deeper_than_the_tool_reaches() {
+    let text = r#"
+schema_version = "0.2"
+name = "deep indexed roughing"
+
+[[models]]
+id = "part"
+name = "finned_hub.stl"
+kind = "mesh"
+file = "finned_hub.stl"
+axis = "x"
+translate = [-30.0, 0.0, 0.0]
+
+[[tools]]
+number = 1
+library = "makera-starter"
+tool = "spiral-o-metal-2x8"
+
+[[setups]]
+id = "setup1"
+name = "Setup 1"
+machine = "makera-z1-4axis"
+kind = "rotary"
+clearance = 3.0
+part = ["part"]
+spindle_rpm = 12000
+tools = [1]
+
+[setups.stock]
+shape = "cylinder"
+radius = 14.0
+length = 40.0
+
+[setups.holding]
+kind = "rotary_chuck"
+tailstock = false
+chuck = 8.0
+
+[[setups.operations]]
+id = "op1"
+name = "Indexed roughing"
+type = "rough3d"
+tool = 1
+index_a = 0.0
+x_range = [-30.0, 0.0]
+y_range = [-14.0, 14.0]
+stepover = 0.8
+sample = 0.5
+step_down = 1.5
+floor = 2.0
+leave_z = 0.2
+leave_xy = 0.2
+tolerance = 0.05
+pattern = "offset"
+index_count = 4
+feed = 500.0
+plunge_feed = 150.0
+
+[[setups.outputs]]
+name = "deep"
+title = "deep"
+reset_a = false
+operations = ["op1"]
+"#;
+    let dir = root().join("tests/fixtures");
+    let libs = marcam::profiles::builtin_libraries();
+    let job = marcam::project::jobs_from_any_with(text, &libs, &|src| src.load(&dir).ok())
+        .unwrap()
+        .remove(0)
+        .1;
+    let mesh = marcam::load_mesh(&job, &dir).unwrap();
+    let tps = plan_with_mesh(&job, mesh.as_ref()).unwrap();
+    let m = builtin_machine("makera-z1-4axis").unwrap();
+    let rep = &collision_check(&job, &tps, &m.post).unwrap()[0];
+    assert_eq!((rep.count, rep.near), (0, 0), "{rep:?}");
+    let capped = tps[0]
+        .notes
+        .iter()
+        .filter(|w| w.contains("no deeper than Z 7.00"))
+        .count();
+    assert_eq!(capped, 4, "{:?}", tps[0].notes);
+}

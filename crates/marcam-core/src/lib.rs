@@ -2024,6 +2024,37 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     let mut oi = o.clone();
                     oi.index_a = index;
                     oi.pattern = "adaptive".into();
+                    // (Mar's impeller on a 24 mm bar, roughed at each angle to Z 0 with a
+                    // 3.175 x 12 tool: its holder, 17 mm up the tool, went 6.7 mm into the bar
+                    // round the pocket, 6845 moves; its shank, deeper than the flutes, rubbing
+                    // the pocket's walls) no deeper than the flutes reach (and the holder
+                    // clears) from the highest stock left at this angle, by twice the near-miss
+                    // margin (no near miss either); what is under that is left for the
+                    // operations after, and said
+                    if let Some(body) = job.tool(o.tool).map(collision::ToolBody::of) {
+                        let top =
+                            hm.z.iter()
+                                .copied()
+                                .filter(|z| z.is_finite())
+                                .fold(f64::NEG_INFINITY, f64::max);
+                        let lowest =
+                            top - body.stickout.min(body.flute_length) + 2.0 * collision::NEAR_MISS;
+                        if top.is_finite() && oi.floor < lowest {
+                            oi.floor = lowest;
+                            let what = if body.flute_length < body.stickout {
+                                format!(
+                                    "the shank, above T{}'s {:.1} mm of flutes,",
+                                    o.tool, body.flute_length
+                                )
+                            } else {
+                                format!("the holder, {:.1} mm up T{},", body.stickout, o.tool)
+                            };
+                            b.warnings.push(format!(
+                                "indexed roughing at A {index:.1}: no deeper than Z {lowest:.2} (asked {:.2}): {what} would rub the walls of the cut below that; the rest is left for the operations after",
+                                o.floor
+                            ));
+                        }
+                    }
                     strategy::three_axis::adaptive_rough(
                         &mut b,
                         &dc,
