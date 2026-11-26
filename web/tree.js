@@ -318,7 +318,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         ${t.setupNotes?.[s.id] ? `<div class="small setup-note" id="setupNote">${esc(t.setupNotes[s.id])}</div>` : ""}
         ${sourcePick(s)}
         ${stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore, length: carryLength(s) })}
-        <div class="row small">${kindOfSetup(s) === "vise" ? "" : '<button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model\'s faces">Knurl wizard</button>'}
+        <div class="row small">${kindOfSetup(s) === "vise" ? "" : '<button type="button" id="treeWizard" title="Add turning, knurl and chamfer from the model\'s faces">Knurl wizard</button> <select id="treeWizardPattern" aria-label="The knurl the wizard adds" title="The knurl the wizard adds: diamond (helices crossing) or straight (along the axis)"><option value="diamond">diamond</option><option value="straight">straight</option></select>'}
         ${s.stock?.shape === "from_previous" ? `<button type="button" id="treeStockStl" title="The stock this setup starts with (what the setup before left, turned as here) as an STL">Incoming stock STL</button>` : ""}</div>
         <div id="setupHost" class="setup-host"></div>`;
     }
@@ -884,6 +884,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (p.name === "stepover_mm" && ["along", "line"].includes(op.pattern) && op.stepover_deg != null) return;
       // a vise has no rotary axis to index
       if (p.name === "index_a" && isBox(setup())) return;
+      // a straight knurl: no helix (its angle and families unused)
+      if (ty.kind === "helical_knurl" && op.pattern === "straight" && (p.name === "helix_angle" || p.name === "families")) return;
       // several picked features: shown in the Geometry list, set by picking
       if (p.kind === "regions") return;
       const label = `${p.label || p.name.replace(/_/g, " ")}${p.unit ? ` (${p.unit})` : ""}`;
@@ -1770,7 +1772,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         const s = setup();
         const doc = structuredClone(t.doc);
         const used = new Set(doc.setups.flatMap((x) => x.outputs.map((o) => o.name)));
-        const params = { setup: s.id };
+        const params = { setup: s.id, pattern: document.getElementById("treeWizardPattern")?.value || "diamond" };
         if (used.has("knob_1_profile") || used.has("knob_2_knurl")) Object.assign(params, { turn_output: `${s.id}_turn`, knurl_output: `${s.id}_knurl` });
         const { result } = await engine("wizardKnurl", doc, params, state.mesh);
         t.doc = result.project;

@@ -2367,6 +2367,47 @@ try {
       /Overloaded: .*more than 2.*T[0-9]+.*normal bite on [0-9,]+ move.*worst [0-9.]+.*rest roughing/.test(heavy), heavy);
     await clean("an overloaded operation");
   }
+  // ---------------------------------------------------------------- knurl: diamond or straight
+  // (Mar: "the knurling operation should have a selection box as a parameter for diamond
+  // knurl or stright knurls") the knob's knurl selected, its Pattern picked Straight in its
+  // form: its grooves along X (no A in them), the view changing; back to Diamond, helices again
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'knob'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    const knurlOp = await read("JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.type === 'helical_knurl')?.id || ''");
+    await click(`#tree .tree-op[data-op=${knurlOp}] .tree-label`);
+    await settled();
+    const offered = await read("[...(document.querySelector('#opForm [name=pattern]')?.options || [])].map((o) => o.value).join(',')");
+    // the knurl's G1 moves that turn A (helices) of all its G1 moves
+    const turning = () => read("(() => { const p = (window.__marcam.state.result?.programs || []).find((p) => /knurl/.test(p.name)); if (!p) return -1; const g = p.gcode.split(String.fromCharCode(10)).filter((l) => /^G1 /.test(l)); return g.filter((l) => / A-?[0-9]/.test(l)).length / Math.max(1, g.length); })()");
+    const vr = await viewRect();
+    const t0 = await turning();
+    const i0 = await shot("knurl_diamond");
+    await read("(() => { const s = document.querySelector('#opForm [name=pattern]'); s.value = 'straight'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await sleep(1200);
+    await settled();
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 120000 * SLACK).catch(() => {});
+    await settled();
+    const t1 = await turning();
+    const i1 = await shot("knurl_straight");
+    let px = 0;
+    for (let y = vr[1]; y < vr[1] + vr[3]; y += 2)
+      for (let x = vr[0]; x < vr[0] + vr[2]; x += 2) {
+        const a = i0.at(x, y), b = i1.at(x, y);
+        if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 60) px++;
+      }
+    const helixShown = await read("!!document.querySelector('#opForm [name=helix_angle]')");
+    check("the knurl's Pattern: Diamond or Straight in its form; Straight: its grooves along X (no A turning in them), the view changes, the helix angle not asked",
+      offered === "diamond,straight" && t0 > 0.8 && t1 >= 0 && t1 < 0.1 && px > 150 && !helixShown, JSON.stringify({ offered, t0, t1, px, helixShown }));
+    await read("document.activeElement?.blur?.(); true");
+    await key("z", 2);
+    await settled();
+    await clean("knurl pattern");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")

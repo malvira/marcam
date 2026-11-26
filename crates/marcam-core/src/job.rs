@@ -1503,6 +1503,12 @@ pub struct HelicalKnurl {
     pub body_front: [f64; 2],
     pub count: u32,
     pub helix_angle: f64,
+    /// "diamond": the grooves along helices, `families` of them crossing (two opposite:
+    /// diamonds); "straight": grooves along X, parallel to the axis (the helix angle and the
+    /// families unused). (Mar: "a selection box as a parameter for diamond knurl or straight
+    /// knurls")
+    #[serde(default = "default_knurl_pattern", skip_serializing_if = "is_diamond")]
+    pub pattern: String,
     #[serde(default = "default_fill")]
     pub fill: f64,
     pub passes: Vec<f64>,
@@ -1885,6 +1891,12 @@ fn default_footprint_step() -> f64 {
 }
 fn default_fill() -> f64 {
     1.0
+}
+fn default_knurl_pattern() -> String {
+    "diamond".into()
+}
+fn is_diamond(p: &str) -> bool {
+    p == "diamond"
 }
 fn default_families() -> Vec<i32> {
     vec![1, -1]
