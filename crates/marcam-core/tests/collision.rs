@@ -429,3 +429,41 @@ operations = ["op1"]
         .count();
     assert_eq!(capped, 4, "{:?}", tps[0].notes);
 }
+
+#[test]
+fn a_knurl_on_a_bar_not_turned_down_comes_in_from_the_bar() {
+    // (the knob's part replaced: its profile turning gone, the knurl on the Ø25 bar) its
+    // grooves came in by rapids to the knurl's body (Ø20 + 0.5 mm), 6 mm into the bar, 13 of
+    // them through it on the 3D stock. From the bar now, and said
+    let mut job = load("examples/knob/knob.job.json");
+    job.programs.retain(|p| p.name == "knob_2_knurl");
+    let tps = plan_with_mesh(&job, None).unwrap();
+    let sim = marcam::simulate_job(&job, &tps, None, 0.25, 180, 0.05).unwrap();
+    let hits: usize = sim.programs.iter().map(|p| p.1.rapid_hits.len()).sum();
+    assert_eq!(hits, 0, "rapids through the bar");
+    assert!(
+        tps[0].notes
+            .iter()
+            .any(|w| w.contains("above the knurl's body")),
+        "{:?}",
+        tps[0].notes
+    );
+    // turned first (the whole knob): its knurl as it was, its rapids clear too
+    let job = load("examples/knob/knob.job.json");
+    let tps = plan_with_mesh(&job, None).unwrap();
+    assert!(
+        !tps[1].notes
+            .iter()
+            .any(|w| w.contains("above the knurl's body")),
+        "{:?}",
+        tps[1].notes
+    );
+    let sim = marcam::simulate_job(&job, &tps, None, 0.25, 180, 0.05).unwrap();
+    assert_eq!(
+        sim.programs
+            .iter()
+            .map(|p| p.1.rapid_hits.len())
+            .sum::<usize>(),
+        0
+    );
+}

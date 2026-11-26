@@ -224,6 +224,8 @@ fn uses_prior(op: &Operation) -> bool {
     match op {
         Operation::Rough3d(r) => r.rest || !r.indexes.is_empty() || r.index_count > 0,
         Operation::RotaryRough(r) => r.rest,
+        // (its approach from the bar as the moves before left it)
+        Operation::HelicalKnurl(_) => true,
         _ => false,
     }
 }
@@ -503,6 +505,38 @@ fn indexed_bar(job: &Job, prior: &[Vec<Move>]) -> sim::RadialMap {
 /// what is there.
 fn indexed_step(c: Option<&Cutter>) -> f64 {
     c.map_or(0.2, |c| (0.5 * c.radius()).max(0.2))
+}
+
+/// The bar (or the piece carried in) over X `xa..xb` as the moves before (the programs
+/// before, and this one's so far) left it: a radial map of it cut by them.
+fn bar_after(job: &Job, prior: &[Vec<Move>], before: &[Move], xa: f64, xb: f64) -> sim::RadialMap {
+    let grid = sim::Grid::new(xa - 0.5, xb + 0.5, 0.25, 72);
+    let mut st = sim::RadialMap::of_job(grid, job);
+    let moves: Vec<Move> = prior.iter().flatten().chain(before).cloned().collect();
+    let cutter = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
+    let sg = sim::segments(&[bar_toolpath(job, &moves)]);
+    for seg in sg {
+        if !seg.rapid {
+            let c = seg.tool.and_then(cutter);
+            sim::apply_segment(&mut st, &seg, c.as_ref(), 0.1);
+        }
+    }
+    st
+}
+
+/// The highest a radial map stands over X `xa..xb`.
+fn map_top(m: &sim::RadialMap, xa: f64, xb: f64) -> f64 {
+    let mut top = 0.0f64;
+    for i in 0..m.grid.nx {
+        let x = m.grid.x(i);
+        if x < xa || x > xb {
+            continue;
+        }
+        for j in 0..m.grid.na {
+            top = top.max(m.r[i * m.grid.na + j] as f64);
+        }
+    }
+    top
 }
 
 fn bar_toolpath(job: &Job, moves: &[Move]) -> Toolpath {
@@ -1693,26 +1727,33 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 // the roughing had left 1 mm proud; the holder hit it 280 times) on a carried
                 // bar: its approach from the bar as it is, and said when the bar stands above
                 // the body (it was to be turned or finished first)
-                if let Some(carry::Carried::Bar(m)) = job.carried.as_deref() {
+                // (and on a bar not turned down first, as the knob's knurl on its own: it came
+                // in by rapids 6 mm into the Ø25 bar, 13 times) from the bar as the moves
+                // before left it, where each groove's rapid comes down (its start, the
+                // V-bit's width round it); said when the bar stands above the body
+                {
                     let (xa, xb) = (o.body_back[0] - runout[0], o.body_front[0] + runout[1]);
-                    let mut top = 0.0f64;
-                    for i in 0..m.grid.nx {
-                        let x = m.grid.x(i);
-                        if x < xa || x > xb {
-                            continue;
-                        }
-                        for j in 0..m.grid.na {
-                            top = top.max(m.r[i * m.grid.na + j] as f64);
-                        }
-                    }
+                    let m = bar_after(job, &ctx.prior, &b.moves, xa - top, xb + top);
                     let body = o.body_back[1].max(o.body_front[1]);
-                    if top > body + 1e-6 {
-                        o.approach_clearance = o.approach_clearance.max(top - body + 0.5);
+                    // (a carried bar: from it whenever it stands above the body anywhere, as
+                    // before; a bar cut here: where the rapid comes down, when it would end
+                    // within a tenth of a mm of it)
+                    let carried = matches!(job.carried.as_deref(), Some(carry::Carried::Bar(_)));
+                    let raise = if carried {
+                        let t = map_top(&m, xa, xb);
+                        (t > body + 1e-6).then_some(t)
+                    } else {
+                        let t = map_top(&m, xa - top - 0.25, xa + top + 0.25);
+                        (t + 0.1 > body + o.approach_clearance).then_some(t)
+                    };
+                    if let Some(t) = raise {
+                        o.approach_clearance = o.approach_clearance.max(t - body + 0.5);
                     }
-                    if top > body + 0.1 {
+                    let over = map_top(&m, o.body_back[0], o.body_front[0]);
+                    if over > body + 0.1 {
                         let w = format!(
                             "the stock is up to {:.2} mm above the knurl's body (X {:.1}..{:.1}): turn or finish it first",
-                            top - body,
+                            over - body,
                             o.body_back[0],
                             o.body_front[0]
                         );
@@ -2731,6 +2772,8 @@ fn plan_cached(
             // (rotary rest roughing; and indexed 3+1 roughing on a bar, whose angles see
             // the bar as the programs before left it)
             Operation::RotaryRough(r) => r.rest,
+            // (a knurl comes in from the bar as the programs before left it)
+            Operation::HelicalKnurl(_) => true,
             _ => false,
         })
     });

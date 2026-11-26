@@ -2433,7 +2433,16 @@ try {
     await settled();
     const offered = await read("[...(document.querySelector('#opForm [name=pattern]')?.options || [])].map((o) => o.value).join(',')");
     // the knurl's G1 moves that turn A (helices) of all its G1 moves
-    const turning = () => read("(() => { const p = (window.__marcam.state.result?.programs || []).find((p) => /knurl/.test(p.name)); if (!p) return -1; const g = p.gcode.split(String.fromCharCode(10)).filter((l) => /^G1 /.test(l)); return g.filter((l) => / A-?[0-9]/.test(l)).length / Math.max(1, g.length); })()");
+    // (the post writes A on every move: a move that turns A is one whose A differs from the one
+    // before)
+    const turning = () => read("(() => { const p = (window.__marcam.state.result?.programs || []).find((p) => /knurl/.test(p.name)); if (!p) return -1; let a = null, n = 0, k = 0; for (const l of p.gcode.split(String.fromCharCode(10))) { const m = / A(-?[0-9.]+)/.exec(l); const b = m ? +m[1] : a; if (/^G1 /.test(l)) { n++; if (a !== null && b !== a) k++; } a = b; } return k / Math.max(1, n); })()");
+    // (the toolpaths shown, all of them, as a person who looks at them has them: the view's
+    // toggles are remembered from one case to the next)
+    for (let i = 0; i < 3 && (await read("window.__marcam.machining.state.view.paths")) !== "all"; i++) {
+      await click(".view-toggles button[title^='Toolpaths']");
+      await sleep(300);
+    }
+    await settled();
     const vr = await viewRect();
     const t0 = await turning();
     const i0 = await shot("knurl_diamond");
@@ -2472,8 +2481,17 @@ try {
     // the simulation was asked for while the plan was still under way, and dropped)
     const on = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed') === 'true'");
     if (!on) await click(".view-toggles button[title^='Simulated stock']");
+    // (and another project open before it, its stock in 3D still being made when this one is
+    // loaded: that work stopped at once, not left in front of this project's simulation, which
+    // waited minutes behind it)
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'knob'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    const building = await waitFor(() => read("!!window.__marcam.state.sim?.surfacing"), "the knob's stock in 3D being made", 120000 * SLACK).then(() => true, () => false);
     await read("(() => { window.confirm = () => true; const r = document.getElementById('simRes'); r.value = 'ultra'; r.dispatchEvent(new Event('change', { bubbles: true })); const s = document.getElementById('example'); s.value = 'knob_finish'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await click("#loadExample");
+    await sleep(1000);
+    const leftOver = await read("window.__marcam.inFlight().filter((c) => c.cmd === 'simSurface' || c.cmd === 'simHeavy').length");
+    check("another project loaded while the one before's stock in 3D was being made: that work stopped at once", leftOver === 0, JSON.stringify({ building, leftOver }));
     // (from here nothing is clicked, nothing moved over the view)
     await settled();
     const shown = await waitFor(() => read("(() => { const v = window.__marcam.state.three; const g = v?.groups?.simFinal; return !!window.__marcam.state.sim && !!g && g.visible && g.children.length > 0; })()"), "the stock, by itself", 240000 * SLACK).catch(() => false);
@@ -2530,8 +2548,11 @@ try {
     await click("#loadExample");
     await settled();
     if (!(await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed') === 'true'"))) await click(".view-toggles button[title^='Simulated stock']");
+    // (Play once it can be pressed, as a person waits for it: disabled while the playback opens)
+    await waitFor(() => read("!document.getElementById('vtPlay').disabled"), "the play button enabled", 60000 * SLACK).catch(() => {});
     await click(".view-toggles button[title^='Play']");
     await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !!m.session && !!m.stock && m.expanded && !m.busy; })()"), "the playback with its stock", 240000 * SLACK).catch(() => {});
+    await waitFor(() => where("#simEnd"), "the playback's controls", 60000 * SLACK).catch(() => {});
     if (await read("window.__marcam.machining.state.playing")) await click("#simPlay");
     // to the end, as the bar is dragged there
     await click("#simEnd");

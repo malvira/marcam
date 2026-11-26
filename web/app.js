@@ -83,15 +83,22 @@ startWorker("sim");
 /** Stop what the engine is simulating (a long simulation): its worker is ended and a new
  *  one started; every simulation call waiting on it fails with "cancelled". Its playback
  *  goes with it (made again when next needed); planning goes on in the other. */
+/** The background worker's work of a project gone (its stock in 3D, its overload check: minutes
+ *  on the impeller) stopped, so the next project's simulation does not wait behind it; the
+ *  worker started again when next asked. */
+function dropStats(why = "superseded") {
+  if (!workers.stats) return;
+  workers.stats.terminate();
+  for (const [id, p] of [...pending.entries()]) if (p.worker === "stats") (pending.delete(id), p.reject(new Error(why)));
+  workers.stats = null;
+}
+const statsBusy = () => [...pending.values()].some((p) => p.worker === "stats");
+
 function cancelEngine(why = "cancelled") {
   simLock.drop();
   workers.sim.terminate();
   // (and the background simulation's worker, if it was started)
-  if (workers.stats) {
-    workers.stats.terminate();
-    for (const [id, p] of [...pending.entries()]) if (p.worker === "stats") (pending.delete(id), p.reject(new Error(why)));
-    workers.stats = null;
-  }
+  dropStats(why);
   const waiting = [...pending.entries()].filter(([, p]) => p.worker === "sim");
   for (const [id] of waiting) pending.delete(id);
   simRing.active = 0;
@@ -509,6 +516,9 @@ async function resetProject(msg, actions) {
   // a simulation of the project going (the background one after a plan) is stopped: the
   // engine works for the new one at once (its part drawn, its plan) instead of after it
   if (simRing.active) cancelEngine("superseded");
+  // (and the background worker's work for it, its stock in 3D: the new project's simulation
+  // waited minutes behind it)
+  else if (statsBusy()) dropStats("superseded");
   state.genRun = (state.genRun || 0) + 1;
   state.epoch = (state.epoch || 0) + 1;
   clearTimeout(autoTimer);
@@ -911,6 +921,9 @@ async function generate(opts = {}) {
 /** After a live update with the stock shown: simulated again, at Coarse at once, then at the
  *  chosen resolution when it is quick (no question asked in the background). */
 async function backgroundSimulate() {
+  // (the stock in 3D or overload check of the plan before still being made: dropped, it is
+  // of a project that is not this one any more)
+  if (statsBusy() && !statsLock.busy) dropStats("superseded");
   // (the resolution passed along: the setting itself is the person's, never changed here)
   if ($("simRes").value !== "coarse") await simLock.run("batch", () => simulateQuiet(Infinity, "coarse"), { quiet: true });
   await simLock.run("batch", () => simulateQuiet(SIM_ASK_SECONDS), { quiet: true });
