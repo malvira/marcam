@@ -3347,16 +3347,22 @@ try {
     // (a ring: turned `turn` degrees round it, on its band: 5° steps)
     const drag = async (mode, axis, dx, dy, turn = 120) => {
       // (a ring: from a point round it that no arrow covers)
-      let p = null, a0 = 45;
-      for (const ang of mode === "rotate" ? [45, 60, 30, 75, 15, 120, 150] : [45]) {
-        p = JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('${mode}', '${axis}', ${ang}))`));
-        if (!p) return false;
-        await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1] });
-        await sleep(60);
-        a0 = ang;
-        // (the rings take the press before the arrows do)
-        break;
+      // (of those, the point furthest on the screen from the other rings: the part's view
+      // framed close, a ring's 45° point can sit on another's)
+      let p = null, a0 = 45, best = -1;
+      const at = async (ax, ang) => JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('${mode}', '${ax}', ${ang}))`));
+      const others = [];
+      if (mode === "rotate") for (const ax of "XYZ".replace(axis, "")) for (let g = 0; g < 360; g += 10) { const q = await at(ax, g); if (q) others.push(q); }
+      for (const ang of mode === "rotate" ? [45, 60, 30, 75, 15, 120, 150, 210, 240, 300, 330] : [45]) {
+        const q = await at(axis, ang);
+        if (!q) continue;
+        const d = others.length ? Math.min(...others.map((o) => Math.hypot(o[0] - q[0], o[1] - q[1]))) : 1;
+        if (d > best) (best = d), (p = q), (a0 = ang);
       }
+      if (!p) return false;
+      // (the rings take the press before the arrows do)
+      await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1] });
+      await sleep(60);
       await S("Input.dispatchMouseEvent", { type: "mousePressed", x: p[0], y: p[1], button: "left", clickCount: 1 });
       for (let i = 1; i <= 12; i++) {
         // (a ring: round it, a quarter turn and a bit; an arrow: straight)
