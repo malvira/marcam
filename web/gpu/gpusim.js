@@ -286,13 +286,16 @@ export async function simulateOnGpu(gpu, open, stats, progress) {
       const hits = await gs.readHits();
       // (2: through the stock; 1: a graze only, said as a warning)
       let rapid = 0, graze = 0;
+      // (which: their segments, for the engine to check on the 3D stock and name their moves)
+      const flagged = [];
       for (let s = a; s < b; s++) {
         if (hits[s] >= 2) rapid++;
         else if (hits[s] === 1) graze++;
+        if (hits[s] >= 1) flagged.push([s, hits[s] >= 2 ? 2 : 1]);
       }
       const st = await stats({ rapid_hits: rapid, rapid_grazes: graze }, new Uint8Array(keys.buffer));
       const { h } = gs.decode(keys);
-      stocks.push({ name: open.programs[p], samples: gs.segStart[b] - gs.segStart[a], ...st, [gs.kind === "xyz" ? "z" : "r"]: h });
+      stocks.push({ name: open.programs[p], samples: gs.segStart[b] - gs.segStart[a], ...st, [gs.kind === "xyz" ? "z" : "r"]: h, flagged });
       progress?.(b / all);
     }
     return { kind: open.kind, grid: open.grid, part: open.part, stock_radius: open.stock_radius, stock_box: open.stock_box, stocks };

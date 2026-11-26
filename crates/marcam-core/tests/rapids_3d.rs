@@ -102,3 +102,36 @@ fn a_rapid_in_a_slot_cut_from_the_side_is_clear_one_through_the_bar_is_not() {
     assert_eq!(sim(program(-19.0, 0.12)), (1, 0), "0.12 mm into its wall");
     assert_eq!(sim(program(-2.0, 0.0)).0, 1, "on through the bar");
 }
+
+#[test]
+fn the_gpus_flagged_rapids_are_confirmed_the_same_way_with_their_moves() {
+    // (the GPU's simulation has no 3D replay: its red fold had a count and no entries) the
+    // rapid the radial map flags, by its segment of the job: through the bar, confirmed with
+    // its move; back along the slot, cleared
+    let job = knob();
+    let flag = |tp: &Toolpath| {
+        let segs = marcam::sim::segments(std::slice::from_ref(tp));
+        let k = segs
+            .iter()
+            .rposition(|s| {
+                s.rapid && s.to[0] < -1.0 && s.from.is_some_and(|f| (f[0] - s.to[0]).abs() > 1.0)
+            })
+            .unwrap();
+        (k, segs[k].move_index)
+    };
+    let tp = program(-2.0, 0.0);
+    let (k, mv) = flag(&tp);
+    let out = marcam::confirm_gpu(&job, std::slice::from_ref(&tp), &[(k, 2)]);
+    assert_eq!(
+        out[0].0,
+        vec![mv],
+        "through the bar: confirmed, with its move"
+    );
+    let tp = program(-19.0, 0.0);
+    let (k, _) = flag(&tp);
+    let out = marcam::confirm_gpu(&job, std::slice::from_ref(&tp), &[(k, 2)]);
+    assert!(
+        out[0].0.is_empty() && out[0].1.is_empty(),
+        "back along the slot: clear"
+    );
+}

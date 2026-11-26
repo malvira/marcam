@@ -1903,9 +1903,6 @@ pub mod api {
             Ok(j) => j,
             Err(e) => return err(e),
         };
-        if job.stock_box.is_some() || job.carried.is_some() {
-            return json!({"heavy": []});
-        }
         let mesh = match parse_mesh(&job, mesh) {
             Ok(m) => m,
             Err(e) => return err(e),
@@ -1914,7 +1911,41 @@ pub mod api {
             Ok(t) => t,
             Err(e) => return err(e),
         };
-        json!({ "heavy": marcam::heavy_bites(&job, &tps) })
+        // (the GPU's flagged rapids, [segment, 2 through | 1 grazing]: confirmed on the 3D
+        // stock as the CPU's are, with their moves, and the overloads from the same replay)
+        let flagged: Vec<(usize, u8)> = opts["flagged"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| Some((v[0].as_u64()? as usize, v[1].as_u64()? as u8)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // (a block in the vise: its heightmap is the stock as it is, nothing to confirm; the
+        // flagged rapids' moves only)
+        if job.stock_box.is_some() {
+            let segs = marcam::sim3::segments3(&tps);
+            let mut per: Vec<(Vec<usize>, Vec<usize>)> = vec![(Vec::new(), Vec::new()); tps.len()];
+            for &(k, level) in &flagged {
+                if let Some(seg) = segs.get(k) {
+                    let p = &mut per[seg.program as usize];
+                    if level >= 2 {
+                        p.0.push(seg.move_index);
+                    } else {
+                        p.1.push(seg.move_index);
+                    }
+                }
+            }
+            return json!({
+                "heavy": vec![Vec::<marcam::dexel::Heavy>::new(); tps.len()],
+                "rapids": per.iter().map(|o| json!({"hits": o.0, "grazes": o.1})).collect::<Vec<_>>(),
+            });
+        }
+        let out = marcam::confirm_gpu(&job, &tps, &flagged);
+        json!({
+            "heavy": out.iter().map(|o| &o.2).collect::<Vec<_>>(),
+            "rapids": out.iter().map(|o| json!({"hits": o.0, "grazes": o.1})).collect::<Vec<_>>(),
+        })
     }
 
     /// Drop the open playback and GPU sessions (their stock grids): a new project starts clean.

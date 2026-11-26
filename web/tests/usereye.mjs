@@ -1484,6 +1484,15 @@ try {
       JSON.stringify({ bossPick, bossDepth, pocketPick, pocketDepth, odPick, odDepth }));
     const s1 = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return { tab: t?.textContent || '', ops: [...document.querySelectorAll('#tree .tree-setup.active .tree-op .tree-label')].map((e) => e.textContent.trim().split(' ')[0]), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
     check("carry-through, setup 1: the boss's contour, the pocket, the OD's contour, planned clean", /OK/.test(s1.tab) && s1.ops.length === 3 && !s1.error, JSON.stringify(s1));
+    // (the pocket's picked face is 0.5 mm under the bar's top, never faced: its rapids came
+    // down 0.375 mm into the stock, a crash) said, and its stock simulated as a person turns it
+    // on: no rapid through it
+    const descents = await read("[...document.querySelectorAll('#summary *')].some((e) => /rapid descent\\(s\\) would have come down into the stock/.test(e.textContent))");
+    await click(".view-toggles button[title^='Simulated stock']");
+    await waitFor(() => read("/Simulated stock:/.test(document.getElementById('summary').textContent)"), "the plate's simulation", 180000 * SLACK).catch(() => {});
+    const through = await read("(/(\\d+) rapid\\(s\\) through stock/.exec(document.getElementById('summary').textContent) || [])[1] ?? ''");
+    check("carry-through, setup 1: the pocket's rapids stop above the unfaced top (said), its simulated stock has no rapid through it", descents && through === "0", JSON.stringify({ descents, through }));
+    await click(".view-toggles button[title^='Simulated stock']");
     // (Mar: "I don't want a done picking button ... as you pick the toolpaths should update")
     check("live picking: no Done picking button; each pick planned again with nothing pressed, its new path drawn in its colour",
       !(await read("!!document.getElementById('pickFaces')")) && pathChanges.length === 3 && pathChanges.every((c) => c.changed && c.picking && !c.done.length && c.n >= 3 && c.seen >= 0.4), JSON.stringify(pathChanges));

@@ -633,6 +633,42 @@ pub fn heavy_bites(job: &Job, tps: &[Toolpath]) -> Vec<Vec<dexel::Heavy>> {
     out
 }
 
+/// The GPU's simulation of a bar on the rotary axis checked as the CPU's is (it has no 3D
+/// replay): the rapids it flagged, `flagged` (its segments of the whole job, in
+/// [`sim::segments`]'s order, and 2 through the stock or 1 grazing it), confirmed on the 3D
+/// stock, and each program's overloaded operations. Each program's (rapids through, rapids
+/// grazing: move indices, as the CPU's `rapid_hits`), and its heavy. A carried piece: as
+/// flagged (no 3D stock of it), its heavy none.
+pub fn confirm_gpu(
+    job: &Job,
+    tps: &[Toolpath],
+    flagged: &[(usize, u8)],
+) -> Vec<(Vec<usize>, Vec<usize>, Vec<dexel::Heavy>)> {
+    let segs = sim::segments(tps);
+    let mut stats: Vec<sim::SimStats> = vec![sim::SimStats::default(); tps.len()];
+    for &(s, level) in flagged {
+        let Some(seg) = segs.get(s) else {
+            continue;
+        };
+        let st = &mut stats[seg.program as usize];
+        if level >= 2 {
+            st.rapid_hits.push(seg.move_index);
+        } else {
+            st.rapid_grazes.push(seg.move_index);
+        }
+    }
+    if job.carried.is_none() {
+        let began = work_begin(segs.len());
+        let mut st: Vec<&mut sim::SimStats> = stats.iter_mut().collect();
+        confirm_rapids_3d(job, tps, &mut st);
+        work_end(began);
+    }
+    stats
+        .into_iter()
+        .map(|s| (s.rapid_hits, s.rapid_grazes, s.heavy))
+        .collect()
+}
+
 /// The rapids the radial map flags as through stock or grazing it, confirmed on the 3D stock
 /// (a tri-dexel of the bar cut by every move before them): through it (deeper than the radial
 /// sim's own [`sim::RAPID_DEPTH`]) still counted; into it by less, a graze, said as one; clear
@@ -640,11 +676,7 @@ pub fn heavy_bites(job: &Job, tps: &[Toolpath]) -> Vec<Vec<dexel::Heavy>> {
 /// [`DEXEL_H`] apart, where through means deeper than that spacing (the rays are that far
 /// apart: a rapid within it of stock it only grazes reads as in it), and the ones in between
 /// on rays [`DEXEL_FINE_H`] apart round each.
-fn confirm_rapids_3d(
-    job: &Job,
-    tps: &[Toolpath],
-    programs: &mut [(String, sim::SimStats, sim::Deviation)],
-) {
+fn confirm_rapids_3d(job: &Job, tps: &[Toolpath], programs: &mut [&mut sim::SimStats]) {
     use std::collections::HashSet;
     // (every program: the replay also says which operations take more than their tool's
     // bite; Mar's impeller-6, its ball finish after a roughing stopped where its tool
@@ -666,7 +698,7 @@ fn confirm_rapids_3d(
         let r = dexel::replay(&mut solid, sg, &tool, 0.25, DEXEL_H);
         let through: HashSet<usize> = r.rapid_hits.iter().map(|h| h.1).collect();
         let touching: HashSet<usize> = r.rapid_grazes.iter().map(|h| h.1).collect();
-        let st = &mut programs[k].1;
+        let st = &mut *programs[k];
         st.heavy = r
             .heavy
             .into_iter()
@@ -712,7 +744,7 @@ fn confirm_rapids_3d(
             0.05,
             sim::RAPID_DEPTH,
         );
-        let st = &mut programs[k].1;
+        let st = &mut *programs[k];
         if !r.rapid_hits.is_empty() {
             st.rapid_hits.push(i);
         } else if !r.rapid_grazes.is_empty() {
@@ -720,8 +752,8 @@ fn confirm_rapids_3d(
         }
     }
     for p in programs.iter_mut() {
-        p.1.rapid_hits.sort_unstable();
-        p.1.rapid_grazes.sort_unstable();
+        p.rapid_hits.sort_unstable();
+        p.rapid_grazes.sort_unstable();
     }
 }
 
@@ -2779,8 +2811,16 @@ fn plan_cached(
     });
     let mut next_op = 0;
     let mut tps: Vec<Toolpath> = Vec::new();
+    // (a block or a bar in the vise: the stock as the programs before left it, for the rapid
+    // descents of each next one)
+    let mut block = job
+        .stock_box
+        .map(|sb| sim3::Heightmap3::of_job(job, &sb, GUARD_CELL));
     for p in &job.programs {
-        let tp = plan_program(&mut ctx, p, &mut next_op)?;
+        let mut tp = plan_program(&mut ctx, p, &mut next_op)?;
+        if let Some(hm) = block.as_mut() {
+            guard_descents(job, hm, &mut tp);
+        }
         if rest {
             ctx.prior.push(tp.moves.clone());
         }
@@ -2788,6 +2828,128 @@ fn plan_cached(
     }
     cut_off_warnings(job, &mut tps);
     Ok(tps)
+}
+
+/// The cells of the stock the rapid descents of a 3-axis job are checked on (mm).
+const GUARD_CELL: f64 = 0.25;
+
+/// How far above the stock a rapid descent into it stops instead (mm).
+const DESCENT_CLEAR: f64 = 0.5;
+
+/// How far into the stock a rapid descent's end counts as into it (mm): less is the stock's
+/// own height, as a faced level.
+const INTO: f64 = 0.01;
+
+/// (the carry-through walkthrough's pocket: its picked face 0.5 mm under the stock's top, the
+/// top never faced; it came down by rapid to 0.125 mm above the face, 0.375 mm into the
+/// stock) every rapid descent of a 3-axis program (straight down) that would end more than
+/// [`INTO`] into the stock as the moves before left it (`hm`, the programs before;
+/// this one's moves are cut into it as they go): stopped [`DESCENT_CLEAR`] above it, and
+/// fed the rest of the way down at a third of the next cut's feed. Said in a note.
+fn guard_descents(job: &Job, hm: &mut sim3::Heightmap3, tp: &mut Toolpath) {
+    let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
+    let segs = sim3::segments_of3(&tp.moves, 0);
+    // the stock's highest under the tool at (x, y): the cells within its radius less a cell
+    // (a pocket's or a contour's walls, a tool's radius off, are beside it, not under it)
+    let top_under = |hm: &sim3::Heightmap3, x: f64, y: f64, r: f64| {
+        let reach = (r - hm.cell).max(0.0);
+        let n = (reach / hm.cell).ceil() as i64;
+        let mut top = f64::NEG_INFINITY;
+        for i in -n..=n {
+            for j in -n..=n {
+                let (dx, dy) = (i as f64 * hm.cell, j as f64 * hm.cell);
+                if dx * dx + dy * dy <= reach * reach {
+                    top = top.max(hm.at(x + dx, y + dy));
+                }
+            }
+        }
+        top
+    };
+    let mut fixes: Vec<(usize, f64, f64)> = Vec::new();
+    for (k, seg) in segs.iter().enumerate() {
+        let cut = seg.tool.and_then(cutter_of);
+        if seg.rapid {
+            let (Some(from), Some(c)) = (seg.from, cut.as_ref()) else {
+                continue;
+            };
+            let down = seg.to[2] < from[2] - 1e-9
+                && (seg.to[0] - from[0]).abs() < 1e-9
+                && (seg.to[1] - from[1]).abs() < 1e-9;
+            if !down {
+                continue;
+            }
+            let top = top_under(hm, seg.to[0], seg.to[1], c.radius());
+            // (into it: one that ends on it, as at a faced height, is left as planned)
+            if seg.to[2] < top - INTO {
+                let stop = (top + DESCENT_CLEAR).min(from[2]);
+                let feed = segs[k + 1..]
+                    .iter()
+                    .find(|s| !s.rapid)
+                    .and_then(|s| match tp.moves[s.move_index] {
+                        Move::Line3 { feed, .. } => Some(feed),
+                        _ => None,
+                    })
+                    .unwrap_or(150.0);
+                fixes.push((seg.move_index, stop, (feed / 3.0).max(30.0)));
+            }
+            continue;
+        }
+        sim3::apply_segment3(hm, seg, cut.as_ref(), hm.cell);
+    }
+    if fixes.is_empty() {
+        return;
+    }
+    for &(i, stop, feed) in fixes.iter().rev() {
+        let Move::Rapid3 { x, y, z: Some(z) } = tp.moves[i] else {
+            continue;
+        };
+        let (Some(px), Some(py)) = (
+            x.or_else(|| at_xy(&tp.moves[..i]).0),
+            y.or_else(|| at_xy(&tp.moves[..i]).1),
+        ) else {
+            continue;
+        };
+        let feed_down = Move::Line3 {
+            x: px,
+            y: py,
+            z,
+            axis: [0.0, 0.0, 1.0],
+            feed,
+        };
+        if stop > z + 1e-9 {
+            tp.moves[i] = Move::Rapid3 {
+                x,
+                y,
+                z: Some(stop),
+            };
+            tp.moves.insert(i + 1, feed_down);
+        } else {
+            tp.moves[i] = feed_down;
+        }
+    }
+    tp.notes.push(format!(
+        "(Warning: {} rapid descent(s) would have come down into the stock, which stands above where the operation starts there (not faced or cut first): they stop {DESCENT_CLEAR} mm above it and feed the rest of the way)",
+        fixes.len()
+    ));
+}
+
+/// The X and Y the moves end at.
+fn at_xy(moves: &[Move]) -> (Option<f64>, Option<f64>) {
+    let (mut x, mut y) = (None, None);
+    for m in moves {
+        match *m {
+            Move::Rapid3 { x: a, y: b, .. } => {
+                x = a.or(x);
+                y = b.or(y);
+            }
+            Move::Line3 { x: a, y: b, .. } => {
+                x = Some(a);
+                y = Some(b);
+            }
+            _ => {}
+        }
+    }
+    (x, y)
 }
 
 /// A full cut-off ([`job::Parting`] through to the axis) leaves nothing on the bar: operations
@@ -3251,7 +3413,8 @@ pub fn simulate_job(
     // 9 in red. The rapids it flags are confirmed on the 3D stock, a tri-dexel of the bar cut
     // by every move before them, and only those it confirms are counted.)
     if job.carried.is_none() {
-        confirm_rapids_3d(job, tps, &mut programs);
+        let mut st: Vec<&mut sim::SimStats> = programs.iter_mut().map(|p| &mut p.1).collect();
+        confirm_rapids_3d(job, tps, &mut st);
     }
     work_end(began);
     Ok(JobSim {

@@ -45,13 +45,28 @@ fn the_dome_is_cut_round_at_constant_heights_on_its_steep_part() {
     // the cuts of the waterline
     let mut on = false;
     let mut pts = Vec::new();
+    let mut at: [Option<f64>; 3] = [None; 3];
     for tp in &tps {
         for m in &tp.moves {
             if let Move::Operation { kind, .. } = m {
                 on = kind == "waterline";
             }
-            if let (true, Move::Line3 { x, y, z, .. }) = (on, m) {
-                pts.push([*x, *y, *z]);
+            // (not a feed straight down: the waterline on the uncut block comes down into
+            // it by feed where a rapid would have gone into the stock)
+            match *m {
+                Move::Rapid3 { x, y, z } => {
+                    at = [x.or(at[0]), y.or(at[1]), z.or(at[2])];
+                }
+                Move::Line3 { x, y, z, .. } => {
+                    let down = at[0].is_some_and(|a| (a - x).abs() < 1e-9)
+                        && at[1].is_some_and(|b| (b - y).abs() < 1e-9)
+                        && at[2].is_some_and(|c| z < c);
+                    if on && !down {
+                        pts.push([x, y, z]);
+                    }
+                    at = [Some(x), Some(y), Some(z)];
+                }
+                _ => {}
             }
         }
     }

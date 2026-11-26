@@ -1231,7 +1231,7 @@ async function simulateLocked(opts = {}) {
     say(`Simulated in ${(ms / 1000).toFixed(1)} s`, "done");
     // (the GPU's simulation has no 3D replay: which operations take more than their tool's
     // bite asked of the engine beside it, first, the results said again when it comes)
-    if (backend.startsWith("GPU") && result.kind !== "xyz") heavyBites(result, forJob, epoch, opts.res);
+    if (backend.startsWith("GPU")) heavyBites(result, forJob, epoch, opts.res);
     // (Mar: "the simulation should be more realistic: there is no way these weird rectangular
     // spiky slices would happen") a bar on the rotary axis: its stock in 3D next, drawn
     // smooth in place of the radial map's when it comes (the view as it is meanwhile)
@@ -1279,14 +1279,26 @@ async function smoothStock(sim, forJob, epoch, res) {
   }
 }
 
-/** The operations of a GPU simulation that take more than twice their tool's bite (the CPU's
- *  says so itself), into its stocks and the results. */
+/** A GPU simulation checked as the CPU's is (the CPU's does it itself): the rapids it flagged
+ *  confirmed on the 3D stock, with their moves (each entry of the results then goes to its
+ *  place in the playback), and the operations that take more than twice their tool's bite;
+ *  into its stocks and the results. */
 async function heavyBites(sim, forJob, epoch, res) {
   try {
-    const { result } = await engineOn("stats", "simHeavy", forJob, simOpts(res), state.mesh);
+    const flagged = sim.stocks.flatMap((s) => s.flagged || []);
+    const { result } = await engineOn("stats", "simHeavy", forJob, { ...simOpts(res), flagged }, state.mesh);
     if (state.sim !== sim || epoch !== state.epoch || forJob !== state.job || result.error) return;
     (result.heavy || []).forEach((h, k) => sim.stocks[k] && (sim.stocks[k].heavy = h));
-    if ((result.heavy || []).some((h) => h.length)) selectTab(state.tab);
+    (result.rapids || []).forEach((r, k) => {
+      const s = sim.stocks[k];
+      if (!s) return;
+      s.rapid_hits = r.hits.length;
+      s.rapid_moves = r.hits.slice(0, 200);
+      s.rapid_grazes = r.grazes.length;
+      s.graze_moves = r.grazes.slice(0, 200);
+      s.checked3d = true;
+    });
+    selectTab(state.tab);
   } catch (e) {
     if (e.message !== "superseded" && e.message !== "replanning" && e.message !== "cancelled") console.warn(`overload check: ${e.message}`);
   }
