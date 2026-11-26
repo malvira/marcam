@@ -124,6 +124,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::RotaryParallel(_) => "rotary_parallel",
         Operation::RotaryFlowline(_) => "rotary_flowline",
         Operation::RotaryWall(_) => "rotary_wall",
+        Operation::RotaryPocket(_) => "rotary_pocket",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
@@ -1580,6 +1581,7 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 | Operation::RotaryParallel(_)
                 | Operation::RotaryFlowline(_)
                 | Operation::RotaryWall(_)
+                | Operation::RotaryPocket(_)
                 | Operation::RotaryRough(_)
                 | Operation::Raster3d(_)
                 | Operation::Rough3d(_)
@@ -1845,6 +1847,52 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 }
                 .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
+            }
+            (Operation::RotaryPocket(o), _) => {
+                let mesh = ctx.surface(&prog.name)?;
+                let dc = DropCutter::new(mesh, cutter.expect("set above"));
+                // the stock: the bar (or the piece carried in), or with `rest` as the
+                // operations before (and this program so far) left it, in 3D
+                let rest3d = if o.rest {
+                    indexed_dexel(job, &ctx.prior).map(|mut dx| {
+                        let segs: Vec<sim::Segment> = sim::segments(&[bar_toolpath(job, &b.moves)])
+                            .into_iter()
+                            .filter(|s| !s.rapid)
+                            .collect();
+                        dexel::replay(&mut dx, &segs, &|t| tool_solid(job, t), 0.25, 0.0);
+                        dx
+                    })
+                } else {
+                    None
+                };
+                let (x0, x1) = (
+                    o.x_range[0].min(o.x_range[1]),
+                    o.x_range[0].max(o.x_range[1]),
+                );
+                let bar = (!o.rest || rest3d.is_none()).then(|| bar_after(job, &[], &[], x0, x1));
+                let top = |x: f64, a: f64| -> f64 {
+                    if let Some(dx) = &rest3d {
+                        return dx
+                            .radial_top(x, 90.0 - a, job.stock.radius + 0.5, 0.1)
+                            .max(0.0);
+                    }
+                    let m = bar.as_ref().expect("one of the two");
+                    let g = m.grid;
+                    let i = (((x - g.x0) / g.dx).round().max(0.0) as usize).min(g.nx - 1);
+                    let j = ((a.rem_euclid(360.0) / 360.0 * g.na as f64).round() as usize) % g.na;
+                    m.r[i * g.na + j] as f64
+                };
+                let rep = strategy::rotary_pocket(&mut b, &dc, &top, safe_r, o)
+                    .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
+                if rep.plunges > 0 {
+                    b.warnings.push(format!(
+                        "rotary pocket: {} plunge(s) straight into the material (no room for a helix)",
+                        rep.plunges
+                    ));
+                }
+                if rep.levels > 0 {
+                    check_flute(tool, job.stock.radius, rep.floor)?;
+                }
             }
             (Operation::RotaryFlowline(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;

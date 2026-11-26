@@ -106,7 +106,7 @@ pub enum Engagement {
 impl Engagement {
     /// How operation type `op` cuts (`adaptive`: its adaptive option or pattern).
     pub fn of(op: &str, adaptive: bool) -> Engagement {
-        if adaptive {
+        if adaptive || op == "rotary_pocket" {
             return Engagement::Adaptive;
         }
         match op {

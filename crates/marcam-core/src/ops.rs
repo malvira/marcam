@@ -408,6 +408,31 @@ fn types() -> Vec<OperationType> {
             shapes_part: false,
         },
         OperationType {
+            kind: "rotary_pocket",
+            title: "Rotary pocket (4-axis simultaneous)",
+            description: "Rough a pocket round the bar (between an impeller's blades, a recess in a cylinder) level by level in radius, each level cleared adaptively: the tool takes the stepover's width as it goes (a steady load, never a full-width slot but where it comes in, down a helix where it has room), X and A together.",
+            group: "roughing",
+            params: vec![
+                tool(),
+                p("x_range", "vec2", "mm", "Axial extent of the tool tip [front, back]."),
+                p("a_range", "vec2", "deg", "The angles round the axis [from, to] (0 to 360: all round).").opt(json!([0.0, 360.0])).label("A range"),
+                p("step_down", "number", "mm", "Radial depth per level.").min(0.01),
+                p("stepover", "number", "", "The width of material the tool takes, a fraction of its diameter (0.1 to 0.2: a steady, light load).").opt(json!(0.15)).min(0.02).max(1.0),
+                p("leave_radial", "number", "mm", "Stock to leave on the part, radially (for a finish after it).").opt(json!(0.0)).label("Radial"),
+                p("min_radius", "number", "mm", "The tip never goes below this radius.").opt(json!(0.0)).min(0.0),
+                p("helix", "bool", "", "Down a helix where there is room (else a plunge).").opt(json!(true)),
+                p("rest", "bool", "", "From the stock as the operations before left it (in 3D), not the whole bar.").opt(json!(false)).label("Rest"),
+                feed(),
+                plunge(),
+                ramp(),
+                smoothing(),
+            ],
+            tool_shapes: &["flat", "ball"],
+            geometry: &["mesh", "profile", "axial_range"],
+            machine_needs: &["rotary_a"],
+            shapes_part: false,
+        },
+        OperationType {
             kind: "helical_knurl",
             title: "Knurl (diamond or straight)",
             description: "V grooves over a conical body: diamond, families of helical grooves crossing (two opposite families make diamonds); or straight, grooves along the axis.",
@@ -964,6 +989,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::RotaryParallel(_) => "rotary_parallel",
         Operation::RotaryFlowline(_) => "rotary_flowline",
         Operation::RotaryWall(_) => "rotary_wall",
+        Operation::RotaryPocket(_) => "rotary_pocket",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
@@ -1254,6 +1280,13 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
             v.insert("plunge_feed".into(), json!(plunge));
             v.insert("lead_in".into(), json!(0.3));
+        }
+        "rotary_pocket" => {
+            v.insert("x_range".into(), json!(x_range));
+            v.insert("step_down".into(), json!(depth));
+            v.insert("leave_radial".into(), json!(0.15));
+            v.insert("feed".into(), json!(feed));
+            v.insert("plunge_feed".into(), json!(plunge));
         }
         "rotary_wall" => {
             v.insert("x_range".into(), json!(x_range));

@@ -695,6 +695,9 @@ pub enum Operation {
     /// Rotary wall finishing: waterlines on the walls radiating from the axis, A and X
     /// together along their twist.
     RotaryWall(RotaryWall),
+    /// Rotary pocket roughing: a pocket round the bar cleared level by level in radius,
+    /// adaptively (a steady load), A and X together.
+    RotaryPocket(RotaryPocket),
     RotaryRough(RotaryRough),
     Face(Face),
     Pocket(Pocket),
@@ -1398,6 +1401,7 @@ impl Operation {
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => Some(o.ramp_angle),
             Operation::RotaryFlowline(o) => Some(o.ramp_angle),
             Operation::RotaryWall(o) => Some(o.ramp_angle),
+            Operation::RotaryPocket(o) => Some(o.ramp_angle),
             Operation::RotaryRough(o) => Some(o.ramp_angle),
             Operation::Bore(o) => Some(o.ramp_angle),
             Operation::Parting(o) => Some(o.ramp_angle),
@@ -1415,6 +1419,7 @@ impl Operation {
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => (o.smoothing, true),
             Operation::RotaryFlowline(o) => (o.smoothing, true),
             Operation::RotaryWall(o) => (o.smoothing, true),
+            Operation::RotaryPocket(o) => (o.smoothing, false),
             Operation::RotaryRough(o) => (o.smoothing, false),
             Operation::Raster3d(o) => (o.smoothing, true),
             Operation::Rough3d(o) => (o.smoothing, false),
@@ -1435,6 +1440,7 @@ impl Operation {
             Operation::RotaryFinish(o) | Operation::RotaryParallel(o) => o.tool,
             Operation::RotaryFlowline(o) => o.tool,
             Operation::RotaryWall(o) => o.tool,
+            Operation::RotaryPocket(o) => o.tool,
             Operation::RotaryRough(o) => o.tool,
             Operation::Face(o) => o.tool,
             Operation::Pocket(o) => o.tool,
@@ -1784,6 +1790,53 @@ pub struct RotaryWall {
     pub ramp_angle: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing: Option<f64>,
+}
+
+/// Rotary pocket roughing (4-axis simultaneous): a pocket round the bar (between an
+/// impeller's blades, a recess in a cylinder) within `x_range` and `a_range`, cleared level by
+/// level `step_down` apart in radius, each level adaptively (constant engagement: the tool
+/// takes the stepover's width as it goes, never a full-width slot but where it comes in, down
+/// a helix where it has room). `rest`: from the stock as the operations before left it (in
+/// 3D), not the whole bar.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RotaryPocket {
+    pub tool: u32,
+    /// Axial extent `[start, end]` of the tool tip.
+    pub x_range: [f64; 2],
+    /// Angular extent `[from, to]` (degrees) round the axis.
+    #[serde(default = "full_turn")]
+    pub a_range: [f64; 2],
+    /// Radial depth per level (mm).
+    pub step_down: f64,
+    /// The width of material the tool takes, as a fraction of its diameter.
+    #[serde(default = "default_pocket_stepover")]
+    pub stepover: f64,
+    /// Radial stock to leave on the part (mm).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub leave_radial: f64,
+    /// The tip never goes below this radius (mm, >= 0).
+    #[serde(default)]
+    pub min_radius: f64,
+    /// Down a helix where there is room (else a plunge).
+    #[serde(default = "default_true")]
+    pub helix: bool,
+    /// From the stock as the operations before left it (in 3D).
+    #[serde(default)]
+    pub rest: bool,
+    pub feed: f64,
+    pub plunge_feed: f64,
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
+}
+
+fn full_turn() -> [f64; 2] {
+    [0.0, 360.0]
+}
+
+fn default_pocket_stepover() -> f64 {
+    0.15
 }
 
 /// What a rotary flowline's pass spans.

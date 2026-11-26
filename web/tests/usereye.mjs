@@ -2324,6 +2324,60 @@ try {
       offeredW && wallR.xa > 200 && wallR.plunges >= 8 && wallR.tabs.length && wallR.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(wallR.verifier) && (!wallR.gouge || /deepest 0[.]0[0-1][0-9]* mm/.test(wallR.gouge)) && !wallR.error, JSON.stringify({ offeredW, wallR }));
     await clean("rotary wall finishing");
   }
+  // ---------------------------------------------------------------- rotary pocket roughing (4-axis simultaneous)
+  // (Mar's list: "rotary pocket roughing (simultaneous), with a constant-engagement option and
+  // rest on the dexel") the finned hub on the 4th axis: Rotary pocket picked from the menu, as
+  // it comes (the setup's flat): its channels cleared level by level, the cuts moving X and A
+  // together, clean (no verifier issue, no gouge, no red); its stock simulated: no rapid
+  // through it, nothing overloaded
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; return true; })()");
+    await click("#menuFile");
+    await click("#menuFile button, #menuFile [role=menuitem], #menuFile li, #menuFile a", "^New");
+    await settled();
+    {
+      const doc = await S("DOM.getDocument");
+      const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#importStlFile" });
+      await S("DOM.setFileInputFiles", { files: [join(root, "tests", "fixtures", "finned_hub.stl")], nodeId });
+    }
+    await settled();
+    await click("#tree .tree-setup.active [data-act=setup]");
+    await settled();
+    if (await where("#treeDetails [data-setkind=rotary]")) {
+      await click("#treeDetails [data-setkind=rotary]");
+      await settled();
+    }
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    if (await where("button", "^Fit to part$")) {
+      await click("button", "^Fit to part$");
+      await settled();
+    }
+    const offeredW = await read("[...document.getElementById('treeAddType').options].some((o) => o.value === 'rotary_pocket' && /Rotary pocket/.test(o.textContent))");
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'rotary_pocket'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    // (the library, if the setup has no flat: a flat end mill from it)
+    const libW = await waitFor(() => where("dialog[open] .tp-row", "3\.175 x 12"), "the library", 8000).catch(() => null);
+    if (libW) await click("dialog[open] .tp-row", "3\.175 x 12");
+    await waitFor(() => read("JSON.parse(document.getElementById('job').value).setups[0].operations.some((o) => o.type === 'rotary_pocket')"), "rotary pocket added", 60000);
+    await settled();
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
+    const wallR = await read(`(() => { const vis = ${VISIBLE}; const g = (window.__marcam.state.result?.programs || []).map((p) => p.gcode || '').join(String.fromCharCode(10)).split(String.fromCharCode(10)); let x = null, a = null, z = null, xa = 0, plunges = 0; for (const l of g) { const c = l.split('(')[0]; const mx = c.match(/X(-?[0-9.]+)/), ma = c.match(/A(-?[0-9.]+)/), mz = c.match(/Z(-?[0-9.]+)/); const nx = mx ? +mx[1] : x, na = ma ? +ma[1] : a, nz = mz ? +mz[1] : z; if (/^G1 /.test(c)) { if (nx !== x && na !== a) xa++; if (!mx && !ma && mz && nz < z) plunges++; } x = nx; a = na; z = nz; } const t = [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent.trim()); return { xa, plunges, tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent), verifier: t.filter((x) => /^Verifier/.test(x)).sort((a, b) => a.length - b.length)[0] || '', gouge: t.filter((x) => /^Gouge check/.test(x)).sort((a, b) => a.length - b.length)[0] || '', error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
+    await shot("rotary_pocket");
+    // its stock simulated, as a person turns it on
+    await click(".view-toggles button[title^='Simulated stock']");
+    await waitFor(() => read("/Simulated stock:/.test(document.getElementById('summary').textContent)"), "the hub's simulation", 300000 * SLACK).catch(() => {});
+    await waitFor(() => read("!window.__marcam.simLock.busy"), "the overload check", 300000 * SLACK).catch(() => {});
+    await settled();
+    const simP = await read("(() => { const t = document.getElementById('summary').textContent; return { through: (/(\\d+) rapid\\(s\\) through stock/.exec(t) || [])[1] ?? '', heavy: !!document.getElementById('heavyBites') }; })()");
+    check("rotary pocket, offered in the menu and picked on the finned hub: its channels cleared level by level, the cuts moving X and A together, clean; simulated: no rapid through the stock, nothing overloaded",
+      offeredW && wallR.xa > 200 && simP.through === "0" && !simP.heavy && wallR.tabs.length && wallR.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(wallR.verifier) && (!wallR.gouge || /deepest 0[.]0[0-1][0-9]* mm/.test(wallR.gouge)) && !wallR.error, JSON.stringify({ offeredW, wallR, simP }));
+    await clean("rotary pocket");
+  }
   // ---------------------------------------------------------------- an overloaded operation
   // (Mar's impeller-6: its roughing stopped where its tool reaches, the ball finish after it
   // took up to 5.7 times its bite, and nothing said so) the finned hub on the 4th axis with a
