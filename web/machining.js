@@ -1164,6 +1164,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         renderToggles();
         if (keep) await seek(Math.min(keep, result.segments));
         if (!opts.auto) setStatus(`Playback: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations, ${fmtClock(result.times?.[result.times.length - 1] || 0)} of machining (no stock)`, "done");
+        // (the stock shown, the playback shut: the background simulation's stock, started
+        // without a click; a project opened or an example loaded showed none until one)
+        if (stockOn()) window.__marcam.statsInBackground?.();
         return;
       }
       // (the stock in 3D: tiles of its surface from the engine, no radial grid here)

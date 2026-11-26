@@ -2456,12 +2456,14 @@ try {
     await S("Page.navigate", { url });
     await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
     await sleep(1000);
-    await read("(() => { window.confirm = () => true; const r = document.getElementById('simRes'); r.value = 'ultra'; r.dispatchEvent(new Event('change', { bubbles: true })); const s = document.getElementById('example'); s.value = 'knob_finish'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
-    await click("#loadExample");
-    await settled();
+    // (the stock shown before the project is loaded, as it is left from one day to the next:
+    // the simulation was asked for while the plan was still under way, and dropped)
     const on = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed') === 'true'");
     if (!on) await click(".view-toggles button[title^='Simulated stock']");
+    await read("(() => { window.confirm = () => true; const r = document.getElementById('simRes'); r.value = 'ultra'; r.dispatchEvent(new Event('change', { bubbles: true })); const s = document.getElementById('example'); s.value = 'knob_finish'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
     // (from here nothing is clicked, nothing moved over the view)
+    await settled();
     const shown = await waitFor(() => read("(() => { const v = window.__marcam.state.three; const g = v?.groups?.simFinal; return !!window.__marcam.state.sim && !!g && g.visible && g.children.length > 0; })()"), "the stock, by itself", 240000 * SLACK).catch(() => false);
     await sleep(1500);
     const img = await shot("stock_without_a_click");
@@ -2473,7 +2475,8 @@ try {
         const c = img.at(x, y);
         if (c[2] > 120 && c[0] < 140) px++;
       }
-    check("the stock simulated and drawn after the plan with nothing clicked (the grid too slow to run by itself: Coarse first)", shown && px > 300, JSON.stringify({ shown, px }));
+    const backend = await read("window.__marcam.state.simBackend || ''");
+    check("the stock simulated and drawn after the plan with nothing clicked, the stock shown before loading (the grid too slow to run by itself: Coarse first)", shown && px > 300, JSON.stringify({ shown, px, backend }));
     await read("(() => { const r = document.getElementById('simRes'); r.value = 'normal'; r.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await clean("the stock without a click");
   }

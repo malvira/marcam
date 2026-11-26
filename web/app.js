@@ -1172,7 +1172,14 @@ async function simulateLocked(opts = {}) {
       try {
         const { result: open } = await eng("gpuOpen", state.job, { ...simOpts(opts.res), libraries: libraries() }, state.mesh);
         // (gpuOpen plans through the same cache and leaves the hidden operations out)
-        result = await simulateOnGpu(gpu, open, async (o, bytes) => (await eng("gpuStats", o, bytes)).result);
+        // (the ring on for the GPU's own work too: it was shown for gpuOpen only, and went
+        // while the GPU simulated)
+        simCallStart("simulate");
+        try {
+          result = await simulateOnGpu(gpu, open, async (o, bytes) => (await eng("gpuStats", o, bytes)).result);
+        } finally {
+          simCallDone("simulate");
+        }
         backend = `GPU (${gpu.name})`;
       } catch (e) {
         // the engine refuses some jobs on the GPU (indexed 3+1 moves): the CPU does them
@@ -1721,8 +1728,11 @@ window.__marcam.previewDraft = previewDraft;
 // machining sim to get the stock") a job whose chosen grid takes longer than SIM_ASK_SECONDS
 // was never simulated in the background: no stock until something was clicked. At Coarse
 // first, always (then the chosen grid when quick), as after an edit
+// (and asked while a plan was still under way, as on loading an example or opening a project:
+// once it is over, not dropped)
 window.__marcam.statsInBackground = () => {
   if (!state.result || state.sim) return;
+  if (!planIdle()) return void whenSettled().then(() => window.__marcam.statsInBackground());
   setTimeout(backgroundSimulate, 0);
 };
 
