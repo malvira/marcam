@@ -1208,14 +1208,45 @@ async function simulateLocked(opts = {}) {
 }
 
 // ---------------------------------------------------------------- results
-function collisionHtml(c) {
+// ---- (Mar: "these warnings / errors need to be collapsable and if you click a specific one,
+// it should go to that location and time in the sim") each block with a list folds to its
+// one line (folded at first; as left after, through every update), and an entry with a place
+// is a link to it in the playback
+const folds = new Map();
+/** A block of the results that folds: its line, and its entries under it. */
+function foldHtml(key, cls, id, head, items) {
+  const open = folds.get(key) === true;
+  return `<details class="fold ${cls}" id="${id}" data-fold="${key}" ${open ? "open" : ""}><summary>${head}</summary><ul>${items.join("")}</ul></details>`;
+}
+/** An entry that goes to move `move` of program `prog` in the playback (null: no place). */
+function jumpLi(prog, move, html) {
+  if (move == null || !(move >= 0)) return `<li>${html}</li>`;
+  return `<li><a href="#" class="jump" data-prog="${prog}" data-move="${move}" title="Show it in the simulation: the tool there, at that time">${html}</a></li>`;
+}
+/** The move of program `p` that wrote G-code line `line` (1-based), from its move_lines. */
+function moveOfLine(p, line) {
+  const ml = p.move_lines;
+  if (!ml || !line) return null;
+  const a = ml instanceof Float32Array ? ml : new Float32Array(ml.buffer, ml.byteOffset, ml.byteLength / 4);
+  let lo = 0, hi = a.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (a[mid] < line) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < a.length ? lo : null;
+}
+
+function collisionHtml(c, prog) {
   if (!c) return "";
   // (a near miss: the shank or holder within half a mm of the stock or the chuck, in yellow)
-  if (!c.count && c.near) return `<div class="issues warn" id="holderCheck">Holder/shank check: no collision, but ${c.near}${c.near_more ? "+" : ""} move(s) pass the shank or holder within 0.5 mm of the stock or the chuck (first at line ${c.near_line ?? "?"}): runout or deflection and they touch</div>`;
+  if (!c.count && c.near) {
+    const link = c.near_first != null;
+    return `<div class="issues warn" id="holderCheck">${link ? `<a href="#" class="jump" data-prog="${prog}" data-move="${c.near_first}" title="Show the first one in the simulation">` : ""}Holder/shank check: no collision, but ${c.near}${c.near_more ? "+" : ""} move(s) pass the shank or holder within 0.5 mm of the stock or the chuck (first at line ${c.near_line ?? "?"})${link ? "</a>" : ""}: runout or deflection and they touch</div>`;
+  }
   if (!c.count) return `<div class="small" id="holderCheck">Holder/shank check: clear</div>`;
-  const rows = c.collisions.slice(0, 20).map((k) =>
-    `<li>line ${k.line ?? "?"}: T${k.tool} ${k.contact} ${k.depth.toFixed(3)} mm into the stock${k.rapid ? " (rapid)" : ""}</li>`).join("");
-  return `<div class="issues bad" id="holderCheck">Holder/shank collision: ${c.count}${c.more ? "+" : ""} move(s), deepest ${c.max_depth.toFixed(3)} mm<ul>${rows}</ul></div>`;
+  const rows = c.collisions.slice(0, 20).map((k) => jumpLi(prog, k.move_index, `line ${k.line ?? "?"}: T${k.tool} ${k.contact} ${k.depth.toFixed(3)} mm into the stock${k.rapid ? " (rapid)" : ""}`));
+  return foldHtml(`${state.result?.programs?.[prog]?.name}|holder`, "issues bad", "holderCheck", `Holder/shank collision: ${c.count}${c.more ? "+" : ""} move(s), deepest ${c.max_depth.toFixed(3)} mm`, rows);
 }
 
 function renderTabs() {
@@ -1282,21 +1313,27 @@ function selectTab(i) {
     ${state.stale ? '<div class="stale-banner" id="staleBanner">Out of date: the project changed since these results were made. <button type="button" id="staleRegen">Generate again</button></div>' : ""}
     <div><strong>${esc(p.title)}</strong> &middot; <span id="lineCount">${p.lines.toLocaleString("en")}</span> lines
       &middot; ${state.result.machine}${p.tool ? ` &middot; T${p.tool[0]} ${esc(p.tool[1])}` : ""}</div>
-    <div class="issues ${p.issues.length ? "bad" : "ok"}">${
+    ${
       p.issues.length
-        ? `${p.issues.length} verifier issue(s):<ul>${p.issues.slice(0, 200).map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`
-        : "Verifier: 0 issues (no fast plunges, no low rapids)"
-    }</div>
+        ? foldHtml(`${p.name}|verifier`, "issues bad", "verifierIssues", `${p.issues.length} verifier issue(s)`, p.issues.slice(0, 200).map((s) => jumpLi(i, moveOfLine(p, +(/line (\d+)/.exec(s)?.[1] || 0)), esc(s))))
+        : '<div class="issues ok">Verifier: 0 issues (no fast plunges, no low rapids)</div>'
+    }
     ${limitsHtml(p.name, esc)}
     ${p.warnings?.some((w) => /^GOUGE: /.test(w)) ? `<div class="error" id="gougeErrors">${p.warnings.filter((w) => /^GOUGE: /.test(w)).map((w) => `<div>${esc(w.replace(/^GOUGE: /, "Cuts into the part: "))}</div>`).join("")}</div>` : ""}
-    ${p.warnings?.some((w) => !/^GOUGE: /.test(w)) ? `<div class="limits" id="toolWarnings">${p.warnings.filter((w) => !/^GOUGE: /.test(w)).map((w) => `<div>Warning: ${esc(w)}</div>`).join("")}</div>` : ""}
+    ${(() => {
+      const ws = (p.warnings || []).filter((w) => !/^GOUGE: /.test(w));
+      if (!ws.length) return "";
+      if (ws.length === 1) return `<div class="limits" id="toolWarnings"><div>Warning: ${esc(ws[0])}</div></div>`;
+      return foldHtml(`${p.name}|warnings`, "limits", "toolWarnings", `${ws.length} warnings: ${esc(ws[0].slice(0, 90))}${ws[0].length > 90 ? "..." : ""}`, ws.map((w) => `<li>Warning: ${esc(w)}</li>`));
+    })()}
     ${p.time ? `<div class="small" id="timeEst">Estimated time: <strong>${fmtTime(p.time.total_s)}</strong> (cutting ${fmtTime(p.time.feed_s)}, rapids ${fmtTime(p.time.rapid_s)}, tool changes/dwells ${fmtTime(p.time.other_s)})${state.result.programs.length > 1 ? ` &middot; all files ${fmtTime(state.result.time_total_s)}` : ""}</div>` : ""}
-    ${collisionHtml(p.collisions)}
+    ${collisionHtml(p.collisions, i)}
     ${g && g.moves_checked ? `<div class="small">Gouge check: ${g.moves_checked.toLocaleString("en")} cut moves, deepest ${g.max_depth.toFixed(4)} mm into the part</div>` : ""}
     ${sim && !sim.samples ? `<div class="small muted">Not simulated: its tool has no full shape (a V-bit needs a diameter). The stock shown is from the programs before it.</div>` : ""}
     ${sim && sim.hidden ? `<div class="small muted" id="simHidden">${sim.hidden} operation${sim.hidden === 1 ? "" : "s"} hidden: not simulated (their material is left)</div>` : ""}
-    ${sim && sim.heavy?.length ? `<div class="limits" id="heavyBites">${sim.heavy.map((h) => `<div>Overloaded: ${esc(opNameOf(p, h.op))} takes more than ${2}&times; T${h.tool}'s normal bite on ${h.moves.toLocaleString("en")} move(s) (worst ${h.worst.toFixed(1)}&times;): add rest roughing before it, or rough deeper</div>`).join("")}</div>` : ""}
-    ${sim && sim.rapid_grazes ? `<div class="limits small" id="rapidGrazes">Warning: ${sim.rapid_grazes} rapid(s) graze the stock (under 0.05 mm of it): look at where the rapids pass close to the stock</div>` : ""}
+    ${sim && sim.heavy?.length ? foldHtml(`${p.name}|heavy`, "limits", "heavyBites", `Overloaded: ${sim.heavy.map((h) => `${esc(opNameOf(p, h.op))} takes more than 2&times; T${h.tool}'s normal bite on ${h.moves.toLocaleString("en")} move(s) (worst ${h.worst.toFixed(1)}&times;)`).join("; ")}: add rest roughing before it, or rough deeper`, sim.heavy.map((h) => jumpLi(i, h.worst_move, `${esc(opNameOf(p, h.op))}: its worst, ${h.worst.toFixed(1)}&times; the normal bite`)).concat(sim.heavy.map((h) => jumpLi(i, h.first_move, `${esc(opNameOf(p, h.op))}: the first over 2&times;`)))) : ""}
+    ${sim && sim.rapid_grazes ? foldHtml(`${p.name}|grazes`, "limits small", "rapidGrazes", `Warning: ${sim.rapid_grazes} rapid(s) graze the stock (under 0.05 mm of it): look at where the rapids pass close to the stock`, (sim.graze_moves || []).map((mv) => jumpLi(i, mv, `rapid, move ${mv + 1}`))) : ""}
+    ${sim && sim.rapid_hits && sim.rapid_moves?.length ? foldHtml(`${p.name}|rapids`, "issues bad small", "rapidHits", `${sim.rapid_hits} rapid(s) through the stock`, sim.rapid_moves.map((mv) => jumpLi(i, mv, `rapid, move ${mv + 1}`))) : ""}
     ${sim && noPart() ? `<div class="small">Simulated stock: no model in this setup to compare it with; ${sim.rapid_hits} rapid(s) through stock</div>` : ""}
     ${sim && !noPart() ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;
   $("gcode").value = p.gcode;
@@ -2225,6 +2262,11 @@ $("loadExample").addEventListener("click", () => {
   });
 });
 $("job").addEventListener("input", () => window.__marcam.project.changed({ typing: true }));
+// (a block folded or unfolded: kept so, through every update of the results)
+$("summary").addEventListener("toggle", (ev) => {
+  const d = ev.target;
+  if (d?.dataset?.fold) folds.set(d.dataset.fold, d.open);
+}, true);
 // Edit > Undo / Redo, and their keys (not inside a field or an open dialog: those keep the
 // browser's own undo of the text being typed)
 $("menuUndo").addEventListener("click", () => window.__marcam.project.undo());
@@ -2241,6 +2283,14 @@ document.addEventListener("keydown", (ev) => {
   window.__marcam.project[which]();
 });
 $("summary").addEventListener("click", (ev) => {
+  // an entry with a place: the playback there (its line in the G-code)
+  const j = ev.target.closest?.("a.jump");
+  if (j) {
+    ev.preventDefault();
+    if (j.dataset.move === "" || j.dataset.move == null) return;
+    window.__marcam.machining?.jumpTo?.(+j.dataset.prog, +j.dataset.move);
+    return;
+  }
   if (ev.target.id === "staleRegen") generate();
   if (ev.target.dataset?.empty === "import") $("importStlFile").click();
   if (ev.target.dataset?.empty === "add") window.__marcam.project.addSetup({ kind: "vise" });
@@ -2385,9 +2435,9 @@ function limitsHtml(program, esc) {
   const lim = (state.result.limits || []).filter((i) => !i.program || i.program === program);
   if (!lim.length) return `<div class="small" id="limits">Machine limits: OK for ${esc(state.result.machine)}</div>`;
   const bad = lim.some((i) => i.severity === "error");
-  return `<div id="limits" class="limits ${bad ? "bad" : ""}">Machine limits (${esc(state.result.machine)}):<ul>${lim
-    .map((i) => `<li>${i.severity}: ${esc(i.message)}</li>`)
-    .join("")}</ul></div>`;
+  const items = lim.map((i) => `<li>${i.severity}: ${esc(i.message)}</li>`);
+  if (lim.length === 1) return `<div id="limits" class="limits ${bad ? "bad" : ""}">Machine limits (${esc(state.result.machine)}):<ul>${items.join("")}</ul></div>`;
+  return foldHtml(`${program}|limits`, `limits ${bad ? "bad" : ""}`, "limits", `Machine limits (${esc(state.result.machine)}): ${lim.length} ${bad ? "problems" : "warnings"}`, items);
 }
 
 let editing = null; // index of the tool being edited, or -1 for a new one

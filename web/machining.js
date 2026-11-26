@@ -853,6 +853,46 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     g.attributes.normal.needsUpdate = true;
   }
 
+  /** (Mar: "if you click a specific one, it should go to that location and time in the sim")
+   *  The playback at move `move` of program `prog`: open and unfolded, played up to it (the
+   *  stock as it was then), the tool there, and the view turned to look at it. Returns the
+   *  segment, or null. */
+  async function jumpTo(prog, move) {
+    for (let i = 0; i < 300 && !m.session; i++) await new Promise((r) => setTimeout(r, 100));
+    if (!m.session) return null;
+    if (!m.expanded) await expand();
+    const s = m.session;
+    if (!s.moves) return null;
+    const starts = s.program_starts || [0];
+    const from = starts[prog] ?? 0;
+    const to = prog + 1 < starts.length ? starts[prog + 1] : s.segments;
+    let lo = from, hi = to;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (s.moves[mid] < move) lo = mid + 1;
+      else hi = mid;
+    }
+    const k = Math.min(lo, to - 1);
+    if (k < from) return null;
+    if (m.playing) $("simPlay").click();
+    await seek(k + 1);
+    for (let i = 0; i < 600 && m.busy; i++) await new Promise((r) => setTimeout(r, 50));
+    $("simScrub").value = String(m.pos);
+    placeTool();
+    // (the one camera move here, asked for: the view's centre onto the tool, as far away)
+    const v = state.three;
+    if (v && !v.failed && v.groups.toolModel) {
+      const p = v.groups.toolModel.getWorldPosition(new v.THREE.Vector3());
+      const d = p.clone().sub(v.controls.target);
+      v.camera.position.add(d);
+      v.controls.target.copy(p);
+      v.controls.update();
+      window.__marcam.kickView?.();
+    }
+    syncFrame();
+    return { segment: k, pos: m.pos };
+  }
+
   const SEEK_CHUNK = 4000;
   async function seek(n) {
     if (!m.session) return;
@@ -987,6 +1027,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       }
       result.path = f32(result.path);
       result.times = result.times ? f32(result.times) : null;
+      result.moves = result.moves ? f32(result.moves) : null;
       if (reopening) m.swapping = true;
       m.session = result;
       m.stock = stock;
@@ -1408,5 +1449,5 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   }
 
   renderToggles();
-  return { open, close, seek, reset, applyHidden, colorOf, lost, recolor, syncFrame, expand, collapse, toggle, renderToggles, state: m };
+  return { open, close, seek, jumpTo, reset, applyHidden, colorOf, lost, recolor, syncFrame, expand, collapse, toggle, renderToggles, state: m };
 }

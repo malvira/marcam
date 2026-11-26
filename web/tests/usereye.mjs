@@ -2365,6 +2365,25 @@ try {
     await shot("overloaded");
     check("a ball finish straight into the bar, its stock simulated: said to be overloaded (more than 2x its tool's normal bite, with how many moves and the worst), on the screen",
       /Overloaded: .*more than 2.*T[0-9]+.*normal bite on [0-9,]+ move.*worst [0-9.]+.*rest roughing/.test(heavy), heavy);
+    // (Mar: "these warnings / errors need to be collapsable and if you click a specific one,
+    // it should go to that location and time in the sim") folded to its line at first;
+    // unfolded with a click on it; an entry clicked: the playback at that move, the tool
+    // there, the view's centre on it
+    const folded = await read("!document.getElementById('heavyBites')?.open");
+    await click("#heavyBites > summary");
+    await sleep(500);
+    const unfolded = await read("!!document.getElementById('heavyBites')?.open");
+    const entry = await read("(() => { const a = document.querySelector('#heavyBites a.jump'); return a ? JSON.stringify({ prog: +a.dataset.prog, move: +a.dataset.move }) : ''; })()");
+    await click("#heavyBites a.jump");
+    const at = await waitFor(() => read("(() => { const m = window.__marcam.machining.state; if (!m.session || !m.session.moves || m.busy || !m.pos) return ''; const v = window.__marcam.state.three; const p = v.groups.toolModel.getWorldPosition(new v.THREE.Vector3()); return JSON.stringify({ pos: m.pos, move: m.session.moves[m.pos - 1], expanded: m.expanded, toTarget: p.distanceTo(v.controls.target) }); })()"), "the playback at the entry", 120000 * SLACK).then(JSON.parse).catch(() => null);
+    const want = entry ? JSON.parse(entry) : null;
+    // (the fold stays as left through an update of the results)
+    await read("(() => { const i = window.__marcam.state.tab ?? 0; document.querySelectorAll('#tabs button')[i]?.click(); return true; })()");
+    await sleep(500);
+    const kept = await read("!!document.getElementById('heavyBites')?.open");
+    await shot("overload_jumped");
+    check("the overload warning folds to its line (folded at first, unfolded with a click, kept so); its entry clicked: the playback at that move, the tool there, the view centred on it",
+      folded && unfolded && kept && !!want && !!at && at.expanded && at.move === want.move && at.toTarget < 0.5, JSON.stringify({ folded, unfolded, kept, want, at }));
     await clean("an overloaded operation");
   }
   // ---------------------------------------------------------------- knurl: diamond or straight

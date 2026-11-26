@@ -24,7 +24,7 @@ function bytes(s) {
  *  lists of numbers (kept as float32: drawing and simulation display only). */
 const BASE64 = {
   gpuOpen: [["input", "words"], ["input", "seg_start"], ["input", "seg_rapid"], ["keys"]],
-  simOpen: [["path"], ["times"]],
+  simOpen: [["path"], ["times"], ["moves"]],
   simSeek: [["r"], ["z"], ["op"]],
   faceRegions: [["triangles"], ["region_of"]],
   carriedMesh: [["stl"]],
@@ -58,7 +58,15 @@ function prepare(cmd, result, transfer) {
     }
     floats(result, "part");
   }
-  if (cmd === "planAndPost") for (const p of result.programs || []) floats(p.toolpath, "points");
+  if (cmd === "planAndPost")
+    for (const p of result.programs || []) {
+      floats(p.toolpath, "points");
+      // (each move's G-code line, base64)
+      if (typeof p.move_lines === "string") {
+        p.move_lines = bytes(p.move_lines);
+        transfer.push(p.move_lines.buffer);
+      }
+    }
 }
 
 self.onmessage = async (ev) => {

@@ -47,6 +47,9 @@ table.tools button { padding: 1px 6px; font-size: 11px; }
 #importUrl { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
 #summary .limits { margin: 4px 0; padding: 6px 10px; border-radius: 4px; background: var(--warn-bg); color: var(--warn); }
 #summary .limits.bad { background: var(--bad-bg); color: var(--bad); }
+#summary details.fold > summary { cursor: pointer; }
+#summary details.fold ul { margin: 4px 0 0; }
+#summary a.jump { color: inherit; text-decoration: underline dotted; cursor: pointer; }
 #tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
 #tabs button { border-bottom: none; border-radius: 4px 4px 0 0; }
 #tabs button[aria-selected=true] { background: var(--panel); border-color: var(--accent); font-weight: 600; }

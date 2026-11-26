@@ -9,8 +9,8 @@ pub mod api {
     use marcam::pickables;
     use marcam::profiles::{self, MachineProfile, ToolLibrary};
     use marcam::{
-        gouge_check, limits_for, plan_with_mesh, post, render, sim, sim3, simulate_job,
-        verify_gcode, Machine, Mesh, Toolpath,
+        gouge_check, limits_for, plan_with_mesh, render, sim, sim3, simulate_job, verify_gcode,
+        Machine, Mesh, Toolpath,
     };
     use serde_json::{json, Value};
 
@@ -563,7 +563,9 @@ pub mod api {
             .iter()
             .map(|tp| {
                 marcam::phase(&format!("post {}", tp.name));
-                let gcode = post(tp, &machine);
+                // (and each move's line: the results' entries go to their place in the
+                // playback, a line to its move)
+                let (gcode, _, move_lines) = marcam::post::post_lines(tp, &machine);
                 let time = marcam::estimate::estimate_toolpath(tp, &profile);
                 total_s += time.estimate.total_s;
                 let ops: Vec<Value> = time
@@ -608,6 +610,7 @@ pub mod api {
                         })
                         .chain(jaws.iter().filter(|(p, _)| p == &tp.name).map(|(_, w)| w.clone())).collect::<Vec<_>>(),
                     "gcode": gcode,
+                    "move_lines": f32s(&move_lines.iter().map(|&l| l as f32).collect::<Vec<f32>>()),
                     "issues": issues,
                     "gouge": g.map(|g| json!({"moves_checked": g.moves_checked, "max_depth": g.max_depth, "at": g.at})),
                     "collisions": c,
@@ -714,6 +717,9 @@ pub mod api {
                 "rapid_hits": st.rapid_hits.len(),
                 "rapid_grazes": st.rapid_grazes.len(),
                 "heavy": st.heavy,
+                // (which moves: the results' entries go to them in the playback)
+                "rapid_moves": st.rapid_hits.iter().take(200).collect::<Vec<_>>(),
+                "graze_moves": st.rapid_grazes.iter().take(200).collect::<Vec<_>>(),
                 "max_left": dev.max_left,
                 "mean_left": dev.mean_left,
                 "max_gouge": dev.max_gouge,
@@ -1396,6 +1402,7 @@ pub mod api {
             "segments": pb.len(),
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
+            "moves": f32s(&pb.segments.iter().map(|s| s.move_index as f32).collect::<Vec<f32>>()),
             "times": f32s(&segment_times(tps, &pb.segments, machine)),
             "ops": ops_of(tps),
             "project_ops": with_setup(opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, opts)),
@@ -1688,6 +1695,7 @@ pub mod api {
                 "segments": segs.len(),
                 "program_starts": starts,
                 "path": f32s(&path),
+                "moves": f32s(&segs.iter().map(|s| s.move_index as f32).collect::<Vec<f32>>()),
                 "times": f32s(&segment_times(&tps, &segs, &machine)),
                 "ops": ops_of(&tps),
                 "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, &opts)),
@@ -1755,6 +1763,7 @@ pub mod api {
             "segments": pb.len(),
             "program_starts": first_seg_of_program,
             "path": f32s(&path),
+            "moves": f32s(&pb.segments.iter().map(|s| s.move_index as f32).collect::<Vec<f32>>()),
             "times": f32s(&segment_times(&tps, &pb.segments, &machine)),
             "ops": ops,
             "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, &opts)),
