@@ -1890,6 +1890,33 @@ pub mod api {
         })
     }
 
+    /// The operations that take more than twice their tool's normal bite, by program (`{heavy:
+    /// [[...], ...]}`): for the GPU's simulation, which has no 3D replay to say so.
+    pub fn sim_heavy(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        if job.stock_box.is_some() || job.carried.is_some() {
+            return json!({"heavy": []});
+        }
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let tps = match plan_for_sim(&job, mesh.as_ref(), &opts) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        json!({ "heavy": marcam::heavy_bites(&job, &tps) })
+    }
+
     /// Drop the open playback and GPU sessions (their stock grids): a new project starts clean.
     pub fn sim_close() -> Value {
         let had = SESSION.with(|s| s.borrow_mut().take().is_some());
@@ -2519,6 +2546,7 @@ pub mod api {
             }
             "simulate" => simulate(&d(a), &s(b), c),
             "sim_surface" => sim_surface(&d(a), &s(b), c),
+            "sim_heavy" => sim_heavy(&d(a), &s(b), c),
             "profile_list" => profile_list(),
             "face_regions" => face_regions(&d(a), &s(b), c),
             "wizard_knurl" => wizard_knurl(&d(a), &s(b), c),

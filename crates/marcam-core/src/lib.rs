@@ -569,6 +569,28 @@ const DEXEL_H: f64 = 0.2;
 /// on, round it only (mm).
 const DEXEL_FINE_H: f64 = 0.05;
 
+/// The operations that take more than [`dexel::HEAVY`] times their tool's normal bite, by
+/// program: the bar cut by every program in turn on the 3D stock (rays [`DEXEL_H`] apart), as
+/// [`confirm_rapids_3d`] does. For a simulation that has no 3D replay of its own (the GPU's).
+pub fn heavy_bites(job: &Job, tps: &[Toolpath]) -> Vec<Vec<dexel::Heavy>> {
+    let tool = |t: u32| tool_solid(job, t);
+    let mut solid = dexel::Dexel::bar(job.stock.radius, job.stock.length, DEXEL_H);
+    tps.iter()
+        .enumerate()
+        .map(|(k, tp)| {
+            let sg = sim::segments(std::slice::from_ref(tp));
+            dexel::replay(&mut solid, &sg, &tool, 0.25, DEXEL_H)
+                .heavy
+                .into_iter()
+                .map(|h| dexel::Heavy {
+                    program: k as u16,
+                    ..h
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The rapids the radial map flags as through stock or grazing it, confirmed on the 3D stock
 /// (a tri-dexel of the bar cut by every move before them): through it (deeper than the radial
 /// sim's own [`sim::RAPID_DEPTH`]) still counted; into it by less, a graze, said as one; clear

@@ -29,7 +29,7 @@ const $ = (id) => document.getElementById(id);
 // Two workers, each with the engine: one plans and answers the editor (forms, picks, the
 // part), the other simulates (the batch simulation, the playback), so a simulation running
 // in the background never holds up an edit. A cancel ends the simulating one only.
-const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simClose", "gpuOpen", "gpuStats", "simSurface"]);
+const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simClose", "gpuOpen", "gpuStats", "simSurface", "simHeavy"]);
 const workers = { main: null, sim: null };
 const TEST_SIM_DELAY = Math.max(0, +new URLSearchParams(location.search).get("testSimDelayMs") || 0);
 let nextId = 1;
@@ -150,7 +150,7 @@ function showSimRing() {
 }
 /** Engine calls by command, since the page loaded (window.__marcam.calls). */
 const calls = {};
-const WITH_LIBRARIES = new Set(["gapDepths", "opDefaults", "setMaterial", "simulate", "simSurface", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
+const WITH_LIBRARIES = new Set(["gapDepths", "opDefaults", "setMaterial", "simulate", "simSurface", "simHeavy", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
 function engine(cmd, ...args) {
   return engineOn(SIM_WORKER.has(cmd) ? "sim" : "main", cmd, ...args);
 }
@@ -165,7 +165,7 @@ const planKey = (job, setup, libs) => JSON.stringify([state.meshesGen, setup ?? 
 const SIMULATING = new Set(["sim", "stats"]);
 
 /** The engine calls that plan the project they are given. */
-const PLANS = new Set(["simulate", "simSurface", "simOpen", "simGrid", "gpuOpen", "carriedMesh", "planAndPost"]);
+const PLANS = new Set(["simulate", "simSurface", "simHeavy", "simOpen", "simGrid", "gpuOpen", "carriedMesh", "planAndPost"]);
 /** An engine call on worker `which` ("main", "sim", or one of the pool's, see [`pool`]). */
 function engineOn(which, cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
@@ -1189,6 +1189,9 @@ async function simulateLocked(opts = {}) {
     selectTab(state.tab);
     const s = result.stocks[state.tab];
     say(`Simulated in ${(ms / 1000).toFixed(1)} s`, "done");
+    // (the GPU's simulation has no 3D replay: which operations take more than their tool's
+    // bite asked of the engine beside it, first, the results said again when it comes)
+    if (backend.startsWith("GPU") && result.kind !== "xyz") heavyBites(result, forJob, epoch, opts.res);
     // (Mar: "the simulation should be more realistic: there is no way these weird rectangular
     // spiky slices would happen") a bar on the rotary axis: its stock in 3D next, drawn
     // smooth in place of the radial map's when it comes (the view as it is meanwhile)
@@ -1231,6 +1234,19 @@ async function smoothStock(sim, forJob, epoch, res) {
   } finally {
     sim.surfacing = false;
     window.__marcam.machining?.renderSimProgress?.();
+  }
+}
+
+/** The operations of a GPU simulation that take more than twice their tool's bite (the CPU's
+ *  says so itself), into its stocks and the results. */
+async function heavyBites(sim, forJob, epoch, res) {
+  try {
+    const { result } = await engineOn("stats", "simHeavy", forJob, simOpts(res), state.mesh);
+    if (state.sim !== sim || epoch !== state.epoch || forJob !== state.job || result.error) return;
+    (result.heavy || []).forEach((h, k) => sim.stocks[k] && (sim.stocks[k].heavy = h));
+    if ((result.heavy || []).some((h) => h.length)) selectTab(state.tab);
+  } catch (e) {
+    if (e.message !== "superseded" && e.message !== "replanning" && e.message !== "cancelled") console.warn(`overload check: ${e.message}`);
   }
 }
 

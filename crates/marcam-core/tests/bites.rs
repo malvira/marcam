@@ -111,6 +111,10 @@ fn a_finish_straight_into_the_bar_is_overloaded_one_after_roughing_is_not() {
         h.len() == 1 && h[0].moves > 50 && h[0].worst > 3.0 && h[0].tool == 1,
         "{h:?}"
     );
+    // and the same said without the simulation (for the GPU's, which has no 3D replay)
+    let (job, mesh) = job(&HUB.replace("ROUGH", "").replace("OPS", r#"["op2"]"#));
+    let tps = marcam::plan_with_mesh(&job, mesh.as_ref()).unwrap();
+    assert_eq!(&marcam::heavy_bites(&job, &tps)[0], h);
     // roughed first: neither operation over
     let roughed = sim(HUB
         .replace("ROUGH", ROUGH)

@@ -72,6 +72,7 @@ export async function load(source, opts = {}) {
       call("plan_and_post_opts", job, { ...opts, machine: machine ?? null }, meshBytes),
     simulate: (job, opts, meshBytes) => call("simulate", job, opts || {}, meshBytes),
     simSurface: (job, opts, meshBytes) => call("sim_surface", job, opts || {}, meshBytes),
+    simHeavy: (job, opts, meshBytes) => call("sim_heavy", job, opts || {}, meshBytes),
     // built-in machine profiles and tool libraries
     profileList: () => call("profile_list"),
     // operation registry, and a 0.1/0.2 document upgraded + checked against it
