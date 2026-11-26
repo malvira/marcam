@@ -56,7 +56,10 @@ pub fn parting(
     // pass centres from the remainder's side to the part's (the part-side wall cut last)
     let width = op.width.max(2.0 * half);
     let (first, last) = (op.x - width + half, op.x - half);
-    let n = ((last - first) / (op.step_x * 2.0 * half).max(1e-3)).ceil() as usize;
+    // (a groove one tool wide: one pass; impeller-6's 4e-16 mm of rounding gave it two)
+    let n = (((last - first) / (op.step_x * 2.0 * half).max(1e-3)) - 1e-6)
+        .ceil()
+        .max(0.0) as usize;
     let centres: Vec<f64> = (0..=n)
         .map(|i| {
             if n == 0 {
@@ -271,5 +274,29 @@ mod tests {
         let mut o = op();
         o.taper = 0.0;
         assert!(parting(&mut b, PartingTool::Flat { radius: 1.0 }, 10.0, 15.0, &o).is_err());
+    }
+
+    /// A groove one tool wide is one pass, whatever the rounding of its X (Mar's impeller-6,
+    /// at X -22 with a 3.175 tool: the same pass twice).
+    #[test]
+    fn a_groove_one_tool_wide_is_one_pass() {
+        let mut o = op();
+        o.x = -22.0;
+        o.stop_radius = 6.0;
+        let b = run(
+            PartingTool::Flat {
+                radius: 3.175 / 2.0,
+            },
+            &o,
+        );
+        let passes = b
+            .moves
+            .windows(2)
+            .filter(|w| {
+                matches!(w[0], Move::Rapid { x: Some(_), .. })
+                    && matches!(w[1], Move::Rapid { r: Some(_), .. })
+            })
+            .count();
+        assert_eq!(passes, 1);
     }
 }

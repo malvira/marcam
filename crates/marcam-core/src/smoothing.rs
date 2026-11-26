@@ -20,6 +20,18 @@ pub const MAX_A: f64 = 45.0;
 /// Smooth the feed moves of `moves` (one operation's) within `tol` mm; `blend`: also round
 /// the corners of 3-axis runs at one Z.
 pub fn smooth(moves: &mut Vec<Move>, tol: f64, blend: bool) {
+    smooth_from(moves, tol, blend, (None, None, 0.0))
+}
+
+/// [`smooth`] for moves that start with the tool at rotary `(x, r, a)` (an operation after
+/// others: its first move from where they left the machine, not from A 0; Mar's impeller-6
+/// parting, after a flowline that left A at 20862 degrees, was split into 58 turns from 0).
+pub fn smooth_from(
+    moves: &mut Vec<Move>,
+    tol: f64,
+    blend: bool,
+    start: (Option<f64>, Option<f64>, f64),
+) {
     if tol <= 0.0 || moves.is_empty() {
         return;
     }
@@ -27,7 +39,7 @@ pub fn smooth(moves: &mut Vec<Move>, tol: f64, blend: bool) {
     let mut i = 0;
     // the position before each move (3-axis tip; rotary x, r, a)
     let mut p3: Option<[f64; 3]> = None;
-    let mut rot: (Option<f64>, Option<f64>, f64) = (None, None, 0.0);
+    let mut rot: (Option<f64>, Option<f64>, f64) = start;
     while i < moves.len() {
         match &moves[i] {
             Move::Line3 { feed, axis, .. } if p3.is_some() => {
@@ -373,5 +385,38 @@ mod tests {
         // a square corner at that tolerance would be 0.024 in radius: left sharp
         let sq = vec![[0.0, 0.0, -1.0], [10.0, 0.0, -1.0], [10.0, 10.0, -1.0]];
         assert_eq!(blend_corners(&sq, 0.01), sq);
+    }
+
+    /// Smoothed from where the operations before left the machine: a move from A 20862 to
+    /// 20868 stays a sixth of a turn, not 58 turns from A 0 (Mar's impeller-6 parting, after
+    /// a flowline: 18 minutes of the tool turning in the air).
+    #[test]
+    fn smoothed_from_where_the_machine_is() {
+        let mut moves = vec![
+            Move::Cut {
+                x: -23.6,
+                r: 24.4,
+                a: 20868.0,
+                feed: 500.0,
+                plunge_cap: 500.0,
+            },
+            Move::Cut {
+                x: -23.6,
+                r: 24.3,
+                a: 20874.0,
+                feed: 500.0,
+                plunge_cap: 500.0,
+            },
+        ];
+        smooth_from(&mut moves, 0.005, false, (Some(-23.6), Some(24.5), 20862.0));
+        assert!(
+            moves.len() <= 2,
+            "{} moves: {:?}",
+            moves.len(),
+            &moves[..moves.len().min(3)]
+        );
+        assert!(moves
+            .iter()
+            .all(|m| matches!(m, Move::Cut { a, .. } if *a > 20862.0)));
     }
 }

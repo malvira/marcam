@@ -1532,6 +1532,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             }
         }
         let op_start = b.moves.len();
+        let a_before = b.a;
+        let rot_before = (b.x, b.r, b.a);
         if current != Some(number) {
             b.tool_change(number, job.spindle_rpm);
             rapid_safe(&mut b);
@@ -2505,8 +2507,29 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
         // rotary operations and engravings: smoothed here (3-axis ones above)
         if smooth_tol > 0.0 && !is_three_axis(op) {
             let mut tail = b.moves.split_off(op_start);
-            smoothing::smooth(&mut tail, smooth_tol, flat);
+            smoothing::smooth_from(&mut tail, smooth_tol, flat, rot_before);
             b.moves.extend(tail);
+        }
+        // (Mar's impeller-6: the parting after a flowline began with 58 turns of A in the air,
+        // 18 min) a pose solves its own A, as the machine turns to it: the builder's A after
+        // poses is where the machine is, not where it was before them
+        if b.moves[op_start..]
+            .iter()
+            .any(|m| matches!(m, Move::Pose { .. }))
+        {
+            let mut a = a_before;
+            for m in &b.moves[op_start..] {
+                match *m {
+                    Move::Rapid { a: Some(v), .. } | Move::Cut { a: v, .. } => a = v,
+                    Move::Pose { axis, .. } => {
+                        if let Ok(na) = kinematics::solve_a(axis, a) {
+                            a = na;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            b.a = a;
         }
         if let (Some(cache), Some(key)) = (ctx.cache.as_deref_mut(), key) {
             if cache.map.len() >= PlanCache::MAX_OPS {
