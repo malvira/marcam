@@ -3345,15 +3345,15 @@ try {
   {
     const job = () => js("document.getElementById('job').value").then(JSON.parse);
     // (a ring: turned `turn` degrees round it, on its band: 5° steps)
-    const drag = async (mode, axis, dx, dy, turn = 120) => {
+    const drag = async (mode, axis, dx, dy, turn = 120, apart = false) => {
       // (a ring: from a point round it that no arrow covers)
-      // (of those, the point furthest on the screen from the other rings: the part's view
-      // framed close, a ring's 45° point can sit on another's)
+      // (`apart`: of those, the point furthest on the screen from the other rings: the knob's
+      // carried piece framed close, its Y ring's 45° point sat on its Z ring; else at 45°)
       let p = null, a0 = 45, best = -1;
       const at = async (ax, ang) => JSON.parse(await js(`JSON.stringify(window.__marcam.handles.screenOf('${mode}', '${ax}', ${ang}))`));
       const others = [];
-      if (mode === "rotate") for (const ax of "XYZ".replace(axis, "")) for (let g = 0; g < 360; g += 10) { const q = await at(ax, g); if (q) others.push(q); }
-      for (const ang of mode === "rotate" ? [45, 60, 30, 75, 15, 120, 150, 210, 240, 300, 330] : [45]) {
+      if (mode === "rotate" && apart) for (const ax of "XYZ".replace(axis, "")) for (let g = 0; g < 360; g += 10) { const q = await at(ax, g); if (q) others.push(q); }
+      for (const ang of mode === "rotate" && apart ? [45, 60, 30, 75, 15, 120, 150, 210, 240, 300, 330] : [45]) {
         const q = await at(axis, ang);
         if (!q) continue;
         const d = others.length ? Math.min(...others.map((o) => Math.hypot(o[0] - q[0], o[1] - q[1]))) : 1;
@@ -3434,7 +3434,7 @@ try {
     // (its handles under its Part: Mar, only in the part modification screen)
     await js("document.querySelector('#tree [data-act=part]').click(); true");
     await waitFor(() => js("!!window.__marcam.handles.state.tc?.visible && window.__marcam.handles.target()?.kind === 'carried'"), "the carried piece's handles", 60000);
-    const stood = await drag("rotate", "Y", -220, 160, 90);
+    const stood = await drag("rotate", "Y", -220, 160, 90, true);
     const ks = (await job()).setups[1];
     const kframe = await js(`await window.__marcam.engine('setupFrame', JSON.parse(document.getElementById('job').value), { setup: '${ks.id}' }).then((r) => r.result.stock_box)`);
     await shot("42c_knob_stood");
