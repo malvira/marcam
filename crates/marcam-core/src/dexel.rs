@@ -500,58 +500,83 @@ impl Dexel {
     /// each edge it crosses, wound outward. Gaps in a ray narrower than half its spacing
     /// (a tool grazing it) are closed first.
     pub fn surface_mesh(&self) -> SurfaceMesh {
+        self.surface_mesh_region([0, 0, 0], self.n)
+    }
+
+    /// [`Dexel::surface_mesh`] of a region only: the triangles across the edges from the grid
+    /// points `lo` (in) to `hi` (out), each axis; the regions of a partition of the grid give
+    /// the whole surface between them (a playback remeshes only where the tool went).
+    pub fn surface_mesh_region(&self, lo: [usize; 3], hi: [usize; 3]) -> SurfaceMesh {
         let n = self.n;
         let h = self.h;
-        let merged: [Vec<Vec<[f32; 2]>>; 3] = [0, 1, 2].map(|d| {
-            self.rays[d]
-                .iter()
-                .map(|ray| {
-                    let mut m: Vec<[f32; 2]> = Vec::with_capacity(ray.len());
-                    for &[s0, s1] in ray {
-                        match m.last_mut() {
-                            Some(l) if s0 - l[1] < 0.5 * h as f32 => l[1] = l[1].max(s1),
-                            _ => m.push([s0, s1]),
-                        }
-                    }
-                    m
-                })
-                .collect()
+        let hi = [0, 1, 2].map(|k| hi[k].min(n[k]));
+        let mut out = SurfaceMesh::default();
+        if (0..3).any(|k| lo[k] >= hi[k]) {
+            return out;
+        }
+        // the points looked at: the region, one before it and one after (the cells round its
+        // edges)
+        let b0 = [0, 1, 2].map(|k| lo[k].saturating_sub(1));
+        let b1 = [0, 1, 2].map(|k| (hi[k] + 1).min(n[k]));
+        let span = [0, 1, 2].map(|k| b1[k] - b0[k]);
+        let merge = |ray: &[[f32; 2]]| {
+            let mut m: Vec<[f32; 2]> = Vec::with_capacity(ray.len());
+            for &[s0, s1] in ray {
+                match m.last_mut() {
+                    Some(l) if s0 - l[1] < 0.5 * h as f32 => l[1] = l[1].max(s1),
+                    _ => m.push([s0, s1]),
+                }
+            }
+            m
+        };
+        // the rays of each family through the box, gaps closed: keyed by their two indices
+        let rays: [Vec<Vec<[f32; 2]>>; 3] = [0, 1, 2].map(|d| {
+            let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+            let mut v = Vec::with_capacity(span[a] * span[b]);
+            for ia in b0[a]..b1[a] {
+                for ib in b0[b]..b1[b] {
+                    v.push(merge(&self.rays[d][ia * n[b] + ib]));
+                }
+            }
+            v
         });
-        // the grid's points inside (from the X rays)
-        let idx = |i: usize, j: usize, k: usize| (i * n[1] + j) * n[2] + k;
-        let mut inside = vec![0u64; (n[0] * n[1] * n[2]).div_ceil(64)];
-        for j in 0..n[1] {
-            for k in 0..n[2] {
-                for &[s0, s1] in &merged[0][j * n[2] + k] {
-                    let i0 = (((s0 as f64) - self.lo[0]) / h).ceil().max(0.0) as usize;
+        let ray = |d: usize, g: [usize; 3]| {
+            let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+            &rays[d][(g[a] - b0[a]) * span[b] + (g[b] - b0[b])]
+        };
+        // the box's points inside (from the X rays)
+        let idx =
+            |g: [usize; 3]| ((g[0] - b0[0]) * span[1] + (g[1] - b0[1])) * span[2] + (g[2] - b0[2]);
+        let mut inside = vec![0u64; (span[0] * span[1] * span[2]).div_ceil(64)];
+        for j in b0[1]..b1[1] {
+            for k in b0[2]..b1[2] {
+                for &[s0, s1] in ray(0, [b0[0], j, k]) {
+                    let i0 = ((((s0 as f64) - self.lo[0]) / h).ceil().max(0.0) as usize).max(b0[0]);
                     let i1 = (((s1 as f64) - self.lo[0]) / h).floor();
                     if i1 < 0.0 {
                         continue;
                     }
-                    for i in i0..=(i1 as usize).min(n[0] - 1) {
-                        let q = idx(i, j, k);
+                    for i in i0..=(i1 as usize).min(b1[0] - 1) {
+                        let q = idx([i, j, k]);
                         inside[q / 64] |= 1 << (q % 64);
                     }
                 }
             }
         }
-        let at = |i: usize, j: usize, k: usize| {
-            let q = idx(i, j, k);
+        let at = |g: [usize; 3]| {
+            let q = idx(g);
             inside[q / 64] >> (q % 64) & 1 == 1
         };
-        // where the surface crosses the edge from grid point (i, j, k) along axis d
-        let crossing = |d: usize, i: usize, j: usize, k: usize| -> [f64; 3] {
-            let g = [i, j, k];
+        // where the surface crosses the edge from grid point g along axis d
+        let crossing = |d: usize, g: [usize; 3]| -> [f64; 3] {
             let mut p = [0, 1, 2].map(|c| self.coord(c, g[c]));
-            let (a, b) = ((d + 1) % 3, (d + 2) % 3);
-            let ray = &merged[d][g[a] * n[b] + g[b]];
-            let (lo, hi) = (p[d], p[d] + h);
-            let mut s = lo + 0.5 * h;
+            let (lo_d, hi_d) = (p[d], p[d] + h);
+            let mut s = lo_d + 0.5 * h;
             let mut best = f64::INFINITY;
-            for &[s0, s1] in ray {
+            for &[s0, s1] in ray(d, g) {
                 for e in [s0 as f64, s1 as f64] {
-                    if e >= lo - 1e-9 && e <= hi + 1e-9 {
-                        let off = (e - (lo + 0.5 * h)).abs();
+                    if e >= lo_d - 1e-9 && e <= hi_d + 1e-9 {
+                        let off = (e - (lo_d + 0.5 * h)).abs();
                         if off < best {
                             best = off;
                             s = e;
@@ -559,16 +584,13 @@ impl Dexel {
                     }
                 }
             }
-            p[d] = s.clamp(lo, hi);
+            p[d] = s.clamp(lo_d, hi_d);
             p
         };
-        let cells = (n[0].max(1) - 1, n[1].max(1) - 1, n[2].max(1) - 1);
-        let mut vert: std::collections::HashMap<usize, u32> = Default::default();
-        let mut out = SurfaceMesh::default();
+        let mut vert: std::collections::HashMap<[usize; 3], u32> = Default::default();
         // a cell's vertex: the mean of its edges' crossings (made when first wanted)
         let mut vertex = |out: &mut SurfaceMesh, c: [usize; 3]| -> u32 {
-            let key = (c[0] * cells.1 + c[1]) * cells.2 + c[2];
-            if let Some(&v) = vert.get(&key) {
+            if let Some(&v) = vert.get(&c) {
                 return v;
             }
             let mut sum = [0.0; 3];
@@ -581,8 +603,8 @@ impl Dexel {
                     g0[b] += ub;
                     let mut g1 = g0;
                     g1[d] += 1;
-                    if at(g0[0], g0[1], g0[2]) != at(g1[0], g1[1], g1[2]) {
-                        let p = crossing(d, g0[0], g0[1], g0[2]);
+                    if at(g0) != at(g1) {
+                        let p = crossing(d, g0);
                         for t in 0..3 {
                             sum[t] += p[t];
                         }
@@ -597,29 +619,26 @@ impl Dexel {
             };
             let v = (out.positions.len() / 3) as u32;
             out.positions.extend(p.map(|x| x as f32));
-            vert.insert(key, v);
+            vert.insert(c, v);
             v
         };
-        for i in 0..n[0] {
-            for j in 0..n[1] {
-                for k in 0..n[2] {
-                    let here = at(i, j, k);
+        for i in lo[0]..hi[0] {
+            for j in lo[1]..hi[1] {
+                for k in lo[2]..hi[2] {
                     let g = [i, j, k];
+                    let here = at(g);
                     for d in 0..3 {
                         if g[d] + 1 >= n[d] {
                             continue;
                         }
                         let mut g1 = g;
                         g1[d] += 1;
-                        if here == at(g1[0], g1[1], g1[2]) {
+                        if here == at(g1) {
                             continue;
                         }
                         let (a, b) = ((d + 1) % 3, (d + 2) % 3);
-                        if g[a] == 0
-                            || g[b] == 0
-                            || g[a] >= cells_of(cells, a)
-                            || g[b] >= cells_of(cells, b)
-                        {
+                        // (the four cells round the edge inside the grid)
+                        if g[a] == 0 || g[b] == 0 || g[a] + 1 >= n[a] || g[b] + 1 >= n[b] {
                             continue;
                         }
                         // the four cells round the edge, counter-clockwise about +d
@@ -670,10 +689,6 @@ pub const GRAZE: f64 = 0.01;
 pub struct SurfaceMesh {
     pub positions: Vec<f32>,
     pub indices: Vec<u32>,
-}
-
-fn cells_of(cells: (usize, usize, usize), a: usize) -> usize {
-    [cells.0, cells.1, cells.2][a]
 }
 
 /// What a replay of moves through the stock found.
@@ -962,5 +977,19 @@ mod tests {
             let r = ((v[1] * v[1] + v[2] * v[2]) as f64).sqrt();
             assert!(r <= 10.0 + 0.3 && v[0] >= -20.3 && v[0] <= 0.3, "{v:?}");
         }
+        // in tiles (as a playback remeshes them): the same triangles between them
+        let mut tiles = 0;
+        let t = 16;
+        for i in (0..d.n[0]).step_by(t) {
+            for j in (0..d.n[1]).step_by(t) {
+                for k in (0..d.n[2]).step_by(t) {
+                    tiles += d
+                        .surface_mesh_region([i, j, k], [i + t, j + t, k + t])
+                        .indices
+                        .len();
+                }
+            }
+        }
+        assert_eq!(tiles, m.indices.len());
     }
 }

@@ -463,6 +463,26 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       placeTool();
       return;
     }
+    if (m.solid) {
+      // the stock in 3D: a mesh a tile, made again as the tool goes through it
+      const grp = new THREE.Group();
+      m.tiles = new Map();
+      solidTiles(THREE, grp, s.solid.tiles);
+      s.solid.tiles = null;
+      m.stockMesh = grp;
+      next.add(grp);
+      const { stock_radius: rr } = s;
+      const len = (state.result?.stock?.length ?? 0) || 0;
+      const ghost = stockObject(THREE, new THREE.CylinderGeometry(rr, rr, len || 1, 64, 1, false).rotateZ(-Math.PI / 2).translate(-(len || 1) / 2, 0, 0), 0.1);
+      ghost.visible = $("simGhost").checked;
+      m.ghost = ghost;
+      next.add(ghost);
+      swap();
+      m.toolNumber = null;
+      showMachining(true);
+      placeTool();
+      return;
+    }
     const { R, C } = dims();
     m.dgrid = displayGrid(m.stride);
     m.dr = new Float32Array(Math.ceil(R / m.stride) * Math.ceil(C / m.stride));
@@ -771,8 +791,41 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   }
 
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
+  /** Tiles of the stock in 3D into `grp` (made or made again; an empty one gone). */
+  function solidTiles(THREE, grp, tiles) {
+    const mat = m.tileMat || (m.tileMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(...(uncut() || [0.55, 0.6, 0.68])), roughness: 0.55, metalness: 0.15 }));
+    for (const t of tiles || []) {
+      const key = t.key.join(",");
+      const old = m.tiles.get(key);
+      if (old) {
+        grp.remove(old);
+        old.geometry.dispose();
+        m.tiles.delete(key);
+      }
+      const pos = f32(t.positions);
+      if (!pos.length) continue;
+      const ib = b64ToBytes(t.indices);
+      const idx = new Uint32Array(ib.buffer, ib.byteOffset, ib.byteLength / 4);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+      g.computeVertexNormals();
+      const mesh = new THREE.Mesh(g, mat);
+      mesh.userData.tile = key;
+      grp.add(mesh);
+      m.tiles.set(key, mesh);
+    }
+  }
+
   function applyRows(res) {
     m.pos = res.pos;
+    if (res.tiles) {
+      const v = state.three;
+      if (m.solid && m.stockMesh && v && !v.failed) solidTiles(v.THREE, m.stockMesh, res.tiles);
+      if (!m.playing) $("simScrub").value = String(m.pos);
+      placeTool();
+      return;
+    }
     if (res.rows) {
       // the engine mirror first (rows of C cells), then the display rows they fall in; the
       // WASM playback sends base64, the GPU one typed arrays
@@ -1061,7 +1114,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.autoOpening = !!opts.auto;
       let result;
       try {
-        ({ result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup, machine: typeof machine === "string" ? machine : null, path_only: !stock }, state.mesh));
+        ({ result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup, machine: typeof machine === "string" ? machine : null, path_only: !stock, solid: stock }, state.mesh));
       } finally {
         m.autoOpening = false;
       }
@@ -1101,10 +1154,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         if (!opts.auto) setStatus(`Playback: ${result.segments.toLocaleString("en")} moves, ${result.ops.length} operations, ${fmtClock(result.times?.[result.times.length - 1] || 0)} of machining (no stock)`, "done");
         return;
       }
-      const n = m.xyz ? result.grid.nx * result.grid.ny : result.grid.nx * result.grid.na;
-      m.r = new Float32Array(n).fill(m.xyz ? result.stock_box.max[2] : result.stock_radius);
+      // (the stock in 3D: tiles of its surface from the engine, no radial grid here)
+      m.solid = !!result.solid;
+      const n = m.solid ? 0 : m.xyz ? result.grid.nx * result.grid.ny : result.grid.nx * result.grid.na;
+      m.r = new Float32Array(n).fill(m.xyz ? result.stock_box?.max[2] ?? 0 : result.stock_radius);
       // (a square, hex or rectangular bar: its radius at each angle)
-      if (!m.xyz && result.stock_ring) for (let i = 0; i < result.grid.nx; i++) m.r.set(result.stock_ring, i * result.grid.na);
+      if (!m.solid && !m.xyz && result.stock_ring) for (let i = 0; i < result.grid.nx; i++) m.r.set(result.stock_ring, i * result.grid.na);
       // (a bar lying in the vise: each row from the bar's top there)
       if (m.xyz && result.stock_rows) result.stock_rows.forEach((z, j) => m.r.fill(z, j * result.grid.nx, (j + 1) * result.grid.nx));
       // (Mar's carry-through: a setup taking the cut piece of the one before, or a bar standing
@@ -1114,9 +1169,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         if (st.length === n) m.r.set(st);
       }
       m.op = new Uint16Array(n);
-      m.stride = strideFor(DISPLAY_MAX);
+      m.stride = m.solid ? 1 : strideFor(DISPLAY_MAX);
       // the stock on the GPU when there is one and the engine offers the job to it
-      const { gpu, why } = simGpu ? await simGpu() : { gpu: null, why: "" };
+      const { gpu, why } = simGpu && !m.solid ? await simGpu() : { gpu: null, why: m.solid ? "the stock in 3D" : "" };
       let backend = `CPU (${why})`;
       if (gpu) {
         try {
@@ -1218,7 +1273,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** Rebuild the display at the stride for the current state (playing or at rest). */
   async function restride() {
     // (without stock there is no grid to show coarser while playing)
-    if (!m.session || !m.stock) return;
+    if (!m.session || !m.stock || m.solid) return;
     const want = strideFor(m.playing ? PLAY_MAX : DISPLAY_MAX);
     if (want !== m.stride) {
       m.stride = want;
@@ -1368,7 +1423,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       localStorage.setItem("marcam.opColors", JSON.stringify(saved));
     } catch {}
     // recolour every vertex from the tag mirror
-    if (m.stockMesh && m.xyz) {
+    if (m.solid) {
+      // (the stock in 3D: one colour)
+    } else if (m.stockMesh && m.xyz) {
       const col = m.stockMesh.geometry.attributes.color.array;
       for (let k = 0; k < m.dop.length; k++) col.set(colorOf(m.dop[k]), 3 * k);
       m.stockMesh.geometry.attributes.color.needsUpdate = true;

@@ -38,6 +38,7 @@ pub mod replace;
 pub mod sim;
 pub mod sim3;
 pub mod smoothing;
+pub mod solid_play;
 pub mod strategy;
 pub mod toolpath;
 pub mod verify;

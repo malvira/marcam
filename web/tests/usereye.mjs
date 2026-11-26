@@ -2483,6 +2483,57 @@ try {
     await settled();
     await clean("Alt+Up after a click");
   }
+  // ---------------------------------------------------------------- the playback in 3D
+  // (Mar: "the simulation should be more realistic: there is no way these weird rectangular
+  // spiky slices would happen") the knob's mesh roughing and finish played with the stock
+  // shown: the stock is the one in 3D (made in tiles as the tool goes), and at the end of the
+  // finish it is round (the knob is turned: the same radius all round at each X, no fins)
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'knob_finish'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    if (!(await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed') === 'true'"))) await click(".view-toggles button[title^='Simulated stock']");
+    await click(".view-toggles button[title^='Play']");
+    await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !!m.session && !!m.stock && m.expanded && !m.busy; })()"), "the playback with its stock", 240000 * SLACK).catch(() => {});
+    if (await read("window.__marcam.machining.state.playing")) await click("#simPlay");
+    // to the end, as the bar is dragged there
+    await click("#simEnd");
+    await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !m.busy && m.pos >= m.session.segments; })()"), "the end", 300000 * SLACK).catch(() => {});
+    await sleep(1500);
+    await shot("playback_3d_end");
+    const st = await read(`(() => {
+      const m = window.__marcam.machining.state;
+      if (!m.solid || !m.tiles) return JSON.stringify({ solid: !!m.solid });
+      // the stock's radius round the axis in slices of X across the knob's finished body
+      const by = new Map();
+      for (const t of m.tiles.values()) {
+        const a = t.geometry.attributes.position.array;
+        for (let k = 0; k < a.length; k += 3) {
+          const x = a[k], r = Math.hypot(a[k + 1], a[k + 2]);
+          if (x < -28 || x > -12 || r < 2) continue;
+          const key = Math.round(x * 2);
+          if (!by.has(key)) by.set(key, []);
+          by.get(key).push(r);
+        }
+      }
+      // in each slice the outermost surface: its spread round the axis
+      let worst = 0, slices = 0;
+      for (const rs of by.values()) {
+        rs.sort((p, q) => q - p);
+        const top = rs.slice(0, Math.max(8, Math.floor(rs.length / 4)));
+        if (top.length < 8) continue;
+        slices++;
+        worst = Math.max(worst, top[0] - top[top.length - 1]);
+      }
+      return JSON.stringify({ solid: true, tiles: m.tiles.size, slices, worst: +worst.toFixed(3) });
+    })()`).then(JSON.parse);
+    check("the playback's stock is the one in 3D, and the turned knob's finished body is round at the end (no fins: the outer surface within 0.5 mm all round in each slice)",
+      st.solid && st.tiles > 0 && st.slices > 10 && st.worst < 0.5, JSON.stringify(st));
+    await clean("the playback in 3D");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")

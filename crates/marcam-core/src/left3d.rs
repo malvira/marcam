@@ -236,7 +236,7 @@ impl<'a> Near<'a> {
 }
 
 /// The tool's solid for the replay: a ball's or a flat's, as long as its flutes (or 20 mm).
-fn solid(job: &Job, t: u32) -> Option<ToolSolid> {
+pub fn solid(job: &Job, t: u32) -> Option<ToolSolid> {
     let d = job.tool(t)?;
     let height = d.flute_length.unwrap_or(20.0).max(5.0);
     Some(match d.shape {

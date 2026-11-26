@@ -1004,6 +1004,25 @@ pub mod api {
     enum Session {
         Rotary(sim::Playback),
         Xyz(sim3::Playback3),
+        /// A rotary job played on its stock in 3D (`opts.solid`): see
+        /// [`marcam::solid_play`].
+        Solid(marcam::solid_play::SolidPlayback),
+    }
+
+    /// Tiles of the stock's surface as JSON: each its key, vertices and triangles (base64).
+    fn tiles_json(tiles: Vec<marcam::solid_play::Tile>) -> Vec<Value> {
+        tiles
+            .into_iter()
+            .map(|t| {
+                let idx: Vec<u8> = t
+                    .mesh
+                    .indices
+                    .iter()
+                    .flat_map(|i| i.to_le_bytes())
+                    .collect();
+                json!({"key": t.key, "positions": f32s(&t.mesh.positions), "indices": b64(&idx)})
+            })
+            .collect()
     }
 
     /// Cell size for a block: `opts.cell`, else about 240 cells along its longer side.
@@ -1708,6 +1727,45 @@ pub mod api {
         if let Some(sb) = job.stock_box {
             return sim_open_xyz(&job, &tps, &sb, &opts, job_json, &machine);
         }
+        // (the stock in 3D: a bar's own, not one carried in)
+        if opts["solid"] == true && job.carried.is_none() {
+            let r = job.stock.radius;
+            let cells = (2.0 * r) * (2.0 * r) * job.stock.length.max(1.0);
+            let h = opts["solid_h"]
+                .as_f64()
+                .unwrap_or_else(|| (cells / 3.0e6).cbrt().max(0.3));
+            let mut pb = marcam::solid_play::SolidPlayback::new(&job, &tps, h, &|t| {
+                marcam::left3d::solid(&job, t)
+            });
+            let mut path = Vec::with_capacity(pb.segments.len() * 7);
+            for sg in &pb.segments {
+                path.extend_from_slice(&path_point(sg));
+            }
+            let starts: Vec<usize> = (0..tps.len())
+                .map(|p| {
+                    pb.segments
+                        .iter()
+                        .position(|s| s.program as usize == p)
+                        .unwrap_or(pb.segments.len())
+                })
+                .collect();
+            let tiles = tiles_json(pb.take_dirty());
+            let out = json!({
+                "kind": "rotary",
+                "solid": { "h": pb.h(), "tiles": tiles },
+                "stock_radius": job.stock.radius,
+                "segments": pb.segments.len(),
+                "program_starts": starts,
+                "path": f32s(&path),
+                "moves": f32s(&pb.segments.iter().map(|s| s.move_index as f32).collect::<Vec<f32>>()),
+                "times": f32s(&segment_times(&tps, &pb.segments, &machine)),
+                "ops": ops_of(&tps),
+                "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, &opts)),
+                "tools": job.tools,
+            });
+            SESSION.with(|s| *s.borrow_mut() = Some(Session::Solid(pb)));
+            return out;
+        }
         // grid and part map exactly as the batch simulation builds them
         let res = match simulate_job(&job, &[], mesh.as_ref(), dx, na, 0.02) {
             Ok(r) => r,
@@ -1850,6 +1908,11 @@ pub mod api {
                                    "r": f32s(&pb.stock.r[a..b]), "op": u16s(&pb.stock.op[a..b])})
                         }
                     }
+                }
+                // the stock in 3D: the tiles the tool went through, made again
+                Session::Solid(pb) => {
+                    pb.seek(n);
+                    json!({"pos": pb.position(), "tiles": tiles_json(pb.take_dirty())})
                 }
                 // 3-axis: rows are Y indices of nx cells; "z" holds the tops
                 Session::Xyz(pb) => {
