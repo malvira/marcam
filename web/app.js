@@ -1358,9 +1358,11 @@ function selectTab(i) {
   }
   const g = p.gouge;
   const sim = state.sim?.stocks?.[i];
+  // (the banner only where the results are marked out of date: live, an edit's plan under
+  // way is said by the tree's badges; a background simulation landing meanwhile drew it)
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
   $("summary").innerHTML = `
-    ${state.stale ? '<div class="stale-banner" id="staleBanner">Out of date: the project changed since these results were made. <button type="button" id="staleRegen">Generate again</button></div>' : ""}
+    ${state.stale && document.body.classList.contains("stale") ? '<div class="stale-banner" id="staleBanner">Out of date: the project changed since these results were made. <button type="button" id="staleRegen">Generate again</button></div>' : ""}
     <div><strong>${esc(p.title)}</strong> &middot; <span id="lineCount">${p.lines.toLocaleString("en")}</span> lines
       &middot; ${state.result.machine}${p.tool ? ` &middot; T${p.tool[0]} ${esc(p.tool[1])}` : ""}</div>
     ${
