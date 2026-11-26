@@ -172,7 +172,28 @@ pub struct CollisionReport {
     pub max_depth: f64,
     /// The first [`MAX_LISTED`] collisions, in program order.
     pub collisions: Vec<Collision>,
+    /// No collision, but this many moves (up to [`MAX_COUNTED`]) pass with the shank or the
+    /// holder within [`NEAR_MISS`] of the stock or what holds it: a near miss, said as a
+    /// warning (runout or deflection and they touch).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub near: usize,
+    /// The near-miss count stopped at [`MAX_COUNTED`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub near_more: bool,
+    /// The first near miss: its move, and its G-code line (1-based) when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub near_first: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub near_line: Option<usize>,
 }
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// How close the shank or the holder may pass to the stock (or the chuck, the jaws) before the
+/// check says so (mm): a near miss, a warning.
+pub const NEAR_MISS: f64 = 0.5;
 
 impl CollisionReport {
     /// Whether the check has counted [`MAX_COUNTED`] moves and stops.

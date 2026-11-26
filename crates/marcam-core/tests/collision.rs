@@ -307,3 +307,36 @@ fn the_chuck_and_the_tailstock_are_checked_when_the_setup_has_them() {
         chuck.iter().map(|r| r.count).collect::<Vec<_>>()
     );
 }
+
+/// A near miss: no contact, but the holder or shank within [`marcam::collision::NEAR_MISS`] of
+/// the stock, said (Mar's impeller turned end for end: its roughing shank 0.02 mm from the
+/// stock, the check "clear"). The knob's T1 held so its holder passes 0.3 mm over the bar
+/// behind the part: a near miss, no collision; 1 mm over it: clear.
+#[test]
+fn a_holder_just_clear_of_the_stock_is_a_near_miss() {
+    let job = load("examples/knob/knob.marcam.toml");
+    let m = builtin_machine("makera-z1-4axis").unwrap();
+    let tps = plan_with_mesh(&job, None).unwrap();
+    // (as given: clear, no near miss either)
+    for rep in collision_check(&job, &tps, &m.post).unwrap() {
+        assert_eq!((rep.count, rep.near), (0, 0), "{}", rep.program);
+    }
+    // the turning's deepest: tip at the 3 mm neck, the uncut 12.5 mm bar behind it: the holder
+    // touches with less than 9.5 mm out
+    let held = |out: f64| {
+        let mut j = job.clone();
+        let t1 = j.tools.iter_mut().find(|t| t.number == 1).unwrap();
+        t1.flute_length = Some(2.0);
+        t1.stickout = Some(out);
+        // (a thin shank, well inside the cut: only the holder can come near)
+        t1.shank_diameter = Some(1.0);
+        collision_check(&j, &tps, &m.post).unwrap().remove(0)
+    };
+    let near = held(9.8);
+    assert_eq!(near.count, 0, "{:?}", near.collisions.first());
+    assert!(near.near > 0 && near.near_line.is_some(), "{near:?}");
+    let clear = held(10.5);
+    assert_eq!((clear.count, clear.near), (0, 0), "{clear:?}");
+    let touching = held(9.0);
+    assert!(touching.count > 0 && touching.near == 0, "{touching:?}");
+}

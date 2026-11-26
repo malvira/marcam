@@ -823,6 +823,14 @@ fn run_setup(
                     );
                 }
                 bad += 1;
+            } else if c.near > 0 {
+                println!(
+                    "  holder/shank check: no collision, but {}{} move(s) pass the shank or holder within {} mm of the stock or the chuck (near miss; first at line {})",
+                    c.near,
+                    if c.near_more { "+" } else { "" },
+                    marcam::collision::NEAR_MISS,
+                    c.near_line.map_or("?".to_string(), |l| l.to_string())
+                );
             } else {
                 println!("  holder/shank check: clear");
             }

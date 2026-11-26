@@ -292,6 +292,12 @@ try {
   await S("Page.navigate", { url });
   await waitFor(async () => (await state()) === "ready", "the engine to load", 30000);
   check("page loads and the WebAssembly engine starts", true, await js("document.getElementById('version').textContent"));
+  // (the app's times as the engine's: the minutes rounded before the hours split off; the
+  // impeller's finish showed "2 h 60 min")
+  {
+    const f = JSON.parse(await js("JSON.stringify([10785, 10769, 3600, 7229, 7230, 3599].map((s) => window.__marcam.fmtTime(s)))"));
+    check("times: the minutes rounded before the hours (2 h 59 min 45 s is 3 h 00 min)", JSON.stringify(f) === JSON.stringify(["3 h 00 min", "2 h 59 min", "1 h 00 min", "2 h 00 min", "2 h 01 min", "59 min 59 s"]), JSON.stringify(f));
+  }
   // the live updating (on by default) is tested in its own section (8v): the sections before
   // it plan when they ask (Tools > Replan all), as they were written
   const liveDefault = await js("document.getElementById('autoGen').checked");

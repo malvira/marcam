@@ -659,7 +659,11 @@ function currentMachine() {
 /** "1 h 02 min", "12 min 05 s", "48 s" (as the engine's CLI prints them). */
 export function fmtTime(sec) {
   const s = Math.max(0, Math.round(sec));
-  if (s >= 3600) return `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600 + 30) / 60)).padStart(2, "0")} min`;
+  // (the minutes rounded first, then split: 2 h 59 min 45 s is 3 h 00 min, not "2 h 60")
+  if (s >= 3600) {
+    const m = Math.floor((s + 30) / 60);
+    return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+  }
   if (s >= 60) return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
   return `${s} s`;
 }
@@ -1175,6 +1179,8 @@ async function simulateLocked(opts = {}) {
 // ---------------------------------------------------------------- results
 function collisionHtml(c) {
   if (!c) return "";
+  // (a near miss: the shank or holder within half a mm of the stock or the chuck, in yellow)
+  if (!c.count && c.near) return `<div class="issues warn" id="holderCheck">Holder/shank check: no collision, but ${c.near}${c.near_more ? "+" : ""} move(s) pass the shank or holder within 0.5 mm of the stock or the chuck (first at line ${c.near_line ?? "?"}): runout or deflection and they touch</div>`;
   if (!c.count) return `<div class="small" id="holderCheck">Holder/shank check: clear</div>`;
   const rows = c.collisions.slice(0, 20).map((k) =>
     `<li>line ${k.line ?? "?"}: T${k.tool} ${k.contact} ${k.depth.toFixed(3)} mm into the stock${k.rapid ? " (rapid)" : ""}</li>`).join("");

@@ -3067,16 +3067,55 @@ pub fn simulate_job(
 /// simulation of its own: rotary stock 0.3 mm by 2° over the whole bar, 3-axis stock at the
 /// "coarse" cell size, tool positions 0.4 mm apart. It is skipped when no move brings a
 /// shank or holder below the stock's top. Each collision carries its move's G-code line as
-/// `machine` posts it.
+/// `machine` posts it. A program with none says how many moves pass within
+/// [`collision::NEAR_MISS`] of it (a near miss).
 pub fn collision_check(
     job: &Job,
     tps: &[Toolpath],
     machine: &Machine,
 ) -> Result<Vec<collision::CollisionReport>, Error> {
     phase("holder and shank check");
+    let bodies = |t: u32| job.tool(t).map(collision::ToolBody::of);
+    let mut out = collision_pass(job, tps, &bodies)?;
+    // (near misses: the shank and holder [`collision::NEAR_MISS`] fatter, the holder as much
+    // lower. The impeller turned
+    // end for end: its roughing shank passed 0.02 mm from the stock and the check said
+    // "clear")
+    let fat = |t: u32| {
+        bodies(t).map(|mut b| {
+            b.shank_radius += collision::NEAR_MISS;
+            b.holder_radius += collision::NEAR_MISS;
+            // (and the holder that much lower: the stock under it as near)
+            b.stickout = (b.stickout - collision::NEAR_MISS).max(b.flute_length);
+            b
+        })
+    };
+    let near = collision_pass(job, tps, &fat)?;
+    for (rep, n) in out.iter_mut().zip(near) {
+        if rep.count == 0 && n.count > 0 {
+            rep.near = n.count;
+            rep.near_more = n.more;
+            rep.near_first = n.collisions.first().map(|c| c.move_index);
+        }
+    }
+    for (rep, tp) in out.iter_mut().zip(tps) {
+        let (_, _, lines) = post::post_lines(tp, machine);
+        collision::attach_lines(rep, &lines);
+        if let Some(i) = rep.near_first {
+            rep.near_line = lines.get(i).copied();
+        }
+    }
+    Ok(out)
+}
+
+/// One pass of [`collision_check`] with the tools' bodies as `bodies` says.
+fn collision_pass(
+    job: &Job,
+    tps: &[Toolpath],
+    bodies: &dyn Fn(u32) -> Option<collision::ToolBody>,
+) -> Result<Vec<collision::CollisionReport>, Error> {
     let res = sim::Resolution::preset("coarse").expect("built in");
     let cutters = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
-    let bodies = |t: u32| job.tool(t).map(collision::ToolBody::of);
     // stamps 0.4 mm apart: the cusps left between them are a few hundredths of a mm
     let step = 0.4;
     let mut out = Vec::new();
@@ -3089,7 +3128,7 @@ pub fn collision_check(
     let holders = job.fixture.as_ref().is_some_and(|f| {
         job.stock_box.is_none() && (f.chuck(job.stock.length).is_some() || f.tailstock().is_some())
     });
-    if !holders && !collision::can_touch(&segs, &bodies, top) {
+    if !holders && !collision::can_touch(&segs, bodies, top) {
         return Ok(tps
             .iter()
             .map(|tp| collision::CollisionReport {
@@ -3105,7 +3144,7 @@ pub fn collision_check(
                 &mut hm,
                 tp,
                 &cutters,
-                &bodies,
+                bodies,
                 step,
                 sb.max[2],
                 job.jaws.map(|g| (*sb, sb.min[2] + g)),
@@ -3131,7 +3170,7 @@ pub fn collision_check(
                 &mut stock,
                 tp,
                 &cutters,
-                &bodies,
+                bodies,
                 step,
                 bar,
                 last,
@@ -3139,10 +3178,6 @@ pub fn collision_check(
             );
             out.push(rep);
         }
-    }
-    for (rep, tp) in out.iter_mut().zip(tps) {
-        let (_, _, lines) = post::post_lines(tp, machine);
-        collision::attach_lines(rep, &lines);
     }
     Ok(out)
 }

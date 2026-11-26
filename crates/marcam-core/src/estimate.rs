@@ -432,7 +432,9 @@ pub fn estimate_toolpath(tp: &crate::Toolpath, profile: &MachineProfile) -> Prog
 pub fn format_duration(s: f64) -> String {
     let s = s.max(0.0).round() as u64;
     if s >= 3600 {
-        format!("{} h {:02} min", s / 3600, (s % 3600 + 30) / 60)
+        // (the minutes rounded first, then split: 2 h 59 min 45 s is 3 h 00 min, not "2 h 60")
+        let m = (s + 30) / 60;
+        format!("{} h {:02} min", m / 60, m % 60)
     } else if s >= 60 {
         format!("{} min {:02} s", s / 60, s % 60)
     } else {
@@ -521,6 +523,18 @@ mod tests {
         );
         assert_eq!(e.per_line[0], 30.0);
         assert!((format_duration(3725.0) == "1 h 02 min") && format_duration(65.0) == "1 min 05 s");
+    }
+
+    /// The minutes rounded before the hours are split off: the impeller's finish, 2 h 59 min
+    /// 45 s, printed "2 h 60 min".
+    #[test]
+    fn durations_round_the_minutes_before_the_hours() {
+        assert_eq!(format_duration(3.0 * 3600.0 - 15.0), "3 h 00 min");
+        assert_eq!(format_duration(3.0 * 3600.0 - 31.0), "2 h 59 min");
+        assert_eq!(format_duration(3600.0), "1 h 00 min");
+        assert_eq!(format_duration(2.0 * 3600.0 + 29.0), "2 h 00 min");
+        assert_eq!(format_duration(2.0 * 3600.0 + 30.0), "2 h 01 min");
+        assert_eq!(format_duration(3599.0), "59 min 59 s");
     }
 
     #[test]
