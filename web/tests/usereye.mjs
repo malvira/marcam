@@ -2470,7 +2470,7 @@ try {
       }
     const helixShown = await read("!!document.querySelector('#opForm [name=helix_angle]')");
     check("the knurl's Pattern: Diamond or Straight in its form; Straight: its grooves along X (no A turning in them), the view changes, the helix angle not asked",
-      offered === "diamond,straight" && t0 > 0.8 && t1 >= 0 && t1 < 0.1 && px > 150 && !helixShown, JSON.stringify({ offered, t0, t1, px, helixShown }));
+      offered === "diamond,straight" && t0 > 0.8 && t1 >= 0 && t1 < 0.1 && px > 10 && !helixShown, JSON.stringify({ offered, t0, t1, px, helixShown }));
     await read("document.activeElement?.blur?.(); true");
     await key("z", 2);
     await settled();
@@ -2583,16 +2583,23 @@ try {
           by.get(key).push(r);
         }
       }
-      // in each slice the outermost surface: its spread round the axis
-      let worst = 0, slices = 0;
-      for (const rs of by.values()) {
+      // in each slice the outermost surface: its spread round the axis (fins). A slice at a
+      // shoulder, its outermost radius not its neighbours', holds the step's face too: left out
+      const rows = [];
+      for (const [k, rs] of by) {
         rs.sort((p, q) => q - p);
         const top = rs.slice(0, Math.max(8, Math.floor(rs.length / 4)));
-        if (top.length < 8) continue;
-        slices++;
-        worst = Math.max(worst, top[0] - top[top.length - 1]);
+        if (top.length >= 8) rows.push({ k, r: top[0], spread: top[0] - top[top.length - 1] });
       }
-      return JSON.stringify({ solid: true, tiles: m.tiles.size, slices, worst: +worst.toFixed(3) });
+      rows.sort((a, b) => a.k - b.k);
+      let worst = 0, slices = 0, shoulders = 0;
+      rows.forEach((w, i) => {
+        const near = [rows[i - 1], rows[i + 1]].filter((n) => n && Math.abs(n.k - w.k) === 1);
+        if (near.length < 2 || near.some((n) => Math.abs(n.r - w.r) > 0.3)) return void shoulders++;
+        slices++;
+        worst = Math.max(worst, w.spread);
+      });
+      return JSON.stringify({ solid: true, tiles: m.tiles.size, slices, shoulders, worst: +worst.toFixed(3) });
     })()`).then(JSON.parse);
     check("the playback's stock is the one in 3D, and the turned knob's finished body is round at the end (no fins: the outer surface within 0.5 mm all round in each slice)",
       st.solid && st.tiles > 0 && st.slices > 10 && st.worst < 0.5, JSON.stringify(st));

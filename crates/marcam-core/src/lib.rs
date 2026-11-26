@@ -2845,7 +2845,8 @@ const INTO: f64 = 0.01;
 /// stock) every rapid descent of a 3-axis program (straight down) that would end more than
 /// [`INTO`] into the stock as the moves before left it (`hm`, the programs before;
 /// this one's moves are cut into it as they go): stopped [`DESCENT_CLEAR`] above it, and
-/// fed the rest of the way down at a third of the next cut's feed. Said in a note.
+/// fed the rest of the way down at the program's plunge feed (else a third of the next cut's).
+/// Said in a warning.
 fn guard_descents(job: &Job, hm: &mut sim3::Heightmap3, tp: &mut Toolpath) {
     let cutter_of = |t: u32| job.tool(t).and_then(|d| cutter_for(t, d.shape).ok());
     let segs = sim3::segments_of3(&tp.moves, 0);
@@ -2890,7 +2891,10 @@ fn guard_descents(job: &Job, hm: &mut sim3::Heightmap3, tp: &mut Toolpath) {
                         _ => None,
                     })
                     .unwrap_or(150.0);
-                fixes.push((seg.move_index, stop, (feed / 3.0).max(30.0)));
+                // (at the program's plunge feed, what the verifier holds its descents to;
+                // else a third of the cut's)
+                let plunge = tp.plunge_limit.unwrap_or((feed / 3.0).max(30.0)).min(feed);
+                fixes.push((seg.move_index, stop, plunge));
             }
             continue;
         }
