@@ -1224,7 +1224,9 @@ async function simulateLocked(opts = {}) {
     // smooth in place of the radial map's when it comes (the view as it is meanwhile)
     if (result.grid && result.kind !== "xyz") smoothStock(result, forJob, epoch, opts.res);
     const hits = result.stocks.reduce((n, st) => n + (st.collisions?.count || 0), 0);
-    if (s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
+    // (in the background, nothing asked: said in the results, in red there, not as an error
+    // over the page)
+    if (!opts.quiet && s && (s.rapid_hits || s.gouge_cells || hits)) showError(`Simulation: ${s.rapid_hits} rapid(s) through stock, ${s.gouge_cells} gouged cell(s), ${hits} holder/shank collision(s)`);
   } catch (e) {
     if (e.message === "superseded" || e.message === "replanning") {
       // (the project went, or a newer plan: its simulation with it)

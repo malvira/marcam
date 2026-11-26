@@ -2425,7 +2425,8 @@ try {
     await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'knob'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await click("#loadExample");
     await settled();
-    const knurlOp = await read("JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.type === 'helical_knurl')?.id || ''");
+    // (the knob example is a 0.1 job, its text without setups until an edit: the project tree's)
+    const knurlOp = await read("window.__marcam.state.tree.doc.setups[0].operations.find((o) => o.type === 'helical_knurl')?.id || ''");
     // (on when its form shows: a click is not taken as done)
     await click(`#tree .tree-op[data-op=${knurlOp}] .tree-label`);
     await waitFor(() => read("!!document.querySelector('#opForm [name=pattern]')"), "the knurl's form", 30000).catch(() => {});
