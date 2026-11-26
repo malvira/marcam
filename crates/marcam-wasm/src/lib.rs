@@ -1731,9 +1731,19 @@ pub mod api {
         if opts["solid"] == true && job.carried.is_none() {
             let r = job.stock.radius;
             let cells = (2.0 * r) * (2.0 * r) * job.stock.length.max(1.0);
+            // (the rays' spacing by the simulation grid chosen: Normal by the bar's size, at
+            // least 0.3 mm; Coarse 0.6, Fine 0.25, Ultra 0.2; a custom grid its X cell's
+            // spacing, at least 0.15)
+            let auto = (cells / 3.0e6).cbrt().max(0.3);
             let h = opts["solid_h"]
                 .as_f64()
-                .unwrap_or_else(|| (cells / 3.0e6).cbrt().max(0.3));
+                .unwrap_or_else(|| match opts["res"].as_str() {
+                    Some("coarse") => auto.max(0.6),
+                    Some("fine") => auto.min(0.25).max((cells / 12.0e6).cbrt()),
+                    Some("ultra") => auto.min(0.2).max((cells / 24.0e6).cbrt()),
+                    Some(_) => auto,
+                    None => opts["dx"].as_f64().map_or(auto, |dx| dx.max(0.15)),
+                });
             let mut pb = marcam::solid_play::SolidPlayback::new(&job, &tps, h, &|t| {
                 marcam::left3d::solid(&job, t)
             });
