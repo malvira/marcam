@@ -2355,8 +2355,11 @@ try {
     await settled();
     // (passes along X 2 mm apart, each the bar's whole depth: far more than the tool's bite)
     const finishId = await read("JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.type === 'rotary_finish').id");
-    await click(`#tree .tree-op[data-op=${finishId}] .tree-label`);
-    await settled();
+    // (selected when it was added: a click on a selected operation's line deselects it, so
+    // it is clicked only when its form is not the one shown; on when the form shows it)
+    const formShown = () => read(`!!document.querySelector('#opForm [name=pattern]') && document.querySelector('#tree .tree-op.sel')?.dataset.op === '${finishId}'`);
+    if (!(await formShown())) await click(`#tree .tree-op[data-op=${finishId}] .tree-label`);
+    await waitFor(formShown, "the finish's form", 30000);
     await read("(() => { const s = document.querySelector('#opForm [name=pattern]'); s.value = 'along'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await sleep(800);
     await settled();
