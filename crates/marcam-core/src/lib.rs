@@ -581,12 +581,13 @@ fn confirm_rapids_3d(
     programs: &mut [(String, sim::SimStats, sim::Deviation)],
 ) {
     use std::collections::HashSet;
-    let Some(last) = programs
-        .iter()
-        .rposition(|p| !p.1.rapid_hits.is_empty() || !p.1.rapid_grazes.is_empty())
-    else {
+    // (every program: the replay also says which operations take more than their tool's
+    // bite; Mar's impeller-6, its ball finish after a roughing stopped where its tool
+    // reaches, 5.7 times)
+    if programs.is_empty() {
         return;
-    };
+    }
+    let last = programs.len() - 1;
     let tool = |t: u32| tool_solid(job, t);
     let segs: Vec<Vec<sim::Segment>> = tps
         .iter()
@@ -601,6 +602,14 @@ fn confirm_rapids_3d(
         let through: HashSet<usize> = r.rapid_hits.iter().map(|h| h.1).collect();
         let touching: HashSet<usize> = r.rapid_grazes.iter().map(|h| h.1).collect();
         let st = &mut programs[k].1;
+        st.heavy = r
+            .heavy
+            .into_iter()
+            .map(|h| dexel::Heavy {
+                program: k as u16,
+                ..h
+            })
+            .collect();
         let mut flagged = std::mem::take(&mut st.rapid_hits);
         flagged.append(&mut st.rapid_grazes);
         flagged.sort_unstable();

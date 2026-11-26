@@ -118,6 +118,16 @@ fn line_vs_segment(
 }
 
 impl ToolSolid {
+    /// Its normal bite (mm3 per mm of travel): buried to its centre, a ball's half disc, a
+    /// flat's square of its radius by its width.
+    pub fn normal_bite(&self) -> f64 {
+        if self.ball {
+            0.5 * std::f64::consts::PI * self.radius * self.radius
+        } else {
+            2.0 * self.radius * self.radius
+        }
+    }
+
     /// Where the line `o + s e` passes through the tool at tip `tip`, direction `dir` (unit).
     pub fn along(
         &self,
@@ -481,6 +491,29 @@ pub struct Replay {
     /// Per operation (its tag, as [`crate::sim::Segment::op`]): the biggest bite, stock taken
     /// per mm of travel (mm3/mm), and the move index where.
     pub worst_bite: Vec<(u16, f64, usize)>,
+    /// Per operation, the feed moves that take more than [`HEAVY`] times their tool's normal
+    /// bite ([`ToolSolid::normal_bite`]).
+    pub heavy: Vec<Heavy>,
+}
+
+/// A feed move taking more than this many times its tool's normal bite is overloaded: said
+/// (Mar's impeller-6, its roughing stopped where its tool reaches: the ball finish after it
+/// took up to 5.7 times its bite).
+pub const HEAVY: f64 = 2.0;
+
+/// An operation's overloaded moves (see [`Replay::heavy`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Heavy {
+    pub program: u16,
+    /// Operation id + 1, as [`crate::sim::Segment::op`].
+    pub op: u16,
+    pub tool: u32,
+    /// Feed moves over [`HEAVY`] times the normal bite.
+    pub moves: usize,
+    /// The most, as a multiple of the normal bite, and its move.
+    pub worst: f64,
+    pub worst_move: usize,
+    pub first_move: usize,
 }
 
 /// The tool's tip and direction a fraction `f` along a move from `from`.
@@ -588,6 +621,7 @@ pub fn replay(
             continue;
         }
         let _ = d;
+        let mut most = 0.0f64;
         for i in 1..=n {
             let (tip, dir) = at(i as f64 / n as f64);
             let moved = last.map_or(step, |q: [f64; 3]| {
@@ -595,10 +629,37 @@ pub fn replay(
             });
             last = Some(tip);
             let bite = dx.subtract(&t, tip, dir) / moved.max(0.05);
+            most = most.max(bite);
             match out.worst_bite.iter_mut().find(|w| w.0 == seg.op) {
                 Some(w) if bite > w.1 => *w = (seg.op, bite, seg.move_index),
                 Some(_) => {}
                 None => out.worst_bite.push((seg.op, bite, seg.move_index)),
+            }
+        }
+        // (more than HEAVY times its tool's normal bite: counted, with the worst and the first)
+        let ratio = most / t.normal_bite();
+        if ratio > HEAVY {
+            match out
+                .heavy
+                .iter_mut()
+                .find(|h| h.program == seg.program && h.op == seg.op)
+            {
+                Some(h) => {
+                    h.moves += 1;
+                    if ratio > h.worst {
+                        h.worst = ratio;
+                        h.worst_move = seg.move_index;
+                    }
+                }
+                None => out.heavy.push(Heavy {
+                    program: seg.program,
+                    op: seg.op,
+                    tool: seg.tool.unwrap_or(0),
+                    moves: 1,
+                    worst: ratio,
+                    worst_move: seg.move_index,
+                    first_move: seg.move_index,
+                }),
             }
         }
     }

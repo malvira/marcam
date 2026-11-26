@@ -713,6 +713,7 @@ pub mod api {
                 "cells_cut": st.cells_cut,
                 "rapid_hits": st.rapid_hits.len(),
                 "rapid_grazes": st.rapid_grazes.len(),
+                "heavy": st.heavy,
                 "max_left": dev.max_left,
                 "mean_left": dev.mean_left,
                 "max_gouge": dev.max_gouge,

@@ -2311,6 +2311,62 @@ try {
       offeredW && wallR.xa > 200 && wallR.plunges >= 8 && wallR.tabs.length && wallR.tabs.every((x) => /OK/.test(x)) && /0 issues/.test(wallR.verifier) && (!wallR.gouge || /deepest 0[.]0[0-1][0-9]* mm/.test(wallR.gouge)) && !wallR.error, JSON.stringify({ offeredW, wallR }));
     await clean("rotary wall finishing");
   }
+  // ---------------------------------------------------------------- an overloaded operation
+  // (Mar's impeller-6: its roughing stopped where its tool reaches, the ball finish after it
+  // took up to 5.7 times its bite, and nothing said so) the finned hub on the 4th axis with a
+  // ball finish straight into the bar, its stock simulated: the finish said to be overloaded
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; return true; })()");
+    await click("#menuFile");
+    await click("#menuFile button, #menuFile [role=menuitem], #menuFile li, #menuFile a", "^New");
+    await settled();
+    {
+      const doc = await S("DOM.getDocument");
+      const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#importStlFile" });
+      await S("DOM.setFileInputFiles", { files: [join(root, "tests", "fixtures", "finned_hub.stl")], nodeId });
+    }
+    await settled();
+    await click("#tree .tree-setup.active [data-act=setup]");
+    await settled();
+    if (await where("#treeDetails [data-setkind=rotary]")) {
+      await click("#treeDetails [data-setkind=rotary]");
+      await settled();
+    }
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    if (await where("button", "^Fit to part$")) {
+      await click("button", "^Fit to part$");
+      await settled();
+    }
+    // (only a finish: the starter roughing removed, if the import added one)
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'rotary_finish'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    const libH = await waitFor(() => where("dialog[open] .tp-row", "Ball nose 3\.175 x 22"), "the library", 15000).catch(() => null);
+    if (libH) await click("dialog[open] .tp-row", "Ball nose 3\.175 x 22");
+    await waitFor(() => read("JSON.parse(document.getElementById('job').value).setups[0].operations.some((o) => o.type === 'rotary_finish')"), "rotary finish added", 60000);
+    for (const id of await read("JSON.stringify(JSON.parse(document.getElementById('job').value).setups[0].operations.filter((o) => o.type !== 'rotary_finish').map((o) => o.id))").then(JSON.parse)) {
+      await click(`#tree .tree-op[data-op=${id}] [data-act=delete]`);
+      await settled();
+    }
+    await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
+    // its stock simulated, as a person turns it on (the view's Simulated stock), at Coarse
+    await read("(() => { const s = document.getElementById('simRes'); s.value = 'coarse'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    const stockOn = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed') === 'true'");
+    if (!stockOn) {
+      const at = await read("JSON.stringify((() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })())").then(JSON.parse);
+      await S("Input.dispatchMouseEvent", { type: "mousePressed", x: at[0], y: at[1], button: "left", clickCount: 1 });
+      await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: at[0], y: at[1], button: "left", clickCount: 1 });
+    }
+    const heavy = await waitFor(() => read(`(() => { const vis = ${VISIBLE}; const e = document.getElementById('heavyBites'); return e && vis(e) ? e.textContent : ''; })()`), "the overload warning", 300000 * SLACK).catch(() => "");
+    await shot("overloaded");
+    check("a ball finish straight into the bar, its stock simulated: said to be overloaded (more than 2x its tool's normal bite, with how many moves and the worst), on the screen",
+      /Overloaded: .*more than 2.*T[0-9]+.*normal bite on [0-9,]+ move.*worst [0-9.]+.*rest roughing/.test(heavy), heavy);
+    await clean("an overloaded operation");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")

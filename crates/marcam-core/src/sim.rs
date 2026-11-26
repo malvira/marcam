@@ -441,6 +441,9 @@ pub struct SimStats {
     /// Rapid moves that would have taken off a trace of material only (under
     /// [`RAPID_DEPTH`]): said as a warning, to look at.
     pub rapid_grazes: Vec<usize>,
+    /// Operations whose feed moves take more than [`crate::dexel::HEAVY`] times their tool's
+    /// normal bite, on the 3D stock (rotary jobs).
+    pub heavy: Vec<crate::dexel::Heavy>,
 }
 
 /// One straight tool move in a job, in order: what playback steps through.
