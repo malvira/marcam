@@ -72,7 +72,7 @@ assert.ok(lim.limits.some((i) => i.message.includes("5209 deg/min") && i.message
 console.log(`profiles: ${reg.machines.length} machines, ${reg.libraries[0].tools.length} starter tools, limits ${lim.limits.length}`);
 // operation registry and 0.2 projects
 const types = cam.opTypes();
-assert.deepEqual(types.map((t) => t.kind).sort(), ["bore", "chamfer", "contour", "custom", "drill", "engrave", "face", "flank_chamfer", "helical_knurl", "parting", "pocket", "raster3d", "rotary_finish", "rotary_flowline", "rotary_parallel", "rotary_rough", "rotary_turning", "rotary_wall", "rough3d", "thread_mill", "vcarve", "waterline"]);
+assert.deepEqual(types.map((t) => t.kind).sort(), ["bore", "chamfer", "contour", "custom", "drill", "engrave", "face", "flank_chamfer", "helical_knurl", "parting", "pocket", "raster3d", "rotary_finish", "rotary_flowline", "rotary_deburr", "rotary_parallel", "rotary_pocket", "rotary_rough", "rotary_turning", "rotary_wall", "rough3d", "thread_mill", "vcarve", "waterline"]);
 const chk = cam.checkProject(JSON.parse(readFileSync(join(root, "examples", "knob", "knob.job.json"), "utf8")));
 assert.equal(chk.upgraded, true);
 assert.deepEqual(chk.problems, []);

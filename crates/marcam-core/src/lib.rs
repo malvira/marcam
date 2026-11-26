@@ -125,6 +125,7 @@ fn op_name(op: &Operation) -> &'static str {
         Operation::RotaryFlowline(_) => "rotary_flowline",
         Operation::RotaryWall(_) => "rotary_wall",
         Operation::RotaryPocket(_) => "rotary_pocket",
+        Operation::RotaryDeburr(_) => "rotary_deburr",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
@@ -1574,6 +1575,10 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             (Operation::HelicalKnurl(_) | Operation::FlankChamfer(_), _) => {
                 return Err(wrong("vbit"))
             }
+            (Operation::RotaryDeburr(_), ToolShape::Vbit { .. }) => {
+                Some(cutter_for(number, tool.shape)?)
+            }
+            (Operation::RotaryDeburr(_), _) => return Err(wrong("vbit")),
             (Operation::Parting(_), ToolShape::Flat { .. } | ToolShape::Vbit { .. }) => None,
             (Operation::Parting(_), _) => return Err(wrong("flat or vbit")),
             (
@@ -1847,6 +1852,66 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 }
                 .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
                 check_flute(tool, job.stock.radius, r_min)?;
+            }
+            (Operation::RotaryDeburr(o), _) => {
+                // the shank and the holder over the tip, dropped on the part as flat cylinders,
+                // and the stock as the operations before left it (a radial map), under each:
+                // clear of both by more than a near miss
+                let body = collision::ToolBody::of(tool);
+                let (x0, x1) = (
+                    o.x_range[0].min(o.x_range[1]),
+                    o.x_range[0].max(o.x_range[1]),
+                );
+                let reach = body.holder_radius.max(body.shank_radius) + 1.0;
+                let left = bar_after(job, &ctx.prior, &b.moves, x0 - reach, x1 + reach);
+                let mesh = ctx.surface(&prog.name)?;
+                let dc = DropCutter::new(mesh, cutter.expect("set above"));
+                let shank = DropCutter::new(
+                    mesh,
+                    Cutter::Flat {
+                        radius: body.shank_radius,
+                    },
+                );
+                let holder = DropCutter::new(
+                    mesh,
+                    Cutter::Flat {
+                        radius: body.holder_radius,
+                    },
+                );
+                let stock_under = |x: f64, a: f64, rad: f64, at_r: f64| -> f64 {
+                    let g = left.grid;
+                    let half = (rad / at_r.max(1.0)).min(std::f64::consts::PI).to_degrees();
+                    let mut top = 0.0f64;
+                    for i in 0..g.nx {
+                        if (g.x(i) - x).abs() > rad {
+                            continue;
+                        }
+                        for j in 0..g.na {
+                            let aj = j as f64 * 360.0 / g.na as f64;
+                            let d = (aj - a).rem_euclid(360.0);
+                            if d.min(360.0 - d) <= half {
+                                top = top.max(left.r[i * g.na + j] as f64);
+                            }
+                        }
+                    }
+                    top
+                };
+                let m = 2.0 * collision::NEAR_MISS;
+                let clear = |x: f64, a: f64, tip: f64| {
+                    let (s_at, h_at) = (tip + body.flute_length, tip + body.stickout);
+                    shank
+                        .radius_at(x, a, 0.0)
+                        .max(stock_under(x, a, body.shank_radius, s_at))
+                        <= s_at - m
+                        && holder.radius_at(x, a, 0.0).max(stock_under(
+                            x,
+                            a,
+                            body.holder_radius,
+                            h_at,
+                        )) <= h_at - m
+                };
+                strategy::rotary_deburr(&mut b, mesh, &dc, &clear, safe_r, o)
+                    .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;
             }
             (Operation::RotaryPocket(o), _) => {
                 let mesh = ctx.surface(&prog.name)?;

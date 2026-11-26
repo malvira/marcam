@@ -433,6 +433,27 @@ fn types() -> Vec<OperationType> {
             shapes_part: false,
         },
         OperationType {
+            kind: "rotary_deburr",
+            title: "Rotary deburr (4-axis simultaneous)",
+            description: "Chamfer the part's sharp edges that a tool over the axis reaches (a blade's or a fin's top edges, a groove's lips) with a V-bit following each edge, X and A together, its tip a depth below the edge: a 90° bit makes a 45° chamfer that deep each way.",
+            group: "feature",
+            params: vec![
+                tool(),
+                p("x_range", "vec2", "mm", "Axial extent of the edges [front, back]."),
+                p("depth", "number", "mm", "How far below the edge the tip goes: the chamfer down the wall (across the top, times the tan of the V's half angle).").opt(json!(0.3)).min(0.01),
+                p("min_angle", "number", "deg", "An edge: where the faces turn by this much or more.").opt(json!(45.0)).min(5.0).max(175.0).label("Edge angle"),
+                p("sample_mm", "number", "mm", "Point spacing along the edges.").opt(json!(0.2)).min(0.02),
+                feed(),
+                plunge(),
+                ramp(),
+                smoothing(),
+            ],
+            tool_shapes: &["vbit"],
+            geometry: &["mesh", "axial_range"],
+            machine_needs: &["rotary_a"],
+            shapes_part: true,
+        },
+        OperationType {
             kind: "helical_knurl",
             title: "Knurl (diamond or straight)",
             description: "V grooves over a conical body: diamond, families of helical grooves crossing (two opposite families make diamonds); or straight, grooves along the axis.",
@@ -990,6 +1011,7 @@ pub fn kind_of(op: &Operation) -> &'static str {
         Operation::RotaryFlowline(_) => "rotary_flowline",
         Operation::RotaryWall(_) => "rotary_wall",
         Operation::RotaryPocket(_) => "rotary_pocket",
+        Operation::RotaryDeburr(_) => "rotary_deburr",
         Operation::RotaryRough(_) => "rotary_rough",
         Operation::Face(_) => "face",
         Operation::Pocket(_) => "pocket",
@@ -1280,6 +1302,11 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
             v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
             v.insert("plunge_feed".into(), json!(plunge));
             v.insert("lead_in".into(), json!(0.3));
+        }
+        "rotary_deburr" => {
+            v.insert("x_range".into(), json!(x_range));
+            v.insert("feed".into(), json!(nice(0.6 * feed, 5.0)));
+            v.insert("plunge_feed".into(), json!(plunge));
         }
         "rotary_pocket" => {
             v.insert("x_range".into(), json!(x_range));

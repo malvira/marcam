@@ -698,6 +698,9 @@ pub enum Operation {
     /// Rotary pocket roughing: a pocket round the bar cleared level by level in radius,
     /// adaptively (a steady load), A and X together.
     RotaryPocket(RotaryPocket),
+    /// Rotary deburring: the part's sharp edges chamfered with a V-bit along them, A and X
+    /// together.
+    RotaryDeburr(RotaryDeburr),
     RotaryRough(RotaryRough),
     Face(Face),
     Pocket(Pocket),
@@ -1402,6 +1405,7 @@ impl Operation {
             Operation::RotaryFlowline(o) => Some(o.ramp_angle),
             Operation::RotaryWall(o) => Some(o.ramp_angle),
             Operation::RotaryPocket(o) => Some(o.ramp_angle),
+            Operation::RotaryDeburr(o) => Some(o.ramp_angle),
             Operation::RotaryRough(o) => Some(o.ramp_angle),
             Operation::Bore(o) => Some(o.ramp_angle),
             Operation::Parting(o) => Some(o.ramp_angle),
@@ -1420,6 +1424,7 @@ impl Operation {
             Operation::RotaryFlowline(o) => (o.smoothing, true),
             Operation::RotaryWall(o) => (o.smoothing, true),
             Operation::RotaryPocket(o) => (o.smoothing, false),
+            Operation::RotaryDeburr(o) => (o.smoothing, true),
             Operation::RotaryRough(o) => (o.smoothing, false),
             Operation::Raster3d(o) => (o.smoothing, true),
             Operation::Rough3d(o) => (o.smoothing, false),
@@ -1441,6 +1446,7 @@ impl Operation {
             Operation::RotaryFlowline(o) => o.tool,
             Operation::RotaryWall(o) => o.tool,
             Operation::RotaryPocket(o) => o.tool,
+            Operation::RotaryDeburr(o) => o.tool,
             Operation::RotaryRough(o) => o.tool,
             Operation::Face(o) => o.tool,
             Operation::Pocket(o) => o.tool,
@@ -1829,6 +1835,45 @@ pub struct RotaryPocket {
     pub ramp_angle: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoothing: Option<f64>,
+}
+
+/// Rotary deburring (4-axis simultaneous): the part's sharp convex edges within `x_range` that
+/// a tool over the axis reaches (one face looking out from it: a blade's or a fin's top edges,
+/// a groove's lips), each followed by a V-bit over the axis through it, its tip `depth` below
+/// the edge: a chamfer `depth` down the wall and `depth` times the tan of the V's half angle
+/// across the top (a 90° bit: 45°, `depth` each way).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RotaryDeburr {
+    pub tool: u32,
+    /// Axial extent `[start, end]` of the edges.
+    pub x_range: [f64; 2],
+    /// How far below the edge the tip goes (mm).
+    #[serde(default = "default_deburr_depth")]
+    pub depth: f64,
+    /// An edge: where the faces turn by this much or more (degrees).
+    #[serde(default = "default_deburr_angle")]
+    pub min_angle: f64,
+    /// Point spacing along the edges (mm).
+    #[serde(default = "default_deburr_sample")]
+    pub sample_mm: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+    #[serde(default = "default_ramp_angle")]
+    pub ramp_angle: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
+}
+
+fn default_deburr_depth() -> f64 {
+    0.3
+}
+
+fn default_deburr_angle() -> f64 {
+    45.0
+}
+
+fn default_deburr_sample() -> f64 {
+    0.2
 }
 
 fn full_turn() -> [f64; 2] {
