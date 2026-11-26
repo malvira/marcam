@@ -14,6 +14,9 @@ use std::collections::BTreeSet;
 /// Grid points a tile is along each axis.
 pub const TILE: usize = 24;
 
+/// Snapshots of the stock kept along a job (a backwards scrub plays on from the nearest).
+pub const SNAPSHOTS: usize = 8;
+
 pub struct SolidPlayback {
     radius: f64,
     length: f64,
@@ -24,6 +27,8 @@ pub struct SolidPlayback {
     pos: usize,
     /// Tiles cut since they were last made.
     dirty: BTreeSet<[usize; 3]>,
+    /// The stock at some segments, played to: (segment, stock).
+    snapshots: Vec<(usize, Dexel)>,
 }
 
 /// One tile's surface: its place in the grid of tiles, and its triangles.
@@ -52,7 +57,8 @@ impl SolidPlayback {
                 }
             }
         }
-        let dx = Dexel::bar(job.stock.radius, job.stock.length, h);
+        let mut dx = Dexel::bar(job.stock.radius, job.stock.length, h);
+        dx.track_ops();
         let mut p = SolidPlayback {
             radius: job.stock.radius,
             length: job.stock.length,
@@ -62,6 +68,7 @@ impl SolidPlayback {
             tools,
             pos: 0,
             dirty: BTreeSet::new(),
+            snapshots: Vec::new(),
         };
         p.all_dirty();
         p
@@ -91,21 +98,46 @@ impl SolidPlayback {
         }
     }
 
-    /// Played to `n` segments (back: from the bar again); the tiles cut on the way are
-    /// marked to be made again.
+    /// Played to `n` segments; the tiles cut on the way are marked to be made again. Back:
+    /// from the nearest snapshot before `n` (one is kept each [`SNAPSHOTS`]th of the job as
+    /// it is played forward), else from the bar.
     pub fn seek(&mut self, n: usize) {
         let n = n.min(self.segments.len());
         if n < self.pos {
-            self.dx = Dexel::bar(self.radius, self.length, self.h);
-            self.pos = 0;
+            match self.snapshots.iter().rev().find(|(p, _)| *p <= n) {
+                Some((p, dx)) => {
+                    self.dx = dx.clone();
+                    self.pos = *p;
+                }
+                None => {
+                    self.dx = Dexel::bar(self.radius, self.length, self.h);
+                    self.dx.track_ops();
+                    self.pos = 0;
+                }
+            }
             self.all_dirty();
         }
-        if n == self.pos {
-            return;
+        let every = self.segments.len().div_ceil(SNAPSHOTS).max(1);
+        while self.pos < n {
+            let next = (self.pos / every + 1) * every;
+            let stop = n.min(next);
+            self.play(self.pos, stop);
+            self.pos = stop;
+            if stop == next
+                && stop < self.segments.len()
+                && !self.snapshots.iter().any(|(p, _)| *p == stop)
+            {
+                self.snapshots.push((stop, self.dx.clone()));
+                self.snapshots.sort_by_key(|(p, _)| *p);
+            }
         }
+    }
+
+    /// Segments `from..to` taken out of the stock, the tiles they went through marked.
+    fn play(&mut self, from: usize, to: usize) {
         let tools = &self.tools;
         let tool = |t: u32| tools.iter().find(|(n, _)| *n == t).map(|(_, s)| *s);
-        let segs = &self.segments[self.pos..n];
+        let segs = &self.segments[from..to];
         dexel::replay(&mut self.dx, segs, &tool, self.h.max(0.2), 0.0);
         // where the tool went: the tiles its sweeps touch
         let (lo, h, ng) = (self.dx.lo, self.h, self.dx.n);
@@ -129,7 +161,6 @@ impl SolidPlayback {
                 }
             }
         }
-        self.pos = n;
     }
 
     /// The tiles cut since they were last made, made again (and no longer dirty); empty ones
@@ -166,6 +197,13 @@ mod tests {
         )
         .unwrap();
         let mut b = Builder::new();
+        b.moves.push(crate::Move::Operation {
+            id: 0,
+            kind: "groove".into(),
+            arcs: None,
+            cycle: None,
+            verbatim: None,
+        });
         b.tool_change(1, 12000);
         b.rapid_r(15.0);
         b.rapid(Some(-30.0), None, Some(0.0));
@@ -216,6 +254,18 @@ mod tests {
         let end = once.segments.len();
         once.seek(end);
         let whole = tris(&mut once);
+        // (each vertex the operation that last cut there: the groove's by the one operation,
+        // the bar's own outside by none)
+        let made = once.take_dirty();
+        let ops: Vec<u16> = made
+            .iter()
+            .flat_map(|t| t.mesh.ops.iter().copied())
+            .collect();
+        assert!(
+            ops.iter().any(|&o| o > 0) && ops.contains(&0),
+            "{} vertices",
+            ops.len()
+        );
         let mut steps = SolidPlayback::new(&job, std::slice::from_ref(&tp), 0.3, &solid);
         assert!(!steps.take_dirty().is_empty(), "at first every tile");
         for k in 1..=end {
@@ -224,8 +274,12 @@ mod tests {
             assert!(d.len() < 60, "step {k}: {} tiles made again", d.len());
         }
         assert_eq!(tris(&mut steps), whole);
-        // back to the start and on again
+        // back to the start and on again; back half way (from a snapshot) and on again
         steps.seek(1);
+        steps.seek(end);
+        assert_eq!(tris(&mut steps), whole);
+        assert!(!steps.snapshots.is_empty());
+        steps.seek(end / 2);
         steps.seek(end);
         assert_eq!(tris(&mut steps), whole);
     }

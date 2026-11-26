@@ -27,6 +27,10 @@ pub struct Dexel {
     rays: [Vec<Vec<[f32; 2]>>; 3],
     /// The bar's radius: nothing of it lies further from the axis.
     radius: f64,
+    /// (A playback's colours, when kept: see [`Dexel::track_ops`]) each grid point's last
+    /// cutting operation (its tag, 0: never cut), and the one cutting now.
+    cut_op: Option<Vec<u16>>,
+    pub op: u16,
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -211,6 +215,8 @@ impl Dexel {
             n,
             rays: [Vec::new(), Vec::new(), Vec::new()],
             radius,
+            cut_op: None,
+            op: 0,
         };
         let inside_yz = |y: f64, z: f64| y * y + z * z <= radius * radius;
         for d in 0..3 {
@@ -309,12 +315,19 @@ impl Dexel {
         })
     }
 
+    /// Keep which operation last cut at each grid point (the playback's colours by operation);
+    /// [`SurfaceMesh::ops`] then says it at each vertex.
+    pub fn track_ops(&mut self) {
+        self.cut_op = Some(vec![0; self.n[0] * self.n[1] * self.n[2]]);
+    }
+
     /// Takes the tool at a pose out of the stock; returns the volume taken (mm3, the mean of
     /// the three families' estimates).
     pub fn subtract(&mut self, tool: &ToolSolid, tip: [f64; 3], dir: [f64; 3]) -> f64 {
         let mut cuts: Vec<(usize, usize, f64, f64)> = Vec::new();
         self.crossing(tool, tip, dir, |d, k, s0, s1| cuts.push((d, k, s0, s1)));
         let mut taken = 0.0;
+        let (n, lo, h, op) = (self.n, self.lo, self.h, self.op);
         for (d, k, s0, s1) in cuts {
             let ray = &mut self.rays[d][k];
             if ray.is_empty() {
@@ -328,6 +341,21 @@ impl Dexel {
                     continue;
                 }
                 taken += (b.min(s1) - a.max(s0)) as f64;
+                // (the grid points along the ray it took: cut by this operation)
+                if let Some(ops) = self.cut_op.as_mut() {
+                    let (ab, bb) = ((d + 1) % 3, (d + 2) % 3);
+                    let mut g = [0usize; 3];
+                    g[ab] = k / n[bb];
+                    g[bb] = k % n[bb];
+                    let i0 = (((a.max(s0) as f64) - lo[d]) / h).ceil().max(0.0) as usize;
+                    let i1 = (((b.min(s1) as f64) - lo[d]) / h).floor();
+                    if i1 >= 0.0 {
+                        for i in i0..=(i1 as usize).min(n[d] - 1) {
+                            g[d] = i;
+                            ops[(g[0] * n[1] + g[1]) * n[2] + g[2]] = op;
+                        }
+                    }
+                }
                 if a < s0 {
                     out.push([a, s0]);
                 }
@@ -619,6 +647,26 @@ impl Dexel {
             };
             let v = (out.positions.len() / 3) as u32;
             out.positions.extend(p.map(|x| x as f32));
+            // (its colour: the latest operation that cut a corner of its cell)
+            if let Some(ops) = self.cut_op.as_ref() {
+                let mut o = 0u16;
+                for (ua, ub, uc) in [
+                    (0, 0, 0),
+                    (1, 0, 0),
+                    (0, 1, 0),
+                    (1, 1, 0),
+                    (0, 0, 1),
+                    (1, 0, 1),
+                    (0, 1, 1),
+                    (1, 1, 1),
+                ] {
+                    let g = [c[0] + ua, c[1] + ub, c[2] + uc];
+                    if g[0] < n[0] && g[1] < n[1] && g[2] < n[2] {
+                        o = o.max(ops[(g[0] * n[1] + g[1]) * n[2] + g[2]]);
+                    }
+                }
+                out.ops.push(o);
+            }
             vert.insert(c, v);
             v
         };
@@ -689,6 +737,8 @@ pub const GRAZE: f64 = 0.01;
 pub struct SurfaceMesh {
     pub positions: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Each vertex's last cutting operation (tag; 0: uncut), when the stock keeps them.
+    pub ops: Vec<u16>,
 }
 
 /// What a replay of moves through the stock found.
@@ -832,6 +882,7 @@ pub fn replay(
             continue;
         }
         let _ = d;
+        dx.op = seg.op;
         let mut most = 0.0f64;
         for i in 1..=n {
             let (tip, dir) = at(i as f64 / n as f64);

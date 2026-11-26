@@ -1020,7 +1020,7 @@ pub mod api {
                     .iter()
                     .flat_map(|i| i.to_le_bytes())
                     .collect();
-                json!({"key": t.key, "positions": f32s(&t.mesh.positions), "indices": b64(&idx)})
+                json!({"key": t.key, "positions": f32s(&t.mesh.positions), "indices": b64(&idx), "ops": u16s(&t.mesh.ops)})
             })
             .collect()
     }

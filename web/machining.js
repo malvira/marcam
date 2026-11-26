@@ -793,7 +793,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** Apply a sim_seek result: rows changed -> update vertices and colours in place. */
   /** Tiles of the stock in 3D into `grp` (made or made again; an empty one gone). */
   function solidTiles(THREE, grp, tiles) {
-    const mat = m.tileMat || (m.tileMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(...(uncut() || [0.55, 0.6, 0.68])), roughness: 0.55, metalness: 0.15 }));
+    // (each vertex in the colour of the operation that last cut there, as the radial stock was)
+    const mat = m.tileMat || (m.tileMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.15 }));
     for (const t of tiles || []) {
       const key = t.key.join(",");
       const old = m.tiles.get(key);
@@ -808,10 +809,15 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       const idx = new Uint32Array(ib.buffer, ib.byteOffset, ib.byteLength / 4);
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      const ops = t.ops ? u16(t.ops) : null;
+      const col = new Float32Array(pos.length);
+      for (let k = 0; k < pos.length / 3; k++) col.set(colorOf(ops ? ops[k] : 0), 3 * k);
+      g.setAttribute("color", new THREE.BufferAttribute(col, 3));
       g.setIndex(new THREE.BufferAttribute(idx, 1));
       g.computeVertexNormals();
       const mesh = new THREE.Mesh(g, mat);
       mesh.userData.tile = key;
+      mesh.userData.ops = ops;
       grp.add(mesh);
       m.tiles.set(key, mesh);
     }
@@ -1424,7 +1430,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     } catch {}
     // recolour every vertex from the tag mirror
     if (m.solid) {
-      // (the stock in 3D: one colour)
+      for (const t of m.tiles?.values() || []) {
+        const col = t.geometry.attributes.color.array;
+        const ops = t.userData.ops;
+        for (let k = 0; k < col.length / 3; k++) col.set(colorOf(ops ? ops[k] : 0), 3 * k);
+        t.geometry.attributes.color.needsUpdate = true;
+      }
     } else if (m.stockMesh && m.xyz) {
       const col = m.stockMesh.geometry.attributes.color.array;
       for (let k = 0; k < m.dop.length; k++) col.set(colorOf(m.dop[k]), 3 * k);
