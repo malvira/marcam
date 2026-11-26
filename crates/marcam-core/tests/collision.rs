@@ -442,7 +442,8 @@ fn a_knurl_on_a_bar_not_turned_down_comes_in_from_the_bar() {
     let hits: usize = sim.programs.iter().map(|p| p.1.rapid_hits.len()).sum();
     assert_eq!(hits, 0, "rapids through the bar");
     assert!(
-        tps[0].notes
+        tps[0]
+            .notes
             .iter()
             .any(|w| w.contains("above the knurl's body")),
         "{:?}",
@@ -452,7 +453,8 @@ fn a_knurl_on_a_bar_not_turned_down_comes_in_from_the_bar() {
     let job = load("examples/knob/knob.job.json");
     let tps = plan_with_mesh(&job, None).unwrap();
     assert!(
-        !tps[1].notes
+        !tps[1]
+            .notes
             .iter()
             .any(|w| w.contains("above the knurl's body")),
         "{:?}",
