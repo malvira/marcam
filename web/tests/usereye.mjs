@@ -214,6 +214,10 @@ const viewRect = () => read("(() => { const r = document.getElementById('view3d'
 const clean = async (what) => {
   const s = await read(`(() => { const vis = ${VISIBLE}; return { dialog: [...document.querySelectorAll('dialog')].some((d) => d.open && !d.classList.contains('embedded') && vis(d)), generate: [...document.querySelectorAll('button')].some((b) => /^Generate$/.test(b.textContent.trim()) && vis(b)) || (vis(document.getElementById('emptyState')) && /\\bGenerate\\b/.test(document.getElementById('emptyState').textContent)), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent.trim() : '' }; })()`);
   check(`${what}: no dialog, no Generate card, no red error`, !s.dialog && !s.generate && !s.error, JSON.stringify(s));
+  // (the view's Simulated stock turned off again if a case turned it on: it is remembered, and
+  // a project loaded with it on is simulated by itself, its stock then standing in for the
+  // part and the paths the cases after look at)
+  await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); if (b && b.getAttribute('aria-pressed') === 'true') b.click(); return true; })()");
 };
 /** The visible 3D views (canvases of the view's size), and whether the one at its centre is
  *  what is under the pointer there. */
@@ -2394,8 +2398,13 @@ try {
     const unfolded = await read("!!document.getElementById('heavyBites')?.open");
     const entry = await read("(() => { const a = document.querySelector('#heavyBites a.jump'); return a ? JSON.stringify({ prog: +a.dataset.prog, move: +a.dataset.move }) : ''; })()");
     await click("#heavyBites a.jump");
-    const at = await waitFor(() => read("(() => { const m = window.__marcam.machining.state; if (!m.session || !m.session.moves || m.busy || !m.pos) return ''; const v = window.__marcam.state.three; const p = v.groups.toolModel.getWorldPosition(new v.THREE.Vector3()); return JSON.stringify({ pos: m.pos, move: m.session.moves[m.pos - 1], expanded: m.expanded, toTarget: p.distanceTo(v.controls.target) }); })()"), "the playback at the entry", 120000 * SLACK).then(JSON.parse).catch(() => null);
     const want = entry ? JSON.parse(entry) : null;
+    // (the playback opened first, at the place it was: on until it is at the entry's move, or
+    // the time is up)
+    const atNow = () => read("(() => { const m = window.__marcam.machining.state; if (!m.session || !m.session.moves || m.busy || !m.pos) return ''; const v = window.__marcam.state.three; const p = v.groups.toolModel.getWorldPosition(new v.THREE.Vector3()); return JSON.stringify({ pos: m.pos, move: m.session.moves[m.pos - 1], expanded: m.expanded, toTarget: p.distanceTo(v.controls.target) }); })()");
+    await waitFor(async () => { const a = await atNow(); return a && want && JSON.parse(a).move === want.move; }, "the playback at the entry", 120000 * SLACK).catch(() => null);
+    await sleep(500);
+    const at = await atNow().then((a) => (a ? JSON.parse(a) : null));
     // (the fold stays as left through an update of the results)
     await read("(() => { const i = window.__marcam.state.tab ?? 0; document.querySelectorAll('#tabs button')[i]?.click(); return true; })()");
     await sleep(500);
@@ -2417,7 +2426,9 @@ try {
     await click("#loadExample");
     await settled();
     const knurlOp = await read("JSON.parse(document.getElementById('job').value).setups[0].operations.find((o) => o.type === 'helical_knurl')?.id || ''");
+    // (on when its form shows: a click is not taken as done)
     await click(`#tree .tree-op[data-op=${knurlOp}] .tree-label`);
+    await waitFor(() => read("!!document.querySelector('#opForm [name=pattern]')"), "the knurl's form", 30000).catch(() => {});
     await settled();
     const offered = await read("[...(document.querySelector('#opForm [name=pattern]')?.options || [])].map((o) => o.value).join(',')");
     // the knurl's G1 moves that turn A (helices) of all its G1 moves
