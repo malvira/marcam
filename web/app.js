@@ -1224,7 +1224,14 @@ async function simulateLocked(opts = {}) {
     if (epoch !== state.epoch || forJob !== state.job) return;
     showBackend(backend);
     result.stocks.forEach((st) => (st.hidden = hiddenPlanned().length));
+    // (a GPU simulation of the same plan, another grid: its overloads are the plan's, not the
+    // grid's; kept from the one before until its own check comes, so the results do not lose
+    // their entries meanwhile, under a person's click)
+    const before = state.sim;
+    if (backend.startsWith("GPU") && before && state.simJob === forJob)
+      result.stocks.forEach((st, k) => before.stocks[k]?.heavy && !st.heavy && (st.heavy = before.stocks[k].heavy));
     state.sim = result;
+    state.simJob = forJob;
     state.simKey = simKey;
     selectTab(state.tab);
     const s = result.stocks[state.tab];
@@ -1408,7 +1415,9 @@ function selectTab(i) {
   // (the banner only where the results are marked out of date: live, an edit's plan under
   // way is said by the tree's badges; a background simulation landing meanwhile drew it)
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
-  $("summary").innerHTML = `
+  // (the same results drawn again: the page's entries left as they are, not replaced under a
+  // click on one)
+  const summaryHtml = `
     ${state.stale && document.body.classList.contains("stale") ? '<div class="stale-banner" id="staleBanner">Out of date: the project changed since these results were made. <button type="button" id="staleRegen">Generate again</button></div>' : ""}
     <div><strong>${esc(p.title)}</strong> &middot; <span id="lineCount">${p.lines.toLocaleString("en")}</span> lines
       &middot; ${state.result.machine}${p.tool ? ` &middot; T${p.tool[0]} ${esc(p.tool[1])}` : ""}</div>
@@ -1435,6 +1444,12 @@ function selectTab(i) {
     ${sim && sim.rapid_hits && sim.rapid_moves?.length ? foldHtml(`${p.name}|rapids`, "issues bad small", "rapidHits", `${sim.rapid_hits} rapid(s) through the stock`, sim.rapid_moves.map((mv) => jumpLi(i, mv, `rapid, move ${mv + 1}`))) : ""}
     ${sim && noPart() ? `<div class="small">Simulated stock: no model in this setup to compare it with; ${sim.rapid_hits} rapid(s) through stock</div>` : ""}
     ${sim && !noPart() ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;
+  const sumEl = $("summary");
+  if (sumEl.__html !== summaryHtml || sumEl.innerHTML !== sumEl.__set) {
+    sumEl.innerHTML = summaryHtml;
+    sumEl.__html = summaryHtml;
+    sumEl.__set = sumEl.innerHTML;
+  }
   $("gcode").value = p.gcode;
   $("codeInfo").textContent = `${p.name}.nc, ${(p.gcode.length / 1024).toFixed(0)} KiB`;
   $("download").disabled = false;
