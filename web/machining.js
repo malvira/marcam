@@ -828,6 +828,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     if (res.tiles) {
       const v = state.three;
       if (m.solid && m.stockMesh && v && !v.failed) solidTiles(v.THREE, m.stockMesh, res.tiles);
+      else if (m.solid && m.session?.solid) {
+        // (no stock drawn yet, as on reopening: the tiles kept, each replacing its key, for the scene)
+        const by = new Map((m.session.solid.tiles || []).map((t) => [t.key.join(","), t]));
+        for (const t of res.tiles) by.set(t.key.join(","), t);
+        m.session.solid.tiles = [...by.values()];
+      }
       if (!m.playing) $("simScrub").value = String(m.pos);
       placeTool();
       return;
