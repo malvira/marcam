@@ -581,7 +581,7 @@ try {
   // the types offered for this (rotary) setup: the 3-axis ones need a vise setup
   const typesAll = (await addTypes()).join(",");
   const allKinds = await js("window.__marcam.state.tree.types.map(t => t.kind).join(',')");
-  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 22 && String(typesAll).split(",").length === 22, `${typesAll}`);
+  check("a rotary setup offers every operation type (3-axis ones indexed)", String(allKinds).split(",").length === 24 && String(typesAll).split(",").length === 24, `${typesAll}`);
   const filled = [];
   const took = [];
   let autoSeen = null;

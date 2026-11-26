@@ -1866,18 +1866,13 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let left = bar_after(job, &ctx.prior, &b.moves, x0 - reach, x1 + reach);
                 let mesh = ctx.surface(&prog.name)?;
                 let dc = DropCutter::new(mesh, cutter.expect("set above"));
-                let shank = DropCutter::new(
-                    mesh,
-                    Cutter::Flat {
-                        radius: body.shank_radius,
-                    },
+                // (each as the near-miss check has it: fatter by a near miss)
+                let (rs, rh) = (
+                    body.shank_radius + collision::NEAR_MISS,
+                    body.holder_radius + collision::NEAR_MISS,
                 );
-                let holder = DropCutter::new(
-                    mesh,
-                    Cutter::Flat {
-                        radius: body.holder_radius,
-                    },
-                );
+                let shank = DropCutter::new(mesh, Cutter::Flat { radius: rs });
+                let holder = DropCutter::new(mesh, Cutter::Flat { radius: rh });
                 let stock_under = |x: f64, a: f64, rad: f64, at_r: f64| -> f64 {
                     let g = left.grid;
                     let half = (rad / at_r.max(1.0)).min(std::f64::consts::PI).to_degrees();
@@ -1899,16 +1894,8 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let m = 2.0 * collision::NEAR_MISS;
                 let clear = |x: f64, a: f64, tip: f64| {
                     let (s_at, h_at) = (tip + body.flute_length, tip + body.stickout);
-                    shank
-                        .radius_at(x, a, 0.0)
-                        .max(stock_under(x, a, body.shank_radius, s_at))
-                        <= s_at - m
-                        && holder.radius_at(x, a, 0.0).max(stock_under(
-                            x,
-                            a,
-                            body.holder_radius,
-                            h_at,
-                        )) <= h_at - m
+                    shank.radius_at(x, a, 0.0).max(stock_under(x, a, rs, s_at)) <= s_at - m
+                        && holder.radius_at(x, a, 0.0).max(stock_under(x, a, rh, h_at)) <= h_at - m
                 };
                 strategy::rotary_deburr(&mut b, mesh, &dc, &clear, safe_r, o)
                     .map_err(|e| Error::Invalid(format!("program {}: {e}", prog.name)))?;

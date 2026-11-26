@@ -180,7 +180,7 @@ pub fn rotary_pocket(
         let cl = clear_level(g, &allowed, &stock, &mut open, params, None);
         report.levels += 1;
         report.floor = r;
-        report.plunges += cl.plunges;
+        let _ = cl.plunges;
         report.left += cl.left;
         // (the stock's top under the tool at a point: a way in comes down by rapid to just
         // above it, where the levels before did not reach)
@@ -192,7 +192,7 @@ pub fn rotary_pocket(
             }
             t
         };
-        emit(b, &cl, &g, r, above, &a_of, &top_under, safe_r, op);
+        report.plunges += emit(b, &cl, &g, r, above, &a_of, &top_under, safe_r, op);
         // what this level cut, in the (X, A) grid: down to it
         for (c, &cut) in cl.cut.iter().enumerate() {
             if cut {
@@ -220,8 +220,9 @@ fn emit(
     top_under: &dyn Fn(f64, f64) -> f64,
     safe_r: f64,
     op: &RotaryPocket,
-) {
+) -> usize {
     let _ = g;
+    let mut plunged = 0;
     // (in from just above the level before, or where it never reached, the stock there)
     let entry_at = |q: [f64; 2]| (top_under(q[0], q[1]).max(above) + 0.5).min(safe_r);
     let come_in = |b: &mut Builder, q: [f64; 2]| -> f64 {
@@ -238,8 +239,58 @@ fn emit(
                 if !matches!(cl.steps.get(si + 1), Some(Step::Cut(_) | Step::Link(_))) {
                     continue;
                 }
-                come_in(b, *q);
-                b.plunge(r, op.plunge_feed);
+                let e = come_in(b, *q);
+                // (no straight plunge where the cut that follows is long enough: down a ramp
+                // along it, out and back, at the ramp angle; the impeller's channels had 69
+                // plunges)
+                let path = match cl.steps.get(si + 1) {
+                    Some(Step::Cut(pts)) if pts.len() >= 2 => Some(pts),
+                    _ => None,
+                };
+                let len: f64 = path.map_or(0.0, |pts| {
+                    pts.windows(2)
+                        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+                        .sum()
+                });
+                let tan = op.ramp_angle.clamp(1.0, 45.0).to_radians().tan();
+                match path {
+                    Some(pts) if e > r + 0.05 && len * tan > 0.2 * (e - r) => {
+                        // out along the cut and back, as often as it takes
+                        let mut lp: Vec<[f64; 2]> = pts.clone();
+                        lp.extend(pts.iter().rev().skip(1).copied());
+                        let (mut z, mut k) = (e, 0usize);
+                        let mut at = lp[0];
+                        while z > r + 1e-9 {
+                            let to = lp[(k + 1) % lp.len()];
+                            let seg = (to[0] - at[0]).hypot(to[1] - at[1]);
+                            let fall = (seg * tan).min(z - r);
+                            z -= fall;
+                            b.cut(to[0], z, a_of(to[1]), op.feed * SLOT_FEED, op.plunge_feed);
+                            at = to;
+                            k = (k + 1) % lp.len();
+                            if k == 0 {
+                                at = lp[0];
+                            }
+                        }
+                        // back to the cut's start at depth
+                        let back: Vec<[f64; 2]> = if k == 0 {
+                            Vec::new()
+                        } else if k < pts.len() {
+                            pts[..k].iter().rev().copied().collect()
+                        } else {
+                            lp[k..].to_vec()
+                        };
+                        for q in back {
+                            b.cut(q[0], r, a_of(q[1]), op.feed * SLOT_FEED, op.plunge_feed);
+                        }
+                    }
+                    _ => {
+                        if matches!(st, Step::Plunge(_)) {
+                            plunged += 1;
+                        }
+                        b.plunge(r, op.plunge_feed)
+                    }
+                }
             }
             Step::Helix {
                 centre,
@@ -291,4 +342,5 @@ fn emit(
             }
         }
     }
+    plunged
 }
