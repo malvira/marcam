@@ -1393,8 +1393,12 @@ function selectTab(i) {
   $("download").disabled = false;
   const n = p.toolpath.points.length / 4;
   const sc = $("scrub");
+  // (the same program's results drawn again, as a background simulation landing does: the
+  // scrubber left where it was put, not sent back to the end)
+  const same = sc.dataset.for === `${state.result.programs.length}|${i}|${p.name}|${n}` && sc.max === String(n);
+  sc.dataset.for = `${state.result.programs.length}|${i}|${p.name}|${n}`;
   sc.max = String(n);
-  sc.value = String(n);
+  if (!same) sc.value = String(n);
   sc.disabled = n === 0;
   updateScrubLabel();
   drawSide();
