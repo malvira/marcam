@@ -244,21 +244,26 @@ pub fn solid(job: &Job, t: u32) -> Option<ToolSolid> {
             radius: diameter / 2.0,
             ball: true,
             height,
+            cone: 0.0,
         },
         ToolShape::Flat { diameter } => ToolSolid {
             radius: diameter / 2.0,
             ball: false,
             height,
+            cone: 0.0,
         },
         ToolShape::TaperedBall { diameter, .. } => ToolSolid {
             radius: diameter / 2.0,
             ball: true,
             height,
+            cone: 0.0,
         },
-        ToolShape::Vbit { diameter, .. } => ToolSolid {
+        // (its cone: a knurl's grooves V-shaped as cut)
+        ToolShape::Vbit { diameter, angle } => ToolSolid {
             radius: diameter.unwrap_or(3.175) / 2.0,
             ball: false,
             height,
+            cone: (angle / 2.0).to_radians().tan(),
         },
     })
 }

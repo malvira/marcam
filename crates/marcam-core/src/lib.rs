@@ -766,11 +766,20 @@ fn tool_solid(job: &Job, t: u32) -> Option<dexel::ToolSolid> {
             radius,
             ball: true,
             height: 40.0,
+            cone: 0.0,
+        },
+        // (a V-bit: its cone, a knurl's grooves V-shaped as cut)
+        Cutter::Cone { radius, half_angle } => dexel::ToolSolid {
+            radius,
+            ball: false,
+            height: 40.0,
+            cone: half_angle.tan(),
         },
         c => dexel::ToolSolid {
             radius: c.radius(),
             ball: false,
             height: 40.0,
+            cone: 0.0,
         },
     })
 }

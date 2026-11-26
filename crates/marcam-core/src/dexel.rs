@@ -15,6 +15,10 @@ pub struct ToolSolid {
     pub radius: f64,
     pub ball: bool,
     pub height: f64,
+    /// A V-bit: the tangent of its half angle (0: none). Its tip a point, widening at that
+    /// slope to its radius, a cylinder above (a flat's cylinder took the whole width off a
+    /// knurl's grooves: the knob's knurl came out a smooth cone).
+    pub cone: f64,
 }
 
 /// The tri-dexel. Family `d` holds the rays along axis `d`; a ray is indexed by its other two
@@ -123,6 +127,76 @@ fn line_vs_segment(
     (s1 > s0).then_some((s0, s1))
 }
 
+/// The parameters `s` where the line `o + s e` is inside the cone with its apex at `tip`, its
+/// axis `t` (unit), widening at `k` (tan of its half angle), from the apex up to `len` along
+/// the axis. Convex: one interval, or none.
+fn line_vs_cone(
+    o: [f64; 3],
+    e: [f64; 3],
+    tip: [f64; 3],
+    t: [f64; 3],
+    k: f64,
+    len: f64,
+) -> Option<(f64, f64)> {
+    // inside: |w|^2 <= (1 + k^2) (w.t)^2 with w.t >= 0, w = o - tip + s e
+    let w = sub(o, tip);
+    let (wt, et) = (dot(w, t), dot(e, t));
+    let g = 1.0 + k * k;
+    let a = dot(e, e) - g * et * et;
+    let b = 2.0 * (dot(w, e) - g * wt * et);
+    let c = dot(w, w) - g * wt * wt;
+    // the slab 0 <= w.t <= len
+    let (mut lo, mut hi) = if et.abs() < 1e-12 {
+        if wt < 0.0 || wt > len {
+            return None;
+        }
+        (f64::NEG_INFINITY, f64::INFINITY)
+    } else {
+        let (p, q) = ((0.0 - wt) / et, (len - wt) / et);
+        (p.min(q), p.max(q))
+    };
+    // the double cone's inside, a s^2 + b s + c <= 0, on the upper nappe (the slab keeps it)
+    if a.abs() < 1e-12 {
+        if b.abs() < 1e-12 {
+            if c > 0.0 {
+                return None;
+            }
+        } else if b > 0.0 {
+            hi = hi.min(-c / b);
+        } else {
+            lo = lo.max(-c / b);
+        }
+    } else {
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
+            return if a < 0.0 {
+                Some((lo, hi)).filter(|(l, h)| h > l)
+            } else {
+                None
+            };
+        }
+        let q = disc.sqrt();
+        let (r0, r1) = {
+            let (x, y) = ((-b - q) / (2.0 * a), (-b + q) / (2.0 * a));
+            (x.min(y), x.max(y))
+        };
+        if a > 0.0 {
+            lo = lo.max(r0);
+            hi = hi.min(r1);
+        } else {
+            // outside the roots: with the slab on the upper nappe only one side can remain
+            let in_lo = (lo, hi.min(r0));
+            let in_hi = (lo.max(r1), hi);
+            let pick = |i: (f64, f64)| (i.1 > i.0).then_some(i);
+            return match (pick(in_lo), pick(in_hi)) {
+                (Some(x), Some(y)) => Some((x.0.min(y.0), x.1.max(y.1))),
+                (x, y) => x.or(y),
+            };
+        }
+    }
+    (hi > lo).then_some((lo, hi))
+}
+
 impl ToolSolid {
     /// Its normal bite (mm3 per mm of travel): buried to its centre, a ball's half disc, a
     /// flat's square of its radius by its width.
@@ -157,6 +231,23 @@ impl ToolSolid {
                 self.radius,
                 false,
             )
+        } else if self.cone > 0.0 {
+            // (convex: the cone below where it reaches its radius, the cylinder above; the
+            // line's interval through each, joined)
+            let ac = (self.radius / self.cone).min(self.height);
+            let cyl = (self.height > ac + 1e-12).then(|| {
+                let c0 = [
+                    tip[0] + dir[0] * ac,
+                    tip[1] + dir[1] * ac,
+                    tip[2] + dir[2] * ac,
+                ];
+                line_vs_segment(o, e, c0, dir, self.height - ac, self.radius, true)
+            });
+            let cone = line_vs_cone(o, e, tip, dir, self.cone, ac);
+            match (cyl.flatten(), cone) {
+                (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+                (a, b) => a.or(b),
+            }
         } else {
             line_vs_segment(o, e, tip, dir, self.height, self.radius, true)
         }
@@ -953,6 +1044,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_v_bit_is_a_cone_to_its_radius() {
+        // (the knob's knurl: a V-bit taken as a flat cylinder cut its grooves away) a 90
+        // degree V-bit, Ø3.175, tip at the origin pointing down -Z (its axis +Z): a line up Z
+        // at x enters it where the cone has widened to x, a line beyond its radius misses
+        let t = ToolSolid {
+            radius: 1.5875,
+            ball: false,
+            height: 10.0,
+            cone: 1.0,
+        };
+        let at = |x: f64| t.along([0.0; 3], [0.0, 0.0, 1.0], [x, 0.0, -5.0], [0.0, 0.0, 1.0]);
+        let (s0, s1) = at(0.5).unwrap();
+        assert!(
+            (s0 - 5.5).abs() < 1e-9 && (s1 - 15.0).abs() < 1e-9,
+            "{s0} {s1}"
+        );
+        let (s0, _) = at(1.5).unwrap();
+        assert!((s0 - 6.5).abs() < 1e-9, "{s0}");
+        assert!(at(1.6).is_none());
+        // across, at height 1 (the cone 1 wide there): from -1 to 1
+        let (s0, s1) = t
+            .along([0.0; 3], [0.0, 0.0, 1.0], [-5.0, 0.0, 1.0], [1.0, 0.0, 0.0])
+            .unwrap();
+        assert!(
+            (s0 - 4.0).abs() < 1e-9 && (s1 - 6.0).abs() < 1e-9,
+            "{s0} {s1}"
+        );
+    }
+
+    #[test]
     fn a_bar_holds_its_volume_and_a_plunge_takes_the_tool_s() {
         let (r, l) = (10.0, 30.0);
         let mut d = Dexel::bar(r, l, 0.1);
@@ -964,6 +1085,7 @@ mod tests {
             radius: 2.0,
             ball: false,
             height: 20.0,
+            cone: 0.0,
         };
         let (tip, dir) = pose(-15.0, 0.0, 8.0, 0.0);
         let inside = d.inside(&t, tip, dir);
@@ -998,6 +1120,7 @@ mod tests {
             radius: 1.5,
             ball: true,
             height: 30.0,
+            cone: 0.0,
         };
         // the tool along -Y (part frame), its tip at y -2, z 4: a horizontal hole at z 4
         let tip = [-10.0, -2.0, 4.0];
@@ -1020,6 +1143,7 @@ mod tests {
             radius: 2.0,
             ball: true,
             height: 20.0,
+            cone: 0.0,
         };
         for i in 0..=60 {
             let (tip, dir) = pose(-15.0 + i as f64 * 0.1, 0.0, 6.0, 30.0);

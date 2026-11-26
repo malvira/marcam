@@ -230,6 +230,7 @@ mod tests {
                 radius: 1.5875,
                 ball: false,
                 height: 12.0,
+                cone: 0.0,
             })
         };
         let tris = |p: &mut SolidPlayback| -> usize {

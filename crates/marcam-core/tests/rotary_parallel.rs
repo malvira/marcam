@@ -162,6 +162,7 @@ fn what_the_rings_cut_turning_is_taken_from_the_3d_stock() {
         radius: 1.5875,
         ball: false,
         height: 12.0,
+        cone: 0.0,
     };
     let turning: Vec<_> = marcam::sim::segments(&tps)
         .into_iter()

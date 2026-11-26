@@ -79,16 +79,19 @@ fn left_in_3d() {
                 radius: diameter / 2.0,
                 ball: true,
                 height: 22.0,
+                cone: 0.0,
             },
             marcam::job::ToolShape::Flat { diameter } => ToolSolid {
                 radius: diameter / 2.0,
                 ball: false,
                 height: 17.0,
+                cone: 0.0,
             },
             _ => ToolSolid {
                 radius: 1.5875,
                 ball: false,
                 height: 17.0,
+                cone: 0.0,
             },
         })
     };

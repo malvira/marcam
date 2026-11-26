@@ -706,6 +706,7 @@ mod tests {
             radius: 1.5875,
             ball: true,
             height: 20.0,
+            cone: 0.0,
         };
         let bar = Dexel::bar(10.0, 20.0, 0.2);
         let cl = |_x: f64, _a: f64| 7.0;
@@ -800,6 +801,7 @@ mod tests {
             radius: 1.5875,
             ball: true,
             height: 20.0,
+            cone: 0.0,
         };
         // the earlier operation: a slot along X at A 0, 3.1 mm wide (the ball 3.175), its
         // floor 9.4 from the axis, in a bar 12 round
@@ -807,6 +809,7 @@ mod tests {
             radius: 1.55,
             ball: false,
             height: 20.0,
+            cone: 0.0,
         };
         let cut = |bar: &mut Dexel| {
             for i in 0..=280 {

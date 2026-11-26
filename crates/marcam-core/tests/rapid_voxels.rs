@@ -259,6 +259,7 @@ fn the_overhang_fixture_replayed_through_the_dexel_stock() {
         radius: 3.175 / 2.0,
         ball: false,
         height: 12.0,
+        cone: 0.0,
     };
     let r = replay(&mut dx, &segs, &|_| Some(t1), 0.25, 0.15);
     assert!(
@@ -299,16 +300,19 @@ fn replay_a_project() {
                 radius: diameter / 2.0,
                 ball: true,
                 height: 22.0,
+                cone: 0.0,
             },
             marcam::job::ToolShape::Flat { diameter } => ToolSolid {
                 radius: diameter / 2.0,
                 ball: false,
                 height: 17.0,
+                cone: 0.0,
             },
             _ => ToolSolid {
                 radius: 1.5875,
                 ball: false,
                 height: 17.0,
+                cone: 0.0,
             },
         })
     };
@@ -348,6 +352,7 @@ fn probe_rest_stock() {
         radius: 1.5875,
         ball: false,
         height: 40.0,
+        cone: 0.0,
     };
     let segs: Vec<_> = marcam::sim::segments(std::slice::from_ref(&tps[0]))
         .into_iter()
@@ -375,6 +380,7 @@ fn probe_rest_stock() {
         radius: 1.5875,
         ball: true,
         height: 2.0 * 1.5875 + 0.5,
+        cone: 0.0,
     };
     for a in [270.0, 273.0, 276.0] {
         eprintln!(
