@@ -425,6 +425,11 @@ impl Dexel {
                 continue;
             }
             let (s0, s1) = (s0 as f32, s1 as f32);
+            // (most rays the tool crosses it has already cleared: nothing to take, nothing made
+            // again; a long playback's seek spent most of its time copying them)
+            if !ray.iter().any(|&[a, b]| b > s0 && a < s1) {
+                continue;
+            }
             let mut out: Vec<[f32; 2]> = Vec::with_capacity(ray.len() + 1);
             for &[a, b] in ray.iter() {
                 if b <= s0 || a >= s1 {
