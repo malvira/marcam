@@ -618,7 +618,7 @@ try {
     await settle();
     took.push(`${kind} ${((Date.now() - t0) / 1000).toFixed(1)} s`);
   }
-  check("every operation type's new form is fully filled and applies cleanly (those needing a pick, or a program, wait for it)", filled.length === 22 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
+  check("every operation type's new form is fully filled and applies cleanly (those needing a pick, or a program, wait for it)", filled.length === 24 && filled.every((f) => f.endsWith("none blank")), `${filled.join(" ")}; ${took.join(", ")}`);
   check("rotary roughing's max bite: marked auto, empty and folded under More in a new form (worked out when planned)", !!autoSeen && autoSeen.there && autoSeen.empty && autoSeen.folded && autoSeen.auto, JSON.stringify(autoSeen));
   // changing the tool refreshes defaults the user hasn't edited
   await js("document.getElementById('treeAddType').value = 'rotary_finish'; document.getElementById('treeAdd').click(); true");
