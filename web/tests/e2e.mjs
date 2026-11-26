@@ -408,11 +408,12 @@ try {
   const k2 = await cutCells(2), k3 = await cutCells(3);
   check("after the knurl, knurl and chamfer cells carry their operations", k2 > 1000 && k3 > 50, `knurl ${k2} vertices, chamfer ${k3}`);
   // (its tiles together, their shared vertices welded: one closed solid)
-  const closed = String(await js(`const { checkClosed } = await import('./meshes.js'); const pos = [], idx = [], at = new Map(); for (const t of ${M}.tiles.values()) { const a = t.geometry.attributes.position.array, ix = t.geometry.index.array; const map = new Uint32Array(a.length / 3); for (let k = 0; k < a.length / 3; k++) { const key = a[3 * k] + ',' + a[3 * k + 1] + ',' + a[3 * k + 2]; let v = at.get(key); if (v === undefined) { v = pos.length / 3; pos.push(a[3 * k], a[3 * k + 1], a[3 * k + 2]); at.set(key, v); } map[k] = v; } for (const i of ix) idx.push(map[i]); } const c0 = checkClosed({ positions: new Float32Array(pos), indices: new Uint32Array(idx) }); c0.closed + ' ' + c0.badEdges + ' ' + c0.volume.toFixed(0)`));
-  // (surface nets: where two surfaces of the stock touch at a cell's edge, a few edges are
-  // shared by four faces; a handful at most, the rest closed)
-  const [, badEdges, vol] = closed.split(" ").map(Number);
-  check("the simulated solid stays closed (a handful of edges where two surfaces of it touch at most)", closed.startsWith("true") || (badEdges <= 16 && vol > 0), closed);
+  const closed = String(await js(`const { checkClosed } = await import('./meshes.js'); const pos = [], idx = [], at = new Map(); for (const t of ${M}.tiles.values()) { const a = t.geometry.attributes.position.array, ix = t.geometry.index.array; const map = new Uint32Array(a.length / 3); for (let k = 0; k < a.length / 3; k++) { const key = a[3 * k] + ',' + a[3 * k + 1] + ',' + a[3 * k + 2]; let v = at.get(key); if (v === undefined) { v = pos.length / 3; pos.push(a[3 * k], a[3 * k + 1], a[3 * k + 2]); at.set(key, v); } map[k] = v; } for (const i of ix) idx.push(map[i]); } const c0 = checkClosed({ positions: new Float32Array(pos), indices: new Uint32Array(idx) }); c0.closed + ' ' + c0.badEdges + ' ' + c0.volume.toFixed(0) + ' ' + c0.unpaired + ' ' + c0.triangles`));
+  // (surface nets: where two surfaces of the stock touch at a cell's edge, some edges are
+  // shared by four faces, the knurl's diamonds' tips many: paired, no hole and no face turned
+  // the wrong way, and few of the edges)
+  const [, badEdges, vol, unpaired, tris] = closed.split(" ").map(Number);
+  check("the simulated solid stays closed (no hole, no face turned; where two surfaces of it touch, few edges)", closed.startsWith("true") || (unpaired === 0 && badEdges <= 0.002 * tris && vol > 0), closed);
   await js("window.__marcam.setView('iso', {})");
   await sleep(300);
   await shot("10_machining_after_knurl");

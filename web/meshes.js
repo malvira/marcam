@@ -173,7 +173,8 @@ export const WALL_BAND = 0.2;
 /**
  * Check a mesh is a closed, consistently oriented surface: after welding equal positions,
  * every edge is used exactly twice, once in each direction. Returns { closed, volume,
- * badEdges, triangles }.
+ * badEdges, unpaired, triangles }: `unpaired` counts only holes and misoriented faces (an edge four
+ * faces share, where two surfaces of a solid touch, is bad but paired).
  */
 export function checkClosed({ positions, indices }) {
   const key = (i) => `${positions[3 * i].toFixed(5)},${positions[3 * i + 1].toFixed(5)},${positions[3 * i + 2].toFixed(5)}`;
@@ -199,11 +200,15 @@ export function checkClosed({ positions, indices }) {
     volume += (p[0][0] * (p[1][1] * p[2][2] - p[1][2] * p[2][1]) - p[0][1] * (p[1][0] * p[2][2] - p[1][2] * p[2][0]) + p[0][2] * (p[1][0] * p[2][1] - p[1][1] * p[2][0])) / 6;
   }
   let bad = 0;
+  // (unpaired: an edge not met as often the other way round, a hole or a face turned the
+  // wrong way; an edge four faces share, where two surfaces of a solid touch, is paired)
+  let unpaired = 0;
   for (const [k, n] of edges) {
     const [a, c] = k.split(">");
     if (n !== 1 || edges.get(`${c}>${a}`) !== 1) bad++;
+    if (edges.get(`${c}>${a}`) !== n) unpaired++;
   }
-  return { closed: bad === 0, volume, badEdges: bad, triangles: indices.length / 3 };
+  return { closed: bad === 0, volume, badEdges: bad, unpaired, triangles: indices.length / 3 };
 }
 
 // ---------------------------------------------------------------- the stock's look
