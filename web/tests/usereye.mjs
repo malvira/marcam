@@ -2605,6 +2605,51 @@ try {
       st.solid && st.tiles > 0 && st.slices > 10 && st.worst < 0.5, JSON.stringify(st));
     await clean("the playback in 3D");
   }
+  // ---------------------------------------------------------------- the holder check's near miss
+  // (Mar's impeller turned end for end: its roughing shank 0.02 mm from the stock, and the
+  // check said "clear") a pocket opened from File > Open, its tool's flutes 5 mm long: clear
+  // 4.5 deep; its depth typed to 6 in its form: the shank runs down the pocket's walls, the
+  // check in yellow, a near miss, no collision; typed back (4.5): clear again
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; return true; })()");
+    {
+      const doc = await S("DOM.getDocument");
+      const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#projectOpenFile" });
+      await S("DOM.setFileInputFiles", { files: [join(root, "tests", "fixtures", "near_miss.marcam.toml")], nodeId });
+    }
+    await waitFor(() => read("!!document.getElementById('holderCheck') && document.body.dataset.state !== 'busy'"), "the near-miss project", 180000 * SLACK).catch(() => {});
+    await settled();
+    const holder = () => read(`(() => { const vis = ${VISIBLE}; const e = document.getElementById('holderCheck'); if (!e) return null; e.scrollIntoView({ block: 'nearest' }); const c = getComputedStyle(e); return { shown: vis(e), cls: e.className, text: e.textContent, bg: c.backgroundColor, fg: c.color }; })()`);
+    const before = await holder();
+    await click("#tree .tree-op[data-op=op1] .tree-label");
+    await settled();
+    const floorCss = "#opForm [name=depth]";
+    const typeFloor = async (v) => {
+      await click(floorCss);
+      await key("a", 2);
+      for (const ch of v) await type(ch);
+      await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+      await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+      await sleep(1200);
+      await settled();
+      await waitFor(() => read("document.body.dataset.state !== 'busy'"), "planned", 240000 * SLACK).catch(() => {});
+      await settled();
+    };
+    await typeFloor("6");
+    const near = await holder();
+    await shot("near_miss");
+    await typeFloor("4.5");
+    const after = await holder();
+    check("the holder check: a pocket within its tool's flutes clear; typed deeper (6) than its 5 mm of flutes, a yellow near miss on the screen (no collision); typed back to 4.5, clear",
+      before && /check: clear/.test(before.text) &&
+        near && near.shown && /warn/.test(near.cls) && /no collision, but [0-9]+ move/.test(near.text) && /within 0[.]5 mm/.test(near.text) && near.bg !== before.bg &&
+        after && /check: clear/.test(after.text),
+      JSON.stringify({ before, near, after }));
+    await clean("the holder check's near miss");
+  }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this
   // is different than the other lines in the tree where you can click anywhere on the row")

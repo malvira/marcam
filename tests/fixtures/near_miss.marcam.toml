@@ -1,0 +1,52 @@
+# The holder check's near miss (web/tests/usereye.mjs): a pocket in a block, its tool's flutes
+# 5 mm long. 4.5 deep: clear; 6 deep: the shank (no flutes, as wide as the cutter) runs down
+# the pocket's walls, within 0.5 mm of the stock (a near miss, in yellow); no collision.
+schema_version = "0.2"
+name = "near miss (a pocket deeper than its flutes)"
+models = []
+
+[[tools]]
+number = 1
+description = "3.175 mm flat, 5 mm flutes"
+kind = "flat"
+diameter = 3.175
+flute_length = 5.0
+shank_diameter = 3.175
+stickout = 20.0
+holder_diameter = 20.0
+
+[[setups]]
+id = "vise1"
+name = "Vise"
+machine = "makera-carvera-4axis"
+clearance = 3.0
+spindle_rpm = 12000
+part = []
+
+[setups.stock]
+shape = "box"
+min = [0.0, 0.0, -10.0]
+max = [60.0, 40.0, 0.0]
+
+[setups.holding]
+kind = "vise"
+tailstock = false
+
+[[setups.operations]]
+id = "op1"
+name = "Pocket"
+type = "pocket"
+tool = 1
+index_a = 0.0
+rect = [15.0, 10.0, 45.0, 30.0]
+depth = 4.5
+step_down = 1.0
+stepover = 0.5
+feed = 300.0
+plunge_feed = 60.0
+
+[[setups.outputs]]
+name = "nm"
+title = "nm"
+reset_a = false
+operations = ["op1"]
