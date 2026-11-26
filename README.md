@@ -1,45 +1,86 @@
 # marcam
 
-An open-source CAM engine for 4th-axis (rotary) machining, written in Rust.
+An open-source CAM engine for 4th-axis (rotary) and 3-axis machining, written in Rust, with a
+web app that runs it entirely in your browser.
+
+![The knurled knob in the app: its toolpaths planned, played back on the stock in 3D, each operation in its colour](docs/media/app-knob.png)
+
+You load a part (STL, 3MF or STEP), set up the stock and how it is held (a bar on the 4th
+axis, indexed 3+1, or a block or bar in a vise), pick operations on the part, and marcam
+plans the toolpaths, posts G-code for your machine, checks it for unsafe moves and simulates
+the cut. Everything updates as you edit: there is no Generate button.
 
 > **Renamed:** this project was called 4cam until 2026-11-17. The crates are now `marcam-*`
 > (library `marcam`), the command is `marcam` (`4cam` still works), and projects save as
-> `.marcam.json`. Files from before (`.4cam.json`, `4cam-machine` / `4cam-tools` profiles)
-> still open. See [CHANGELOG.md](CHANGELOG.md).
+> `.marcam`. Older files (`.4cam.json`, `.marcam.json`, `4cam-machine` / `4cam-tools`
+> profiles) still open. See [CHANGELOG.md](CHANGELOG.md).
 
-You describe the stock, the part (a revolved profile and/or a triangle mesh), the tools and
-the operations in a JSON job file. marcam plans machine-neutral toolpaths, posts them to G-code
-for a machine profile, checks the result for unsafe moves, and renders a PNG preview of each
-program.
+## What it looks like
 
-## Status
+The knob's diamond knurl, cut by a V-bit while the part turns, played back on the stock in 3D:
 
-- **Milestone 0**: reproduces, byte for byte, the knurled-knob programs that were cut on a
-  Makera Z1 (`tests/golden/`).
-- **Milestone 1** (rotary finishing): STL (binary and ASCII) and 3MF import, a radial
-  drop-cutter for flat, ball and V-bit tools with a spatial index, the `rotary_finish`
-  strategy, and a LinuxCNC profile that uses G93 inverse-time feeds.
-- **Profiles:**
-  - machine profiles for the Makera Z1, Carvera and Carvera Air (each with 4th axis) and a
-    generic LinuxCNC machine;
-  - a Makera starter tool library;
-  - importers for Makera's Fusion 360 tool libraries and machine definitions;
-  - checks of each job against the machine's limits.
+![The knob's knurl played back on the stock in 3D](docs/media/knob-knurl.gif)
 
-  See [docs/profiles.md](docs/profiles.md) and [docs/roadmap.md](docs/roadmap.md).
-- **Milestone 3** (web frontend): a static web app that runs the engine in the browser
-  (WebAssembly in a Web Worker). It is tested end to end in headless Chrome/Edge.
-- **Milestone 2** (roughing and simulation):
-  - `rotary_rough`: radial step-down roughing from a mesh.
-  - A radial-heightmap stock model that simulates material removal.
-  - Gouge checks against the part.
-  - Python and WebAssembly packages.
+| The knob at the end of its programs | An impeller at rest after its five operations |
+| --- | --- |
+| ![The knob's stock in 3D at the end: the turned profile in blue, the knurl in yellow, the chamfer in green](docs/media/knob-3d-stock.png) | ![The impeller's simulated stock in 3D, coloured by the material left on the part](docs/media/impeller-3d-stock.png) |
 
-## Operations
+An impeller cut from a bar (indexed 3+1 roughing, rest roughing, a rotary finish, its
+blades' faces finished 4-axis simultaneous, then parted off), 449,000 moves, played back at
+×1000:
+
+![The impeller's playback from the bar to the finished part, each operation in its colour](docs/media/impeller-playback.gif)
+
+## What it does
+
+- **Setups:** a bar on the 4th axis (simultaneous), indexed 3+1 (the bar at fixed angles),
+  or a block or bar in a vise (3-axis). A later setup can take the piece the one before
+  left (carried over, turned any way), so a part can be cut in a vise and finished on the
+  4th axis.
+- **Rotary operations:** turning a profile, roughing and finishing a mesh, rotary parallel,
+  flowline and wall finishing (4-axis simultaneous, for an impeller's channels and blades),
+  diamond or straight knurls, V-bit flank chamfers, parting off.
+- **3-axis operations:** facing, pockets, 2D contours with tabs, drilling and pecking,
+  boring, chamfers and deburring, thread milling, 3D roughing (adaptive), 3D parallel and
+  waterline finishing, engraving, V-carving, and custom toolpaths from your own G-code.
+- **Picked on the part:** faces, edges, pockets and holes are found on the model and picked
+  with a click; each pick plans the operation again as you go.
+- **Checks:** every program is verified (no fast plunges, no low rapids), gouge-checked
+  against the part, and checked for the tool's shank and holder against the stock and the
+  fixture (a collision in red, a near miss within 0.5 mm in yellow). The simulation finds
+  rapids through the stock (confirmed on a 3D model of the stock), operations that take more
+  than twice their tool's normal bite, and the material left on the part. A warning with a
+  place jumps the playback there when clicked.
+- **Simulation and playback:** the stock is simulated in the background as soon as it is
+  shown, then drawn in 3D (a tri-dexel of the bar), each surface in the colour of the
+  operation that last cut it. The playback simulates the stock as it plays, from ×1 to
+  ×1000 of machine time, with a scrubber; the background simulation runs on the GPU where
+  there is one.
+- **Machines and tools:** profiles for the Makera Z1, Carvera and Carvera Air (each with
+  4th axis) and a generic LinuxCNC machine (G93 inverse-time feeds), a starter tool library
+  with cutting data per material, and importers for Fusion 360 tool libraries and machine
+  definitions. See [docs/profiles.md](docs/profiles.md).
+- **Also:** a command line, a Python package, a WebAssembly package and an MCP server for
+  agents, all on the same JSON API.
+
+### Milestones
+
+- **0:** reproduces, byte for byte, the knurled-knob programs that were cut on a Makera Z1
+  (`tests/golden/`).
+- **1:** rotary finishing from a mesh (STL, 3MF), a radial drop-cutter, a LinuxCNC post.
+- **2:** roughing and material-removal simulation; gouge checks; Python and WebAssembly
+  packages.
+- **3:** the web app (the engine in a Web Worker), tested end to end in headless Chrome.
+- Since then: 3-axis setups, carried stock, 4-axis simultaneous finishing, a 3D in-process
+  stock, holder and shank checks, live planning. See [docs/roadmap.md](docs/roadmap.md).
+
+## Operations (job reference)
 
 - `rotary_turning`: roughs the stock down to the profile in radial levels with a flat
   endmill moving helically along X, then finishes it in one helical pass.
-- `helical_knurl`: a diamond knurl, cut as families of helical V grooves over a conical body.
+- `helical_knurl`: a knurl, `pattern` diamond (two families of helical V grooves over a
+  conical body) or straight (grooves along X). It comes in from the stock as the operations
+  before left it, and says so when the stock stands above the knurl's body.
 - `flank_chamfer`: chamfers an edge with the flank of a V-bit while the part turns.
 - `parting`: cuts the part off the bar (or grooves it down to a radius) with a flat end mill
   or a V-bit. The tool feeds in helically as the part turns, its depth per turn and its feed
@@ -55,6 +96,7 @@ program.
   - At every point the tool sits at the lower of the level and the drop-cutter surface, so a
     level never cuts more than one step and never into the allowance.
   - Levels alternate direction so A stays bounded.
+  - `rest`: only where the operations before left stock (on the 3D stock), its bite limited.
 - `rotary_finish`: finishes the part mesh with a radial drop-cutter. The tool can be flat,
   ball or V-bit. There are two patterns:
   - `along`: rasters along X at a constant A. Set the stepover with `stepover_deg`, or with
@@ -66,6 +108,9 @@ program.
   one full turn at the foot of each wall (`clean_walls`, on by default), because a helix only
   reaches a wall's foot at one angle per turn. If the job has
   no `part.mesh`, `rotary_finish` uses `part.profile`, revolved into a 720-facet mesh.
+- `rotary_parallel`, `rotary_flowline`, `rotary_wall`: 4-axis simultaneous finishing (X and
+  A together): passes along X, rings or a spiral; passes that follow the channels between an
+  impeller's blades; waterlines on the blades' faces along their twist.
 - 3-axis (vise, or indexed on the bar): `face`, `pocket`, `drill`, `bore`, `contour`,
   `raster3d`, `rough3d`, `waterline`, `engrave`, `vcarve`, `chamfer` (chamfer or deburr
   outlines and holes with a V-bit) and `thread_mill` (threads in holes or on bosses on a
@@ -74,7 +119,10 @@ program.
   `tabs` evenly round the outline, or placed by hand (`tab_at`, a click on the outline in the
   app: a fraction of the way round the outline as written, so it stays put when the operation
   is planned again, its direction changes or the model is replaced), each `tab_width` long
-  and `tab_height` high.
+  and `tab_height` high. A rapid that would come straight down into the stock (as the moves
+  before left it) stops above it and feeds the rest of the way, with a warning.
+- `custom`: a toolpath from your own G-code (or JSON moves), checked and posted like
+  marcam's own. See [docs/custom-toolpaths.md](docs/custom-toolpaths.md).
 
 Each library tool can carry cutting data per stock material and operation type (the tool
 library's form); a setup's `material` picks it for new operations, and a project can give a
@@ -170,63 +218,53 @@ powershell -File web/serve.ps1
 Then open <http://localhost:8000/web/>. Nothing is uploaded: the engine runs in your
 browser.
 
-- **Project bar** (top):
-  - **New**: a dialog with the project name, the machine and the setup type: Rotary 4th
-    axis (simultaneous), Indexed 3+1 (the bar at fixed angles) or 3-axis vise. It also takes
-    the part (an STL, its units, its axis or up direction, with a placement preview) and the
-    stock (from the part with a margin, or given). The STL can also come later.
-  - **Open**: a `.marcam` project (or a `.marcam.toml`, or an older `.marcam.json` /
-    `.project.json` / `.job.json`); or drop the file on the page.
-  - **Save** / **Save as**: one `.marcam` file (a zip of the project as TOML and its part),
-    so it opens whole anywhere.
-  - **Import STL** (or drop one), binary or ASCII, mm or inch, through the same dialog, with
-    the current setup's type pre-selected:
-    - The part is placed: on the rotary axis, its front at X0; or Z up on the vise.
-    - Bar or block stock is sized round it, and the part size is shown.
-    - A new part gets a roughing and a finishing operation from the engine's defaults; an
-      existing project's operations are recomputed for it. Then it is generated.
-  - In the project tree, **Edit setup** changes a setup's type, machine, stock, origin and
-    holding. A new type converts the setup: the part is placed again, the stock re-sized, and
-    operations that do not fit are removed (with a warning first and an Undo after; starters
-    are added if none are left). The rest get their defaults again, and everything
-    regenerates. **+ Setup** adds a setup for the same part, with the same choices. Only
-    operation types that fit a setup are offered.
-  - The project's name, with an "unsaved" mark. New, Open and examples ask before
-    discarding changes.
-  - **Live updating** (on by default; Tools > Update automatically): there is no Generate
-    button. A project opened, an example, an edit: half a second after it (never while a
-    mouse button is held), the operations it touched are planned again in the background, the
-    others kept (the engine's plan cache). Each operation in the tree carries a badge: ✓
-    planned, • changed (waiting), ◐ being planned, ⚠ failed. The results stay on screen until
-    the new ones come; Download .nc waits for them; a simulated stock is simulated again
-    (Coarse at once, then the chosen resolution when it is quick). An operation being added
-    is planned live as it is picked and edited and drawn in amber before Apply. Tools >
-    Replan all plans now. Switched off, results the project no longer matches are marked
-    out of date until Replan all.
-  - The example picker.
-- **Left panel:**
-  - the machine (built-in Makera Z1, Carvera, Carvera Air, LinuxCNC, imported profiles, or custom JSON), with a summary of its limits;
-  - a tool library panel: view, add, edit and remove tools, import a file or URL (Fusion 360 `.tools`/`.json`/`.mch`/`.f3d` or marcam JSON), export JSON, and "use as T#" to put a tool in the job (kept in browser storage);
-  - "Attach mesh file": the mesh an opened project names (STL or 3MF), as it is;
-  - quick settings that write into the job JSON (stock, tool sizes, feeds, steps);
-  - the job JSON editor.
-- **Results** (one tab per program):
-  - the line count, verifier issues and gouge check;
-  - the G-code, with **Download .nc**;
-  - a 3D view (three.js, loaded from jsDelivr), with the toolpath wrapped around the part
-    (cuts blue, rapids red), the stock and the part, and a move scrubber;
-  - a 2D side view.
-- **Simulate stock:** runs the material-removal simulation and shows the stock surface,
-  coloured by the material left on the part.
-- **Playback:** the job played back in one view: the tool at its place, the toolpath drawn on
-  the part as it is played (each operation in its colour), and with **stock** on, the stock
-  simulated along (off: the part turns under the tool, nothing simulated). The speed slider is
-  in machine time, ×1 (real time) to ×1000 on a log scale; ⇥ jumps to the end; the label shows
-  the machining time reached of the total. Switching the stock on keeps the place. Hidden
-  operations are left out of everything. Speed and stock are remembered.
-- **View > Colours:** every colour the 3D view draws with (toolpath cuts and rapids, part,
-  stock and its outline, uncut stock, tool, a new operation's preview, the background), kept
-  in this browser, with Reset.
+- **File:** New, Open (a `.marcam` project, a `.marcam.toml`, or an older `.marcam.json` /
+  `.project.json` / `.job.json`; or drop the file on the page), Save / Save as (one
+  `.marcam` file: a zip of the project as TOML and its part, so it opens whole anywhere),
+  and Import model (STL, 3MF or STEP, mm or inch). The project's name shows with an
+  "unsaved" mark; New, Open and the examples ask before discarding changes.
+- **The project tree** (left): the tool library, then each setup with its Stock, Part,
+  Fixture, tools and operations. A click anywhere on a row opens its details below the tree,
+  where every setting is edited in place and applies as it is changed:
+  - a setup's type (Rotary 4th axis, Indexed 3+1, 3-axis vise) as cards at the top; a new
+    type converts the setup (the part placed again, the stock re-sized, operations that do
+    not fit removed, with an Undo);
+  - the stock (a round, square, hex or rectangular bar, or a block; fitted to the part with
+    a margin, or typed), and the fixture (chuck, tailstock, vise jaws), drawn and checked;
+  - the part, moved with handles in the 3D view (arrows and rings, rotary: along X, round
+    and across the axis) or with Center on axis, Flush to front and the like;
+  - each operation with a badge (✓ planned, • changed, ◐ being planned, ⚠ failed), its
+    colour, an eye to hide it, duplicate and delete; dragged (or Alt+Up / Alt+Down) to
+    reorder. Add operation offers only the types that fit the setup. Operations that work on
+    a feature are picked on the part with a click.
+  - **+ Add setup** adds one that continues from the piece the setup before left, or starts
+    from its own stock.
+- **Live updating** (on by default; Tools > Update automatically): there is no Generate
+  button. Half a second after an edit (never while a mouse button is held) the operations it
+  touched are planned again in the background, the others kept (the engine's plan cache).
+  The results stay on screen until the new ones come; Download .nc waits for them. Tools >
+  Replan all plans everything now.
+- **Results** (one tab per program): the line count, the verifier, machine limits, the
+  estimated time, the holder/shank check, the gouge check, the simulated stock's numbers and
+  warnings (each foldable, each entry with a place jumping the playback there), the G-code
+  with **Download .nc**, and a side view.
+- **The 3D view** (three.js): its toggles, also as keys with the pointer over the view: Part
+  (P), Simulated stock (S), the stock's outline (B), Toolpaths (T: all, up to the playhead,
+  or none), Rapids (R), the Tool (C), Only the selected operation (O), the Chuck (K) and the
+  Tailstock (L), and Play (Space). The simulated stock appears with nothing clicked: the
+  uncut bar at once, the simulation's stock when it lands (progress in the ring in the
+  view's corner), then its 3D surface.
+- **Playback:** the tool at its place, the toolpath drawn as it is played (each operation in
+  its colour), the stock simulated along in 3D. Speed in machine time, ×1 (real time) to
+  ×1000 on a log scale; Step; ⇥ to the end; a scrubber; the label shows the machine time
+  reached of the total and the operation playing. Hidden operations are left out of
+  everything. Speed and stock are remembered.
+- **Simulation grid** (Coarse, Normal, Fine, Ultra, or custom cell sizes): the background
+  simulation runs at Coarse first, then at the chosen grid when it is quick; one estimated
+  over 30 seconds asks first.
+- **Tools > Tool library:** view, add, edit and remove tools and their cutting data, import a
+  file or URL (Fusion 360 `.tools`/`.json`/`.mch`/`.f3d` or marcam JSON), export JSON.
+- **View > Colours:** every colour the 3D view draws with, kept in this browser, with Reset.
 
 `node web/tests/e2e.mjs` drives the page in an installed Chrome or Edge in headless mode,
 over the DevTools protocol, with no npm packages. It checks:
@@ -234,9 +272,9 @@ over the DevTools protocol, with no npm packages. It checks:
 - the knob programs match the golden G-code byte for byte, with 0 issues;
 - the 3D view renders and the scrubber works;
 - **Download .nc** saves the right file;
-- the simulation shows no gouges;
+- the simulation (in 3D) shows no gouges, and the playback's stock matches it;
 - the LinuxCNC post uses G93;
-- quick settings and error messages work;
+- live planning, the setups, carried stock, the handles and error messages;
 - the mesh rough/finish job;
 - the phone layout.
 
