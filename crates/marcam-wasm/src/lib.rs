@@ -1006,7 +1006,7 @@ pub mod api {
         Xyz(sim3::Playback3),
         /// A rotary job played on its stock in 3D (`opts.solid`): see
         /// [`marcam::solid_play`].
-        Solid(marcam::solid_play::SolidPlayback),
+        Solid(Box<marcam::solid_play::SolidPlayback>),
     }
 
     /// Tiles of the stock's surface as JSON: each its key, vertices and triangles (base64).
@@ -1747,6 +1747,10 @@ pub mod api {
             let mut pb = marcam::solid_play::SolidPlayback::new(&job, &tps, h, &|t| {
                 marcam::left3d::solid(&job, t)
             });
+            // (the memory its snapshots may hold: the page's, by the device's memory)
+            if let Some(mb) = opts["snapshot_mb"].as_f64() {
+                pb.set_cap((mb.max(0.0) * 1048576.0) as usize);
+            }
             let mut path = Vec::with_capacity(pb.segments.len() * 7);
             for sg in &pb.segments {
                 path.extend_from_slice(&path_point(sg));
@@ -1762,7 +1766,7 @@ pub mod api {
             let tiles = tiles_json(pb.take_dirty());
             let out = json!({
                 "kind": "rotary",
-                "solid": { "h": pb.h(), "tiles": tiles },
+                "solid": { "h": pb.h(), "tiles": tiles, "cost": pb.total_cost(), "snapshots_wanted": pb.snapshots_wanted() },
                 "stock_radius": job.stock.radius,
                 "segments": pb.segments.len(),
                 "program_starts": starts,
@@ -1773,7 +1777,7 @@ pub mod api {
                 "project_ops": with_setup(&opts, || op_ids_and_colors(job_json)).map(|(ids, colors)| visible_ops(ids, colors, &opts)),
                 "tools": job.tools,
             });
-            SESSION.with(|s| *s.borrow_mut() = Some(Session::Solid(pb)));
+            SESSION.with(|s| *s.borrow_mut() = Some(Session::Solid(Box::new(pb))));
             return out;
         }
         // grid and part map exactly as the batch simulation builds them
@@ -1980,7 +1984,7 @@ pub mod api {
                 // the stock in 3D: the tiles the tool went through, made again
                 Session::Solid(pb) => {
                     pb.seek(n);
-                    json!({"pos": pb.position(), "tiles": tiles_json(pb.take_dirty())})
+                    json!({"pos": pb.position(), "tiles": tiles_json(pb.take_dirty()), "snapshots": pb.snapshot_positions()})
                 }
                 // 3-axis: rows are Y indices of nx cells; "z" holds the tops
                 Session::Xyz(pb) => {
@@ -1997,6 +2001,35 @@ pub mod api {
                         }
                     }
                 }
+            }
+        })
+    }
+
+    /// The open 3D playback's snapshots built on in the background: about `budget` of its
+    /// replay's cost played (its `solid.cost` the whole job's) on a stock of their own, the
+    /// playback's untouched. `opts.min_spacing`: the least replay cost between two snapshots
+    /// (the page's, from how fast the calls go: a short job wants none). {more, snapshots,
+    /// wanted, mb}; nothing to do for another playback.
+    pub fn sim_warm(budget: f64, opts: &str) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        SESSION.with(|s| {
+            let mut s = s.borrow_mut();
+            match s.as_mut() {
+                Some(Session::Solid(pb)) => {
+                    if let Some(c) = opts["min_spacing"].as_f64() {
+                        pb.set_min_spacing(c);
+                    }
+                    let more = pb.warm(budget);
+                    json!({
+                        "more": more,
+                        "snapshots": pb.snapshot_positions(),
+                        "wanted": pb.snapshots_wanted(),
+                        "mb": pb.snapshot_bytes() as f64 / 1048576.0,
+                    })
+                }
+                Some(_) => json!({"more": false}),
+                None => err("no playback open (call sim_open)"),
             }
         })
     }
@@ -2607,6 +2640,7 @@ pub mod api {
             },
             "sim_open" => sim_open(&d(a), &s(b), c),
             "sim_seek" => sim_seek(s(a).trim().parse().unwrap_or(0)),
+            "sim_warm" => sim_warm(s(a).trim().parse().unwrap_or(0.0), &s(b)),
             "sim_close" => sim_close(),
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&d(a), &s(b), c),

@@ -129,6 +129,9 @@ export async function load(source, opts = {}) {
     // material-removal playback: open a session, then seek to any segment
     simOpen: (job, opts, meshBytes) => call("sim_open", job, opts || {}, meshBytes),
     simSeek: (n) => call("sim_seek", String(n)),
+    // the open 3D playback's snapshots built on, about `budget` of its replay's cost
+    // (opts.min_spacing: the least cost between two)
+    simWarm: (budget, opts) => call("sim_warm", String(budget), opts || {}),
     // drop the playback and GPU sessions (a new project)
     simClose: () => call("sim_close"),
     // polylines (mm, Y up) from SVG text, placed with its box at opts.at and opts.height tall

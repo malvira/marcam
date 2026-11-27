@@ -272,4 +272,59 @@ assert.equal(filled.params.points.length, 4);
 assert.equal(filled.params.depth, 12.5);
 assert.ok(cam.applyPicks(bracket, { type: "drill", ids: [pk.pickables.find((x) => x.kind === "pocket").id] }, bstl).error.includes("does not take a pocket"));
 console.log(`picking: ${pk.pickables.length} pickables on the bracket, drill points ${filled.params.points.length}`);
+// the 3D playback's snapshots built in the background, a little at a time (the playback where it
+// was), held under the memory asked for; a long jump then the same stock as played from the bar
+{
+const knob = cam.exampleJob();
+const tilesAtEnd = (opts) => {
+  const o = cam.simOpen(knob, { solid: true, solid_h: 0.4, ...opts });
+  assert.ok(!o.error, o.error);
+  return o;
+};
+const cold = tilesAtEnd({});
+// (each tile's surface as the last call made it: the open's, then the seek's)
+const merged = (...rs) => {
+  const m = new Map();
+  for (const r of rs) for (const t of r.tiles) m.set(String(t.key), t.positions + "|" + t.indices);
+  return m;
+};
+const whole = merged(cold.solid, cam.simSeek(cold.segments));
+const o = tilesAtEnd({ snapshot_mb: 40 });
+assert.ok(o.solid.cost > 0 && o.solid.snapshots_wanted >= 2, JSON.stringify(o.solid.snapshots_wanted));
+let w, calls = 0;
+do {
+  w = cam.simWarm(o.solid.cost / 40);
+  assert.ok(!w.error, w.error);
+  calls++;
+} while (w.more && calls < 500);
+assert.ok(!w.more && calls > 5, `${calls} calls`);
+assert.equal(w.snapshots.length, w.wanted);
+assert.ok(w.mb <= 40, `${w.mb} MB`);
+const jumped = cam.simSeek(o.segments);
+assert.equal(jumped.pos, o.segments);
+assert.deepEqual(jumped.snapshots, w.snapshots);
+const after = merged(o.solid, jumped);
+assert.equal(after.size, whole.size);
+for (const [k, v] of whole) assert.ok(after.get(k) === v, `tile ${k}: the stock at the end, from a snapshot as from the bar`);
+console.log(`snapshots: ${w.snapshots.length} built in ${calls} calls, ${w.mb.toFixed(1)} MB`);
+// a later operation edited (the chamfer's tip deeper), its playback opened again, as the page
+// does after a plan: none of the old snapshots or the stock building them used; a jump past
+// the edit, before and after its own are built, the edited job's stock as played from the bar
+const edited = JSON.parse(JSON.stringify(knob));
+const ch = edited.programs[1].operations.find((op) => op.type === "flank_chamfer");
+ch.tip_offset = (ch.tip_offset || 0) - 0.4;
+const fresh = cam.simOpen(edited, { solid: true, solid_h: 0.4 });
+const freshEnd = merged(fresh.solid, cam.simSeek(fresh.segments));
+let differs = 0;
+for (const [k, v] of freshEnd) if (whole.get(k) !== v) differs++;
+assert.ok(differs > 0, "the edit changes the stock");
+const reopened = cam.simOpen(edited, { solid: true, solid_h: 0.4, snapshot_mb: 40 });
+const jumpedCold = merged(reopened.solid, cam.simSeek(reopened.segments));
+for (const [k, v] of freshEnd) assert.ok(jumpedCold.get(k) === v, `tile ${k}: edited, no snapshots yet`);
+assert.deepEqual(cam.simSeek(0).snapshots.length > 0, true, "passing ones kept on the way");
+do w = cam.simWarm(reopened.solid.cost / 10); while (w.more);
+const jumpedWarm = merged(reopened.solid, cam.simSeek(reopened.segments));
+for (const [k, v] of freshEnd) assert.ok(jumpedWarm.get(k) === v, `tile ${k}: edited, from its own snapshots`);
+console.log(`snapshots after an edit: ${differs} tiles changed by it, the jump past it as played from the bar`);
+}
 console.log("wasm OK");

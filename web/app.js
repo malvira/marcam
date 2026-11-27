@@ -29,7 +29,7 @@ const $ = (id) => document.getElementById(id);
 // Two workers, each with the engine: one plans and answers the editor (forms, picks, the
 // part), the other simulates (the batch simulation, the playback), so a simulation running
 // in the background never holds up an edit. A cancel ends the simulating one only.
-const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simClose", "gpuOpen", "gpuStats", "simSurface", "simHeavy"]);
+const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simWarm", "simClose", "gpuOpen", "gpuStats", "simSurface", "simHeavy"]);
 const workers = { main: null, sim: null };
 const TEST_SIM_DELAY = Math.max(0, +new URLSearchParams(location.search).get("testSimDelayMs") || 0);
 let nextId = 1;

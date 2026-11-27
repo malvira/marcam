@@ -97,6 +97,63 @@ try {
     }
     await js("document.getElementById('simClose').click(); true");
   }
+  // while the 3D stock's snapshots are built in the background (the knob's playback with its
+  // stock open, nothing else running), the camera orbits every frame and the playback is
+  // scrubbed every half second: the page smooth, each scrub answered within a step, every
+  // snapshot built
+  if (!OLD) {
+    await js("document.getElementById('example').value = 'knob'; document.getElementById('loadExample').click(); true");
+    await waitFor(() => js("document.body.dataset.state === 'done' && !!window.__marcam.state.result && window.__marcam.planIdle()"), "the knob planned", 240000);
+    await js("(() => { const m = window.__marcam.state.machining; if (!m.view.stock) window.__marcam.machining.toggle('stock'); return true; })()");
+    // (the knob plays whole in about a second, too short for snapshots: a snapshot here every
+    // 30 ms of playing, so that there are some to build)
+    await js("window.__marcam.state.machining.snapshotSavesMs = 30; true");
+    await js("document.getElementById('simOpen').click(); true");
+    await waitFor(() => js("(() => { const m = window.__marcam.state.machining; return !!(m.open && m.session && m.stockMesh && !m.busy && m.solid); })()"), "the knob's playback with its 3D stock", 240000);
+    await js("(() => { const m = window.__marcam.state.machining; if (m.playing) document.getElementById('simPlay').click(); return true; })()");
+    await waitFor(() => js("!!window.__marcam.state.machining.warming"), "the snapshots building", 240000);
+    await js(`(() => {
+      const v = window.__marcam.state.three, m = window.__marcam.state.machining;
+      const P = (window.__probe = { frames: [], long: [], waits: [], stop: false });
+      try { P.obs = new PerformanceObserver((l) => { for (const e of l.getEntries()) P.long.push(e.duration); }); P.obs.observe({ type: 'longtask' }); } catch {}
+      let k = 0, asked = null;
+      const tick = (t) => {
+        if (P.stop) return;
+        P.frames.push(t);
+        const c = v.camera, tg = v.controls?.target || { x: 0, y: 0, z: 0 };
+        const dx = c.position.x - tg.x, dy = c.position.y - tg.y;
+        const a = 0.02, cs = Math.cos(a), sn = Math.sin(a);
+        c.position.x = tg.x + dx * cs - dy * sn;
+        c.position.y = tg.y + dx * sn + dy * cs;
+        c.lookAt(tg.x, tg.y, tg.z);
+        // (a scrub every 30 frames, and how long it waited for the engine)
+        if (asked && !m.busy) { P.waits.push(t - asked); asked = null; }
+        if (k % 30 === 0 && m.session && !asked) {
+          const s = document.getElementById('simScrub');
+          s.value = String(Math.round(m.session.segments * (0.2 + 0.6 * ((k / 30) % 2)) + k));
+          s.dispatchEvent(new Event('input'));
+          asked = t;
+        }
+        k++;
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      return true; })()`);
+    const t0 = Date.now();
+    await waitFor(() => js("!window.__marcam.state.machining.warming"), "the snapshots built", 300000);
+    const builtIn = (Date.now() - t0) / 1000;
+    await js("window.__probe.stop = true; window.__probe.obs?.disconnect(); true");
+    const r = await js(`(() => { const P = window.__probe, m = window.__marcam.state.machining; const d = P.frames.slice(1).map((t, i) => t - P.frames[i]).sort((a, b) => a - b);
+      const q = (p) => d[Math.min(d.length - 1, Math.floor(p * d.length))] || 0;
+      return { frames: d.length, median: q(0.5), p95: q(0.95), worst: d[d.length - 1] || 0, long: P.long.length, longMax: Math.max(0, ...P.long), waitMax: Math.max(0, ...P.waits), scrubs: P.waits.length,
+        built: (m.snapshots || []).length, wanted: m.snapshotInfo?.wanted ?? -1, mb: m.snapshotInfo?.mb ?? 0 }; })()`);
+    console.log(`knob, snapshots built in the background (${builtIn.toFixed(1)} s, ${r.built}/${r.wanted}, ${r.mb.toFixed(1)} MB), orbiting and scrubbing: frames ${r.frames}  median ${r.median.toFixed(1)} ms  p95 ${r.p95.toFixed(1)}  worst ${r.worst.toFixed(0)}  long tasks ${r.long} (max ${r.longMax.toFixed(0)} ms)  scrubs ${r.scrubs}, longest wait ${r.waitMax.toFixed(0)} ms`);
+    if (GATE && (r.longMax > BUDGET.longTask || r.median > BUDGET.medianFrame || r.built !== r.wanted || r.wanted < 2)) {
+      failed = true;
+      console.log(`FAIL  snapshots in the background: longest task ${r.longMax.toFixed(0)} ms (budget ${BUDGET.longTask}), median frame ${r.median.toFixed(1)} ms (budget ${BUDGET.medianFrame}), ${r.built} of ${r.wanted} snapshots`);
+    }
+    await js("document.getElementById('simClose').click(); true");
+  }
   // while the toolpaths are planned again and the stock simulated in the background (an
   // edit of the knob), the camera orbits and the playback is scrubbed every frame: the page
   // must stay smooth

@@ -1976,8 +1976,21 @@ try {
     const pickSel = (id, v) => read(`(() => { const s = document.getElementById('${id}'); s.value = [...s.options].find((o) => o.value === '${v}')?.value ?? ''; s.dispatchEvent(new Event('change', { bubbles: true })); return s.value; })()`);
     await pickSel("treeAddKind", "rotary");
     await pickSel("treeAddFrom", "carry");
+    // (an operation type picked in the vise setup, then the tree drawn again as a plan landing
+    // draws it: the pick stays)
+    const vicePick = await pickSel("treeAddType", "contour");
+    await read("window.__marcam.tree.refresh().then(() => true)");
+    const viceKept = await read("document.getElementById('treeAddType').value");
+    const setupsBefore = await read("window.__marcam.tree.state.doc.setups.length");
+    // (while the setup is being added the add controls are greyed, the list the old setup's
+    // never offered; a person waits for them, the new setup's list in them)
+    await read("(() => { window.__greyed = { add: false }; const o = new MutationObserver(() => { const a = document.getElementById('treeAdd'); if (a?.disabled) window.__greyed.add = true; }); o.observe(document.getElementById('tree'), { subtree: true, attributes: true, childList: true }); window.__greyedObs = o; return true; })()");
     await click("#treeAddSetup");
+    await waitFor(() => read(`(() => { const t = window.__marcam.tree.state, d = t.doc; return !document.getElementById('treeAdd').disabled && !!d && d.setups.length === ${setupsBefore + 1} && t.setup === d.setups[d.setups.length - 1].id; })()`), "the new setup, its add controls back", 30000);
+    const greyed = await read("(window.__greyedObs.disconnect(), window.__greyed.add)");
     await settled();
+    const offered = await read("[...document.getElementById('treeAddType').options].map((o) => o.value)");
+    check("adding a setup: an operation type picked stays when the tree is drawn again; the add controls greyed until the new setup is there, then its own types", vicePick === "contour" && viceKept === "contour" && greyed && offered.includes("rotary_rough"), JSON.stringify({ vicePick, viceKept, greyed, offered: offered.length }));
     await pickSel("treeAddType", "rotary_rough");
     await click("#treeAdd");
     const lib = await waitFor(() => where("dialog[open] .tp-row", "3\.175"), "the library", 15000).catch(() => null);
@@ -2711,6 +2724,32 @@ try {
     })()`).then(JSON.parse);
     check("the playback's stock is the one in 3D, and the turned knob's finished body is round at the end (no fins: the outer surface within 0.5 mm all round in each slice)",
       st.solid && st.tiles > 0 && st.slices > 10 && st.worst < 0.5, JSON.stringify(st));
+    // (Mar: a 10 s scrub to the middle of the impeller) its snapshots built in the background
+    // while it sits; then the bar clicked near the start and at three quarters, as a person
+    // jumps: each there in a couple of seconds at most, and back at the end the same stock
+    {
+      const triangles = () => read("[...window.__marcam.machining.state.tiles.values()].reduce((n, t) => n + (t.geometry.index?.count || 0), 0)");
+      const endTris = await triangles();
+      await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !!m.snapshotInfo && !m.warming; })()"), "the snapshots built", 120000 * SLACK).catch(() => {});
+      const info = await read("JSON.stringify({ built: (window.__marcam.machining.state.snapshots || []).length, ...window.__marcam.machining.state.snapshotInfo })").then(JSON.parse);
+      const sr = await read("(() => { const r = document.getElementById('simScrub').getBoundingClientRect(); return [r.left, r.top + r.height / 2, r.width]; })()");
+      const jumps = [];
+      for (const f of [0.1, 0.75, 1]) {
+        const x = sr[0] + 6 + (sr[2] - 12) * f;
+        const t0 = Date.now();
+        await S("Input.dispatchMouseEvent", { type: "mouseMoved", x, y: sr[1] });
+        await S("Input.dispatchMouseEvent", { type: "mousePressed", x, y: sr[1], button: "left", clickCount: 1 });
+        await S("Input.dispatchMouseEvent", { type: "mouseReleased", x, y: sr[1], button: "left", clickCount: 1 });
+        const want = await read("+document.getElementById('simScrub').value");
+        await sleep(100);
+        await waitFor(() => read(`(() => { const m = window.__marcam.machining.state; return !m.busy && Math.abs(m.pos - ${want}) <= 2; })()`), `the playback at ${f}`, 60000 * SLACK).catch(() => {});
+        jumps.push({ f, want, s: +((Date.now() - t0) / 1000).toFixed(2) });
+      }
+      await sleep(800);
+      const backTris = await triangles();
+      check("long jumps in the playback: its snapshots built while it sits (no more than the memory allows), each jump there in 2 s, back at the end the same stock",
+        info.built === info.wanted && info.built >= 2 && info.mb <= 256 && jumps.every((j) => j.s < 2 * SLACK) && backTris === endTris, JSON.stringify({ info, jumps, endTris, backTris }));
+    }
     await clean("the playback in 3D");
   }
   // ---------------------------------------------------------------- the holder check's near miss

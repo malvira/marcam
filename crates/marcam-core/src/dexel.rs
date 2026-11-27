@@ -406,6 +406,17 @@ impl Dexel {
         })
     }
 
+    /// The memory it holds (bytes, about): its rays and its colours.
+    pub fn bytes(&self) -> usize {
+        let rays: usize = self
+            .rays
+            .iter()
+            .flatten()
+            .map(|r| 24 + 8 * r.capacity())
+            .sum();
+        rays + self.cut_op.as_ref().map_or(0, |o| 2 * o.len())
+    }
+
     /// Keep which operation last cut at each grid point (the playback's colours by operation);
     /// [`SurfaceMesh::ops`] then says it at each vertex.
     pub fn track_ops(&mut self) {
@@ -932,6 +943,22 @@ pub fn sweep_box(
     Some((lo, hi))
 }
 
+/// A move's length as the tool's tip travels it (the arc at its radius for turns), from `from`.
+pub fn seg_len(seg: &crate::sim::Segment, from: [f64; 3]) -> f64 {
+    match seg.index_a {
+        Some(_) => (0..3)
+            .map(|k| (seg.to[k] - from[k]).powi(2))
+            .sum::<f64>()
+            .sqrt(),
+        None => {
+            let arc = 0.5 * (from[1] + seg.to[1]).abs() * (seg.to[2] - from[2]).to_radians().abs();
+            ((seg.to[0] - from[0]).powi(2) + (seg.to[1] - from[1]).powi(2))
+                .sqrt()
+                .max(arc)
+        }
+    }
+}
+
 /// Replays `segs` (in order) through the stock: feed moves take the tool out of it, sampled
 /// at most `step` mm apart; rapids must pass clear of it (`slack` mm narrower and higher).
 pub fn replay(
@@ -951,20 +978,7 @@ pub fn replay(
         };
         // tip and direction at a parameter along the move
         let at = |f: f64| seg_at(seg, from, f);
-        // its length as the tool's tip travels (the arc at its radius for turns)
-        let len = match seg.index_a {
-            Some(_) => (0..3)
-                .map(|k| (seg.to[k] - from[k]).powi(2))
-                .sum::<f64>()
-                .sqrt(),
-            None => {
-                let arc =
-                    0.5 * (from[1] + seg.to[1]).abs() * (seg.to[2] - from[2]).to_radians().abs();
-                ((seg.to[0] - from[0]).powi(2) + (seg.to[1] - from[1]).powi(2))
-                    .sqrt()
-                    .max(arc)
-            }
-        };
+        let len = seg_len(seg, from);
         let n = ((len / step).ceil() as usize).max(1);
         let d = len / n as f64;
         if seg.rapid {

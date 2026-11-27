@@ -1021,6 +1021,64 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     return { segment: k, pos: m.pos };
   }
 
+  // ---- the 3D stock's snapshots, built in the background (Mar: a 10 s scrub to the middle
+  // of the impeller): a long jump plays on from the nearest, the job's replay cost cut in
+  // equal parts. In the simulating worker, a little at a time while nothing else runs there
+  // or anywhere (planning, the background simulation; its 3D extras may go on) and nothing
+  // plays: a scrub waits a step at most.
+  const WARM_MS = 40;
+  const SNAPSHOT_SAVES_MS = 750;
+  const EXTRAS = new Set(["simSurface", "simHeavy"]);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  /** The memory the snapshots may hold, MB: by the device's (where the browser says it). */
+  function snapshotMb() {
+    const gb = navigator.deviceMemory;
+    return !gb || gb >= 8 ? 256 : gb >= 4 ? 160 : gb >= 2 ? 96 : 48;
+  }
+  async function warmSnapshots(session) {
+    if (m.warming === session) return;
+    m.warming = session;
+    // (the budget each call plays, in the engine's cost: so that a call takes about WARM_MS;
+    // and the rate it went at, cost per ms: a snapshot no closer than SNAPSHOT_SAVES_MS of
+    // playing to the last, none in a job quicker than that to play whole)
+    let budget = (session.solid?.cost || 0) / 2000 || 1e5;
+    // (the rate from the median of the first calls', then kept: it varies call to call by a
+    // half, and the snapshots' places moved with it)
+    const rates = [];
+    let rate = null;
+    try {
+      while (m.session === session && m.stock && m.solid) {
+        // (not behind the background simulation's 3D extras, the material left in 3D and the
+        // overload check: minutes on the impeller, in a worker of their own)
+        const busy = m.busy || m.playing || document.hidden || (window.__marcam.inFlight?.() || []).some((c) => !EXTRAS.has(c.cmd));
+        if (busy) {
+          await sleep(250);
+          continue;
+        }
+        const t0 = performance.now();
+        const asked = Math.max(1, Math.round(budget));
+        // (m.snapshotSavesMs: a test's knob, the knob's short job given snapshots to build)
+        const { result } = await engine("simWarm", asked, rate ? { min_spacing: rate * (m.snapshotSavesMs ?? SNAPSHOT_SAVES_MS) } : {});
+        const ms = performance.now() - t0;
+        // (a call that played little says little: messages and setting up are most of it)
+        if (ms > 10 && rate == null) {
+          rates.push(asked / ms);
+          if (rates.length === 5) rate = rates.sort((a, b) => a - b)[2];
+        }
+        if (m.session !== session) break;
+        m.snapshots = result.snapshots || [];
+        m.snapshotInfo = { wanted: result.wanted, mb: result.mb, ms, rate };
+        if (!result.more) break;
+        budget *= Math.min(4, Math.max(0.25, WARM_MS / Math.max(1, ms)));
+        await sleep(15);
+      }
+    } catch {
+      // the playback gone with its worker (cancelled, a new plan): made again when opened
+    } finally {
+      if (m.warming === session) m.warming = null;
+    }
+  }
+
   const SEEK_CHUNK = 4000;
   async function seek(n) {
     if (!m.session) return;
@@ -1053,7 +1111,10 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         const from = goal < m.pos ? 0 : m.pos;
         // (back: the engine starts again from the top, run to the place in one go, so no
         // state on the way there is drawn; Mar's scrub glitch)
-        const want = from === 0 && goal < m.pos ? goal : Math.min(goal, from + SEEK_CHUNK);
+        // (on, with a snapshot built further on than a step: there in one go, the engine
+        // playing from the nearest snapshot)
+        const ahead = m.solid && goal > from && (m.snapshots || []).some((s) => s > from + SEEK_CHUNK && s <= goal);
+        const want = (from === 0 && goal < m.pos) || ahead ? goal : Math.min(goal, from + SEEK_CHUNK);
         const before = m.pos;
         let result;
         if (m.gpu) {
@@ -1073,6 +1134,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         if (!m.session) break;
         if (m.session !== session) continue;
         if (!result) break;
+        if (result.snapshots) m.snapshots = result.snapshots;
         applyRows(result);
         // (the engine stopped short, at the end of the program: done; short of the place
         // otherwise, on with the next step: a scrub was left stopped half-way, the playhead
@@ -1150,7 +1212,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.autoOpening = !!opts.auto;
       let result;
       try {
-        ({ result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup, machine: typeof machine === "string" ? machine : null, path_only: !stock, solid: stock }, state.mesh));
+        ({ result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup, machine: typeof machine === "string" ? machine : null, path_only: !stock, solid: stock, snapshot_mb: snapshotMb() }, state.mesh));
       } finally {
         m.autoOpening = false;
       }
@@ -1160,6 +1222,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       if (reopening) m.swapping = true;
       m.session = result;
       m.stock = stock;
+      m.snapshots = [];
       m.xyz = result.kind === "xyz";
       // (a vise's work never turned: no A left from a rotary playback before it, which with
       // nothing to play was never placed again; the knob in a vise drawn turned)
@@ -1260,6 +1323,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       // the stock's numbers (material left, gouges, rapids through it): the batch simulation,
       // in the background
       window.__marcam.statsInBackground?.();
+      // (and the 3D stock's snapshots, built when nothing else runs)
+      if (m.solid) warmSnapshots(result);
     } catch (e) {
       // (the project went meanwhile, or a newer plan: nothing to say)
       if (e.message === "superseded" || e.message === "replanning") return;
