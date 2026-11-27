@@ -52,6 +52,87 @@ fn leave_xy() -> f64 {
     LEAVE_XY.with(|m| m.get())
 }
 
+/// The tool's body above its flutes, kept clear of the stock as it stands (adaptive roughing
+/// on the 4th axis, indexed: see [`ReachGuard`]): each part's radius and how far above the tip
+/// it starts, and the clearance kept round it.
+#[derive(Clone, Debug)]
+pub struct Reach {
+    pub parts: Vec<(f64, f64)>,
+    pub clear: f64,
+}
+
+thread_local! {
+    static REACH: std::cell::RefCell<Option<Reach>> = const { std::cell::RefCell::new(None) };
+    /// What the reach left: (cells of material it kept the tool from, the deepest it reached).
+    static REACH_LEFT: std::cell::Cell<(usize, f64)> = const { std::cell::Cell::new((0, f64::INFINITY)) };
+}
+
+/// [`Reach`] kept by [`adaptive_rough`] while it lives: a level cut only where the shank and
+/// the holder over it clear the stock as the levels above left it, and the moves between
+/// cuts high enough for them. [`ReachGuard::left`] says what that left.
+pub struct ReachGuard;
+
+impl ReachGuard {
+    pub fn set(r: Option<Reach>) -> ReachGuard {
+        REACH.with(|m| *m.borrow_mut() = r);
+        REACH_LEFT.with(|m| m.set((0, f64::INFINITY)));
+        ReachGuard
+    }
+
+    /// The material the reach kept the tool from (grid cells, as the levels found them), and
+    /// the lowest level it cut.
+    pub fn left(&self) -> (usize, f64) {
+        REACH_LEFT.with(|m| m.get())
+    }
+}
+
+impl Drop for ReachGuard {
+    fn drop(&mut self) {
+        REACH.with(|m| *m.borrow_mut() = None);
+    }
+}
+
+/// Each cell's highest value within `radius` of it (a disk), on a grid `h` apart: row by row,
+/// each row's sliding maximum over the disk's width at that offset.
+fn disk_max(v: &[f64], nx: usize, ny: usize, h: f64, radius: f64) -> Vec<f64> {
+    let k = (radius / h).floor() as isize;
+    let mut out = vec![f64::NEG_INFINITY; v.len()];
+    let mut row = vec![f64::NEG_INFINITY; nx];
+    for dj in -k..=k {
+        let w = (((k * k - dj * dj) as f64).sqrt().floor()) as usize;
+        for j in 0..ny {
+            let jj = j as isize + dj;
+            if jj < 0 || jj >= ny as isize {
+                continue;
+            }
+            let src = &v[jj as usize * nx..(jj as usize + 1) * nx];
+            // (sliding maximum over i - w ..= i + w: a monotone queue)
+            let mut q: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+            let mut next = 0;
+            for (i, r) in row.iter_mut().enumerate() {
+                while next < nx && next <= i + w {
+                    while q.back().is_some_and(|&b| src[b] <= src[next]) {
+                        q.pop_back();
+                    }
+                    q.push_back(next);
+                    next += 1;
+                }
+                while q.front().is_some_and(|&f| f + w < i) {
+                    q.pop_front();
+                }
+                *r = q.front().map_or(f64::NEG_INFINITY, |&f| src[f]);
+            }
+            let dst = &mut out[j * nx..(j + 1) * nx];
+            for (d, &r) in dst.iter_mut().zip(&row) {
+                if r > *d {
+                    *d = r;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// [`MATERIAL`] set while it lives (cleared when it goes, on an error too).
 pub struct MaterialGuard;
 
@@ -2145,6 +2226,7 @@ fn emit_adaptive(
     plunge: f64,
     ramp: f64,
     climb: bool,
+    body: Option<&dyn Fn(f64, f64) -> f64>,
 ) {
     use crate::strategy::adaptive::Step;
     // (each way in from just above what is there: the level above, or, where that level
@@ -2217,6 +2299,37 @@ fn emit_adaptive(
                 for i in 1..=(n + (n - k) % n) {
                     let q = lp[(k + i) % n];
                     b.line3(q[0], q[1], z, UP, feed);
+                }
+            }
+            // (a link at depth goes where the tool's centre was never checked for its shank and
+            // holder (the cut's footprint round the checked centres): over it, where they need
+            // the tool higher, the link is made at that height, the tool down again after it)
+            Step::Link(pts) if body.is_some() && pts.len() >= 2 => {
+                let need = body.expect("matched");
+                let mut hi = f64::NEG_INFINITY;
+                for w in pts.windows(2) {
+                    let len = (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]);
+                    let n = (len / 0.1).ceil().max(1.0) as usize;
+                    for k in 0..=n {
+                        let t = k as f64 / n as f64;
+                        hi = hi.max(need(
+                            w[0][0] + (w[1][0] - w[0][0]) * t,
+                            w[0][1] + (w[1][1] - w[0][1]) * t,
+                        ));
+                    }
+                }
+                if hi <= z + 1e-9 {
+                    for q in pts.iter().skip(1) {
+                        b.line3(q[0], q[1], z, UP, feed);
+                    }
+                } else {
+                    let (a, e) = (pts[0], pts[pts.len() - 1]);
+                    let up = hi + 0.5;
+                    b.line3(a[0], a[1], up, UP, feed);
+                    for q in pts.iter().skip(1) {
+                        b.line3(q[0], q[1], up, UP, feed);
+                    }
+                    b.line3(e[0], e[1], z, UP, plunge);
                 }
             }
             Step::Cut(pts) | Step::Link(pts) => {
@@ -2315,6 +2428,7 @@ fn adaptive_pocket(
             op.plunge_feed,
             op.ramp,
             climb,
+            None,
         );
         for lp in &laps {
             enter(
@@ -2444,6 +2558,46 @@ pub fn adaptive_rough(
     // the levels cut it: a way in comes down by rapid only to just above what stands under
     // the tool there
     let mut mat_top: Vec<f64> = top_at.clone();
+    // (Mar's impeller, indexed: each angle no deeper than the shank cleared the highest stock
+    // anywhere, deep pockets between low walls left uncut) the tool's body above the flutes
+    // kept clear of the stock round it as it stands at each level: the range's cells as the
+    // levels above cut them, the stock round the range as it was
+    let reach = REACH.with(|m| m.borrow().clone());
+    let pad = reach.as_ref().map_or(0, |rc| {
+        let far = rc.parts.iter().map(|p| p.0).fold(0.0, f64::max) + rc.clear + 2.0 * h;
+        (far / h).ceil() as usize + 1
+    });
+    let (ex, ey) = (g.nx + 2 * pad, g.ny + 2 * pad);
+    let mut ext: Vec<f64> = Vec::new();
+    if reach.is_some() {
+        ext = vec![f64::NEG_INFINITY; ex * ey];
+        let [sx0, sx1] = stock_x.unwrap_or([stock.min[0], stock.max[0]]);
+        for j in 0..ey {
+            for i in 0..ex {
+                let p = [
+                    g.x0 + (i as f64 - pad as f64) * h,
+                    g.y0 + (j as f64 - pad as f64) * h,
+                ];
+                let inside = p[0] >= sx0.min(stock.min[0])
+                    && p[0] <= sx1.max(stock.max[0])
+                    && p[1] >= stock.min[1]
+                    && p[1] <= stock.max[1];
+                if inside {
+                    ext[j * ex + i] = stock_top(p[0], p[1]).min(stock.max[2]);
+                }
+            }
+        }
+    }
+    // (the stock as the real tool leaves it, for the reach: the tool is planned grown by the
+    // walls' stock, and its footprint marks as cut a ring that wide it does not cut, at every
+    // edge of a level's cut; the holder grazed one)
+    let mut real_top: Vec<f64> = if reach.is_some() {
+        top_at.clone()
+    } else {
+        Vec::new()
+    };
+    let mut reach_left = 0usize;
+    let mut reach_low = f64::INFINITY;
     for z in levels(top, floor, op.step_down.max(d * 0.05)) {
         if crate::budget::over() {
             break;
@@ -2462,7 +2616,7 @@ pub fn adaptive_rough(
                 *o = false;
             }
         }
-        let allowed: Vec<bool> = surf
+        let mut allowed: Vec<bool> = surf
             .iter()
             .zip(&near_tall)
             .map(|(&s, &dt)| s <= z + 1e-9 && dt > r)
@@ -2473,7 +2627,46 @@ pub fn adaptive_rough(
             .zip(&part_at)
             .map(|((&t, &u), &pt)| t > z + 1e-6 && u < z + layer && pt < z + 1e-6)
             .collect();
+        // (the lowest the tip may go at each cell for the shank and the holder to clear the
+        // stock round it: none needed for a part wholly above everything left)
+        let mut need = vec![f64::NEG_INFINITY; n];
+        if let Some(rc) = &reach {
+            for j in 0..g.ny {
+                let row = (j + pad) * ex + pad;
+                ext[row..row + g.nx].copy_from_slice(&real_top[j * g.nx..(j + 1) * g.nx]);
+            }
+            let highest = ext.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            // (the grid's own cells on top of the clearance: a cut's edge, and a level's, known
+            // to a cell; the holder grazed a wall's edge 0.9 mm nearer than the grid said)
+            let (out, up) = (rc.clear + 2.0 * h, rc.clear + h);
+            for &(radius, above) in &rc.parts {
+                if highest - above + up <= z + 1e-9 {
+                    continue;
+                }
+                let m = disk_max(&ext, ex, ey, h, radius + out);
+                for j in 0..g.ny {
+                    for i in 0..g.nx {
+                        let v = m[(j + pad) * ex + i + pad] - above + up;
+                        let c = j * g.nx + i;
+                        if v > need[c] {
+                            need[c] = v;
+                        }
+                    }
+                }
+            }
+            for c in 0..n {
+                if allowed[c] && need[c] > z + 1e-9 {
+                    allowed[c] = false;
+                    if stock_here[c] {
+                        reach_left += 1;
+                    }
+                }
+            }
+        }
         let cl = clear_level(g, &allowed, &stock_here, &mut open, params, None);
+        if cl.cut.iter().any(|&c| c) {
+            reach_low = reach_low.min(z);
+        }
         plunges += cl.plunges;
         let standing = |x: f64, y: f64, extra: f64| -> f64 {
             // the cells under the tool (and a helix's circle), a cell more for the grid
@@ -2487,16 +2680,33 @@ pub fn adaptive_rough(
                 (((y + rr - g.y0) / g.h).ceil().max(0.0) as usize).min(g.ny - 1),
             );
             let mut hi = f64::NEG_INFINITY;
+            // (and high enough for the shank and the holder over it: see `need`)
+            let mut body = f64::NEG_INFINITY;
             for j in j0..=j1 {
                 for i in i0..=i1 {
                     let c = j * g.nx + i;
                     let p = g.point(c);
                     if (p[0] - x).dhypot(p[1] - y) <= rr {
                         hi = hi.max(mat_top[c]);
+                        body = body.max(need[c]);
                     }
                 }
             }
-            hi + 0.5
+            (hi + 0.5).max(body)
+        };
+        // (the lowest the tip may go at a point for the shank and the holder: the cells round it)
+        let body_at = |x: f64, y: f64| -> f64 {
+            let (i, j) = (((x - g.x0) / g.h).round(), ((y - g.y0) / g.h).round());
+            let mut hi = f64::NEG_INFINITY;
+            for dj in -1..=1 {
+                for di in -1..=1 {
+                    let (ii, jj) = (i as isize + di, j as isize + dj);
+                    if ii >= 0 && jj >= 0 && (ii as usize) < g.nx && (jj as usize) < g.ny {
+                        hi = hi.max(need[jj as usize * g.nx + ii as usize]);
+                    }
+                }
+            }
+            hi
         };
         emit_adaptive(
             b,
@@ -2508,12 +2718,56 @@ pub fn adaptive_rough(
             op.plunge_feed,
             op.ramp_angle,
             climb,
+            reach
+                .is_some()
+                .then_some(&body_at as &dyn Fn(f64, f64) -> f64),
         );
         for (c, &cut) in cl.cut.iter().enumerate() {
             if cut {
                 mat_top[c] = mat_top[c].min(z);
             }
         }
+        if reach.is_some() {
+            // (cut, for the reach, only where the real tool surely went: discs round its
+            // centres along the level's moves, as wide as the real tool (the planned one less
+            // the walls' stock) less a cell and a half. A cell counted cut from two passes
+            // that only just met left a fin a level high between them, and the holder grazed
+            // it; the planned footprint marks the walls' stock as cut too)
+            use crate::strategy::adaptive::Step;
+            let rr = (r - op.leave_xy.max(0.0) - 1.5 * h).max(0.0);
+            let mut surely = vec![false; n];
+            let mut mark = |q: [f64; 2], rad: f64| g.disc(q, rad, |c| surely[c] = true);
+            for st in &cl.steps {
+                match st {
+                    Step::Down(q) | Step::Plunge(q) => mark(*q, rr),
+                    Step::Helix { centre, radius, .. } => mark(*centre, radius + rr),
+                    Step::Cut(pts) | Step::Link(pts) => {
+                        for w in pts.windows(2) {
+                            let len = (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]);
+                            let k = (len / (0.5 * h)).ceil().max(1.0) as usize;
+                            for i in 0..=k {
+                                let t = i as f64 / k as f64;
+                                mark(
+                                    [
+                                        w[0][0] + (w[1][0] - w[0][0]) * t,
+                                        w[0][1] + (w[1][1] - w[0][1]) * t,
+                                    ],
+                                    rr,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            for c in 0..n {
+                if surely[c] {
+                    real_top[c] = real_top[c].min(z);
+                }
+            }
+        }
+    }
+    if reach.is_some() {
+        REACH_LEFT.with(|m| m.set((reach_left, reach_low)));
     }
     if plunges > 0 {
         b.warnings.push(format!(

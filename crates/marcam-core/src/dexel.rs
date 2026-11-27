@@ -1058,6 +1058,19 @@ pub fn replay(
     out
 }
 
+/// The tool's poses along a move (tip and direction, the part's frame), at most `step` mm
+/// of the tip's travel apart, both ends included (only its end when where it starts is not
+/// known).
+pub fn seg_poses(seg: &crate::sim::Segment, step: f64) -> Vec<([f64; 3], [f64; 3])> {
+    let Some(from) = seg.from else {
+        return vec![seg_at(seg, seg.to, 1.0)];
+    };
+    let n = ((seg_len(seg, from) / step.max(1e-3)).ceil() as usize).max(1);
+    (0..=n)
+        .map(|k| seg_at(seg, from, k as f64 / n as f64))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

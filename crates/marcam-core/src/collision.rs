@@ -185,6 +185,9 @@ pub struct CollisionReport {
     pub near_first: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub near_line: Option<usize>,
+    /// Every collision counted (up to [`MAX_COUNTED`]), for [`CollisionReport::keep`].
+    #[serde(skip)]
+    pub all: Vec<Collision>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -210,8 +213,19 @@ impl CollisionReport {
         self.count += 1;
         self.max_depth = self.max_depth.max(c.depth);
         if self.collisions.len() < MAX_LISTED {
-            self.collisions.push(c);
+            self.collisions.push(c.clone());
         }
+        self.all.push(c);
+    }
+
+    /// Only the collisions `keep` says (the others found clear after all): counted, listed
+    /// and the deepest again. (Past [`MAX_COUNTED`] the moves not counted stay as said.)
+    pub fn keep(&mut self, keep: impl Fn(&Collision) -> bool) {
+        let before = self.all.len();
+        self.all.retain(|c| keep(c));
+        self.count -= before - self.all.len();
+        self.max_depth = self.all.iter().map(|c| c.depth).fold(0.0, f64::max);
+        self.collisions = self.all.iter().take(MAX_LISTED).cloned().collect();
     }
 }
 

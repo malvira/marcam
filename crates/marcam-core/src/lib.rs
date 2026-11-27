@@ -2303,34 +2303,23 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     // (Mar's impeller on a 24 mm bar, roughed at each angle to Z 0 with a
                     // 3.175 x 12 tool: its holder, 17 mm up the tool, went 6.7 mm into the bar
                     // round the pocket, 6845 moves; its shank, deeper than the flutes, rubbing
-                    // the pocket's walls) no deeper than the flutes reach (and the holder
-                    // clears) from the highest stock left at this angle, by twice the near-miss
-                    // margin (no near miss either); what is under that is left for the
-                    // operations after, and said
-                    if let Some(body) = job.tool(o.tool).map(collision::ToolBody::of) {
-                        let top =
-                            hm.z.iter()
-                                .copied()
-                                .filter(|z| z.is_finite())
-                                .fold(f64::NEG_INFINITY, f64::max);
-                        let lowest =
-                            top - body.stickout.min(body.flute_length) + 2.0 * collision::NEAR_MISS;
-                        if top.is_finite() && oi.floor < lowest {
-                            oi.floor = lowest;
-                            let what = if body.flute_length < body.stickout {
-                                format!(
-                                    "the shank, above T{}'s {:.1} mm of flutes,",
-                                    o.tool, body.flute_length
-                                )
-                            } else {
-                                format!("the holder, {:.1} mm up T{},", body.stickout, o.tool)
-                            };
-                            b.warnings.push(format!(
-                                "indexed roughing at A {index:.1}: no deeper than Z {lowest:.2} (asked {:.2}): {what} would rub the walls of the cut below that; the rest is left for the operations after",
-                                o.floor
-                            ));
+                    // the pocket's walls) the shank above the flutes and the holder kept twice
+                    // the near-miss margin clear of the stock round them as each level finds
+                    // it: a region cut as deep as that allows there (a pocket between walls
+                    // cut low before it, deeper than one under the bar's full height); what is
+                    // under that is left for the operations after, and said
+                    let body = job.tool(o.tool).map(collision::ToolBody::of);
+                    let reach = body.map(|body| {
+                        let mut parts = vec![(body.holder_radius, body.stickout)];
+                        if body.flute_length < body.stickout {
+                            parts.push((body.shank_radius, body.flute_length));
                         }
-                    }
+                        strategy::three_axis::Reach {
+                            parts,
+                            clear: 2.0 * collision::NEAR_MISS,
+                        }
+                    });
+                    let reach_guard = strategy::three_axis::ReachGuard::set(reach);
                     strategy::three_axis::adaptive_rough(
                         &mut b,
                         &dc,
@@ -2342,6 +2331,29 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         &oi,
                     )
                     .map_err(err)?;
+                    let (kept_from, lowest) = reach_guard.left();
+                    drop(reach_guard);
+                    if kept_from > 0 {
+                        if let Some(body) = body {
+                            let what = if body.flute_length < body.stickout {
+                                format!(
+                                    "the shank, above T{}'s {:.1} mm of flutes,",
+                                    o.tool, body.flute_length
+                                )
+                            } else {
+                                format!("the holder, {:.1} mm up T{},", body.stickout, o.tool)
+                            };
+                            let reached = if lowest.is_finite() {
+                                format!(" (cut down to Z {lowest:.2} where it clears)")
+                            } else {
+                                String::new()
+                            };
+                            b.warnings.push(format!(
+                                "indexed roughing at A {index:.1}: material left where {what} would come within {:.1} mm of the stock round it{reached}; the rest is left for the operations after",
+                                2.0 * collision::NEAR_MISS
+                            ));
+                        }
+                    }
                     if budget::over() {
                         break;
                     }
@@ -3566,7 +3578,13 @@ pub fn collision_check(
             b
         })
     };
-    let near = collision_pass(job, tps, &fat)?;
+    let mut near = collision_pass(job, tps, &fat)?;
+    // (the shank's and the holder's contacts with the stock, confirmed in 3D: a round bar of
+    // its own, nothing carried in)
+    if job.stock_box.is_none() && job.carried.is_none() && job.stock.section.is_none() {
+        confirm_in_3d(job, tps, &mut out, &bodies);
+        confirm_in_3d(job, tps, &mut near, &fat);
+    }
     for (rep, n) in out.iter_mut().zip(near) {
         if rep.count == 0 && n.count > 0 {
             rep.near = n.count;
@@ -3582,6 +3600,86 @@ pub fn collision_check(
         }
     }
     Ok(out)
+}
+
+/// How much wider and lower the shank and the holder are made for [`confirm_in_3d`] (mm).
+const CONFIRM_MARGIN: f64 = 0.25;
+
+/// The moves the radial check finds the shank or the holder in the stock, tested again on a
+/// tri-dexel of the stock as the moves before them cut it. (Mar's impeller roughed at six
+/// angles: a ray from the axis through a pocket cut at another angle meets the stock past it
+/// again, and the radial map, one radius a ray, puts back what the pocket took; 3,716
+/// "collisions", none of them in the stock.) A move is let go only where the shank and the
+/// holder, made [`CONFIRM_MARGIN`] wider and lower, hold none of the stock at any pose along
+/// it, 0.25 mm apart; any doubt keeps it. The chuck and the tailstock are not the stock: those
+/// stay.
+fn confirm_in_3d(
+    job: &Job,
+    tps: &[Toolpath],
+    reps: &mut [collision::CollisionReport],
+    bodies: &dyn Fn(u32) -> Option<collision::ToolBody>,
+) {
+    use collision::Contact;
+    use std::collections::HashSet;
+    let on_stock = |c: &collision::Collision| matches!(c.contact, Contact::Shank | Contact::Holder);
+    let flagged: HashSet<(usize, usize)> = reps
+        .iter()
+        .enumerate()
+        .flat_map(|(p, r)| {
+            r.all
+                .iter()
+                .filter(|c| on_stock(c))
+                .map(move |c| (p, c.move_index))
+        })
+        .collect();
+    if flagged.is_empty() {
+        return;
+    }
+    phase("holder and shank check, in 3D");
+    let segs = sim::segments(tps);
+    let key = |s: &sim::Segment| (s.program as usize, s.move_index);
+    let Some(last) = segs.iter().rposition(|s| flagged.contains(&key(s))) else {
+        return;
+    };
+    let mut dx = dexel::Dexel::bar(job.stock.radius, job.stock.length, DEXEL_H);
+    let tool = |t: u32| tool_solid(job, t);
+    let m = CONFIRM_MARGIN;
+    let mut clear: HashSet<(usize, usize)> = HashSet::new();
+    let mut done = 0;
+    for (k, s) in segs.iter().enumerate().take(last + 1) {
+        if !flagged.contains(&key(s)) {
+            continue;
+        }
+        dexel::replay(&mut dx, &segs[done..k], &tool, 0.25, 0.0);
+        done = k;
+        let Some(b) = s.tool.and_then(bodies) else {
+            continue;
+        };
+        let holder = dexel::ToolSolid {
+            radius: b.holder_radius + m,
+            ball: false,
+            height: b.holder_length + m,
+            cone: 0.0,
+        };
+        let shank_len = b.stickout - b.flute_length;
+        let shank = dexel::ToolSolid {
+            radius: b.shank_radius + m,
+            ball: false,
+            height: shank_len + m,
+            cone: 0.0,
+        };
+        let touches = dexel::seg_poses(s, 0.25).into_iter().any(|(tip, d)| {
+            let at = |l: f64| [0, 1, 2].map(|i| tip[i] + d[i] * l);
+            dx.inside(&holder, at(b.stickout - m), d) > 0.0
+                || (shank_len > 0.0 && dx.inside(&shank, at(b.flute_length - m), d) > 0.0)
+        });
+        if !touches {
+            clear.insert(key(s));
+        }
+    }
+    for (p, r) in reps.iter_mut().enumerate() {
+        r.keep(|c| !(on_stock(c) && clear.contains(&(p, c.move_index))));
+    }
 }
 
 /// One pass of [`collision_check`] with the tools' bodies as `bodies` says.

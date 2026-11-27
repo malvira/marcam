@@ -1286,11 +1286,17 @@ try {
       }
     const status = await read("document.getElementById('status').textContent");
     const gcode = await read("(async () => { const t = document.getElementById('gcode').value; const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(b)].slice(0, 8).map((x) => x.toString(16).padStart(2, '0')).join('') + ' ' + t.length; })()");
-    return { tab, ms, playMs, gap: Math.round(gap), px, status, gcode, fills, ringAfter };
+    // (the holder check as the results show it: once its 3D confirmation is done)
+    await waitFor(() => read("!!document.getElementById('holderCheck')"), `${what}: the holder check`, 120000 * SLACK).catch(() => {});
+    const holder = await read("document.getElementById('holderCheck')?.textContent || ''");
+    return { tab, ms, playMs, gap: Math.round(gap), px, status, gcode, fills, ringAfter, holder };
   };
   const many = await indexedRun("workers");
   check("Indexed roughing (3+1) on a bladed part: its cuts on the screen within 60 s (the angles found across the workers)", !!many.tab && many.px > 400 && many.ms < 60000 * SLACK, JSON.stringify(many));
   check("the page answers while it plans (no frame held over 1 s)", many.gap < 1000 * SLACK, `${many.gap} ms`);
+  // (Mar's impeller: the shank and the holder kept 1 mm clear region by region, deep pockets
+  // roughed where they clear) no collision of the holder or the shank on the screen
+  check("Indexed roughing on the bladed part: the holder check shows no collision (clear, or a near miss at most)", /Holder\/shank check: (clear|no collision)/.test(many.holder) && !/Holder\/shank collision/.test(many.holder), many.holder.slice(0, 200));
   check("the play button (▶) ready within about a second of the plan landing (its toolpaths handed to the simulation, not planned again)", many.playMs != null && many.playMs < 1500 * SLACK, `${many.playMs} ms`);
   const nums = many.fills.filter((f) => typeof f === "number");
   check("while it plans, the operation's progress wheel is on the screen and fills (angle by angle), gone when its toolpath shows",

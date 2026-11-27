@@ -339,13 +339,21 @@ fn a_holder_just_clear_of_the_stock_is_a_near_miss() {
     assert_eq!((clear.count, clear.near), (0, 0), "{clear:?}");
     let touching = held(9.0);
     assert!(touching.count > 0 && touching.near == 0, "{touching:?}");
+    // (the radial check's contacts are confirmed in 3D and let go only when clear with room to
+    // spare: the near misses' with the bodies 0.5 mm fatter and 0.25 more) the holder 0.35 mm
+    // clear of the bar: still a near miss; 0.1 mm into it: still a collision
+    let close = held(9.85);
+    assert_eq!(close.count, 0, "{:?}", close.collisions.first());
+    assert!(close.near > 0, "0.35 mm clear: a near miss {close:?}");
+    let grazing = held(9.4);
+    assert!(grazing.count > 0, "0.1 mm in: a collision {grazing:?}");
 }
 
-/// Indexed roughing deeper than the tool reaches: no deeper, at each angle, than its flutes
-/// (and its holder) clear the stock round the cut, the rest left and said (Mar's impeller on
-/// a 24 mm bar, roughed to Z 0 with a 3.175 x 12 tool: 6845 moves with the holder up to
+/// Indexed roughing deeper than the tool reaches: at each angle and level only where the shank
+/// and the holder clear the stock round the cut by 1 mm, the rest left and said (Mar's impeller
+/// on a 24 mm bar, roughed to Z 0 with a 3.175 x 12 tool: 6845 moves with the holder up to
 /// 6.7 mm in the bar). The finned hub on a 14 mm bar, roughed at 4 angles to Z 2 with a
-/// 2 x 8 mm tool: no collision and no near miss, each angle's floor raised and said.
+/// 2 x 8 mm tool: no collision and no near miss, down to the floor where it clears.
 #[test]
 fn indexed_roughing_goes_no_deeper_than_the_tool_reaches() {
     let text = r#"
@@ -422,12 +430,66 @@ operations = ["op1"]
     let m = builtin_machine("makera-z1-4axis").unwrap();
     let rep = &collision_check(&job, &tps, &m.post).unwrap()[0];
     assert_eq!((rep.count, rep.near), (0, 0), "{rep:?}");
-    let capped = tps[0]
+    // (per region now: each angle as deep as the shank clears the stock round it, the floor
+    // where it can; it was capped at Z 7.00 at every angle, by the highest stock anywhere)
+    let said = tps[0]
         .notes
         .iter()
-        .filter(|w| w.contains("no deeper than Z 7.00"))
+        .filter(|w| w.contains("material left where the shank") && w.contains("cut down to Z 2.20"))
         .count();
-    assert_eq!(capped, 4, "{:?}", tps[0].notes);
+    assert_eq!(said, 4, "{:?}", tps[0].notes);
+    let segs = marcam::sim::segments(&tps);
+    let lowest = segs
+        .iter()
+        .filter(|g| !g.rapid && g.index_a.is_some())
+        .map(|g| g.to[2])
+        .fold(f64::INFINITY, f64::min);
+    assert!(lowest < 2.21, "lowest cut Z {lowest}");
+    // and the 1 mm kept, seen in 3D (no radial map): every pose of every move, the shank and
+    // the holder 0.9 mm wider and lower, none of the stock in them as the moves before left it
+    let body = marcam::collision::ToolBody::of(job.tool(1).unwrap());
+    let m = 0.9;
+    let holder = marcam::dexel::ToolSolid {
+        radius: body.holder_radius + m,
+        ball: false,
+        height: body.holder_length,
+        cone: 0.0,
+    };
+    let shank = marcam::dexel::ToolSolid {
+        radius: body.shank_radius + m,
+        ball: false,
+        height: body.stickout - body.flute_length + m,
+        cone: 0.0,
+    };
+    let mut dx = marcam::dexel::Dexel::bar(job.stock.radius, job.stock.length, 0.2);
+    let mut touching = 0;
+    for (k, s) in segs.iter().enumerate() {
+        for (tip, d) in marcam::dexel::seg_poses(s, 0.25) {
+            let at = |l: f64| [0, 1, 2].map(|i| tip[i] + d[i] * l);
+            // (both wholly outside the bar: nothing to touch)
+            let r = |p: [f64; 3]| p[1].hypot(p[2]);
+            if r(at(body.flute_length - m)) > job.stock.radius + body.shank_radius + m {
+                continue;
+            }
+            if dx.inside(&holder, at(body.stickout - m), d) > 0.0
+                || dx.inside(&shank, at(body.flute_length - m), d) > 0.0
+            {
+                touching += 1;
+                break;
+            }
+        }
+        marcam::dexel::replay(
+            &mut dx,
+            &segs[k..k + 1],
+            &|t| marcam::left3d::solid(&job, t),
+            0.25,
+            0.0,
+        );
+    }
+    assert_eq!(
+        touching, 0,
+        "moves with the shank or the holder within {m} mm of the stock"
+    );
 }
 
 #[test]
