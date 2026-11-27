@@ -642,11 +642,24 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   /** The tree's contents replaced: what lives in it but is not drawn by it (the tool library's
    *  panel, the setup's form) taken out first, to the page, as they are (never left detached:
    *  the app looks their fields up by id); the tree puts them back where they belong. */
+  /** The add controls' ids: a setup's type and where it starts, an operation's type. */
+  const ADD_CONTROLS = ["treeAddSetup", "treeAddKind", "treeAddFrom", "treeAddType", "treeAdd"];
   function setTree(html) {
     window.__marcam.tools?.host?.(null);
     const dlg = document.getElementById("setupDialog");
     if (dlg && $("tree").contains(dlg)) document.body.appendChild(dlg);
+    // (the add controls' choices kept when the tree is drawn again, as it is when a plan
+    // lands: a type picked, then Add clicked, added the list's first type instead) the new
+    // setup's type and start as they were, the operation type picked in this setup
+    const kept = { treeAddKind: $("treeAddKind")?.value, treeAddFrom: $("treeAddFrom")?.value, treeAddType: t.addTypes?.[t.setup] };
     $("tree").innerHTML = html;
+    for (const [id, v] of Object.entries(kept)) {
+      const e = $(id);
+      if (e && v != null && [...e.options].some((o) => o.value === v)) e.value = v;
+    }
+    // (a setup being added: nothing to add to until it is there, then its own types; the
+    // controls only greyed, nothing moves)
+    if (t.addingSetup) for (const id of ADD_CONTROLS) if ($(id)) $(id).disabled = true;
   }
 
   /** The field focused inside `el`, with its caret (to be put back after drawing again). */
@@ -1728,7 +1741,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.id === "treeAddSetup") {
       const kind = $("treeAddKind")?.value || "vise";
-      await window.__marcam.project.addSetup({ kind, independent: $("treeAddFrom")?.value === "own" });
+      const independent = $("treeAddFrom")?.value === "own";
+      // (until the new setup is there, the operation list is the old setup's: an operation
+      // picked meanwhile went to the old one, or was lost when the list changed under it)
+      t.addingSetup = true;
+      for (const id of ADD_CONTROLS) if ($(id)) $(id).disabled = true;
+      try {
+        await window.__marcam.project.addSetup({ kind, independent });
+      } finally {
+        t.addingSetup = false;
+        for (const id of ADD_CONTROLS) if ($(id)) $(id).disabled = false;
+      }
       return;
     }
     if (el.id === "treeStockStl") {
@@ -2144,6 +2167,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   $("tree").addEventListener("change", async (ev) => {
     const el = ev.target;
+    // the operation type picked, kept for this setup (see setTree)
+    if (el.id === "treeAddType") {
+      (t.addTypes ||= {})[t.setup] = el.value;
+      return;
+    }
     // (Mar) the Stock and Part panes: each field an edit (undoable), planned again
     if (el.id === "stSource") {
       const s = setup();
