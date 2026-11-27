@@ -136,9 +136,9 @@ async function start() {
 
 /** A part like an impeller (a hub along X, three blades out to radius 18), as binary STL
  *  (about 24,000 triangles). */
-/** A 5-blade star along X (30 long: longer than across, so it goes on the bar as it is; points 8
- *  out, notches 4), its axis at (dy, dz): its box's middle off that axis (five points: the box
- *  lopsided), as an impeller with an odd count. */
+/** A 5-blade star made along Z, short and wide as Mar's impeller from OpenSCAD (10 long, points 8
+ *  out, notches 4), its axis at (dx, dy): its box's middle off that axis (five points: the box
+ *  lopsided). */
 function starStl(dy, dz) {
   const pts = [];
   for (let i = 0; i < 10; i++) {
@@ -147,16 +147,16 @@ function starStl(dy, dz) {
     pts.push([r * Math.cos(a) + dy, r * Math.sin(a) + dz]);
   }
   const tris = [];
-  const P = (x, q) => [x, q[0], q[1]];
+  const P = (z, q) => [q[0], q[1], z];
   for (let i = 0; i < 10; i++) {
     const [a, b] = [pts[i], pts[(i + 1) % 10]];
-    tris.push([P(0, a), P(0, b), P(-30, b)], [P(0, a), P(-30, b), P(-30, a)]);
+    tris.push([P(0, a), P(-10, b), P(0, b)], [P(0, a), P(-10, a), P(-10, b)]);
   }
   // the ends: fans round each end's middle (the axis), outward
   const mid = [dy, dz];
   for (let i = 0; i < 10; i++) {
     const [a, b] = [pts[i], pts[(i + 1) % 10]];
-    tris.push([P(0, mid), P(0, b), P(0, a)], [P(-30, mid), P(-30, a), P(-30, b)]);
+    tris.push([P(0, mid), P(0, a), P(0, b)], [P(-10, mid), P(-10, b), P(-10, a)]);
   }
   const buf = Buffer.alloc(84 + 50 * tris.length);
   buf.write("marcam test: a five-blade star", 0);
@@ -2937,11 +2937,12 @@ try {
     await clean("a dense model typed in");
   }
   // ---------------------------------------------------------------- an odd count centred
-  // (Mar's 5-blade impeller: Center on axis by its box's middle, the hub 0.58 mm off the axis;
-  // and its part handles drawn over the playback's stock after) a five-blade star made off its
-  // axis on the 4th axis: Center on axis puts where it turns on the axis (not its box's
-  // middle); then a roughing, the Part selected (its handles there) and Play: no handles drawn
-  // over the stock while it plays
+  // (Mar's 5-blade impeller from OpenSCAD: made along Z, put on across the bar, turned by hand;
+  // Center on axis by its box's middle, the hub 0.58 mm off the axis; its part handles drawn
+  // over the playback's stock after) a short, wide five-blade star made along Z, off its axis,
+  // imported on the 4th axis: put on along it as it turns; Center on axis puts where it turns
+  // on the axis (not its box's middle); then a roughing, the Part selected (its handles there)
+  // and Play: no handles drawn over the stock while it plays
   {
     const star = join(mkdtempSync(join(tmpdir(), "marcam-star-")), "star5.stl");
     writeFileSync(star, starStl(0.7, -0.45));
@@ -2970,9 +2971,9 @@ try {
     await click("button[data-preset=axis]", "Center on axis");
     await settled();
     // where it turns, and its box's middle, as the engine reads the part now
-    const placed = await read("(async () => { const m = window.__marcam; const t = m.tree.state; const r = (await m.engine('meshTriangles', t.doc, { setup: t.setup }, m.state.mesh)).result; return { axis: r.axis, mid: [(r.bounds[0][1] + r.bounds[1][1]) / 2, (r.bounds[0][2] + r.bounds[1][2]) / 2] }; })()");
-    check("a five-blade part, Center on axis: where it turns on the axis (within 0.01 mm), not its box's middle",
-      !!placed.axis && Math.hypot(placed.axis[0], placed.axis[1]) < 0.01 && Math.hypot(placed.mid[0], placed.mid[1]) > 0.3, JSON.stringify(placed));
+    const placed = await read("(async () => { const m = window.__marcam; const t = m.tree.state; const r = (await m.engine('meshTriangles', t.doc, { setup: t.setup }, m.state.mesh)).result; return { axis: r.axis, mid: [(r.bounds[0][1] + r.bounds[1][1]) / 2, (r.bounds[0][2] + r.bounds[1][2]) / 2], length: r.bounds[1][0] - r.bounds[0][0], model: t.doc.models[0].axis }; })()");
+    check("a short, wide five-blade part made along Z: on the 4th axis along it as it turns; Center on axis: where it turns on the axis (within 0.01 mm), not its box's middle",
+      Math.abs(placed.length - 10) < 0.01 && !!placed.axis && Math.hypot(placed.axis[0], placed.axis[1]) < 0.01 && Math.hypot(placed.mid[0], placed.mid[1]) > 0.3, JSON.stringify(placed));
     await click("#tree .tree-setup.active [data-act=stock]");
     await settled();
     if (await where("button", "^Fit to part$")) {

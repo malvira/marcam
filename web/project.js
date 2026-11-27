@@ -152,6 +152,78 @@ export function mapAxis(p, axis) {
   return [p[0], p[1], p[2]];
 }
 
+/** How a part turns about its X (after `mapAxis(p, axis)`): round about an axis along X through
+ *  its volume's centroid (Infinity), the same every k-th of a turn about it (k from 2 to 24, the
+ *  most that holds: an impeller's blades), or not (0), as the engine's Mesh::turning_axis
+ *  judges. `tris`: flat xyz, three points a triangle. */
+function turnsAbout(tris, axis) {
+  const n = Math.floor(tris.length / 9);
+  if (!n) return 0;
+  const P = (i) => mapAxis([tris[3 * i], tris[3 * i + 1], tris[3 * i + 2]], axis);
+  let v = 0, cy = 0, cz = 0;
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (let t = 0; t < n; t++) {
+    const [a, b, c] = [P(3 * t), P(3 * t + 1), P(3 * t + 2)];
+    for (const q of [a, b, c]) for (let k = 0; k < 3; k++) (lo[k] = Math.min(lo[k], q[k])), (hi[k] = Math.max(hi[k], q[k]));
+    const d = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
+    v += d;
+    cy += d * (a[1] + b[1] + c[1]);
+    cz += d * (a[2] + b[2] + c[2]);
+  }
+  const size = Math.max(hi[1] - lo[1], hi[2] - lo[2], 1e-9);
+  if (Math.abs(v) < 1e-9 * size ** 3) return 0;
+  cy /= 4 * v;
+  cz /= 4 * v;
+  const BINS = 360;
+  const outer = new Array(BINS).fill(NaN);
+  for (let i = 0; i < 3 * n; i++) {
+    const q = P(i);
+    const [y, z] = [q[1] - cy, q[2] - cz];
+    const r = Math.hypot(y, z);
+    if (r < 1e-3 * size) continue;
+    const k = Math.min(BINS - 1, Math.floor((((Math.atan2(z, y) * 180) / Math.PI) + 360) % 360));
+    if (Number.isNaN(outer[k]) || outer[k] < r) outer[k] = r;
+  }
+  if (outer.every(Number.isNaN)) return 0;
+  const known = outer.slice();
+  const near = (k, step) => {
+    for (let o = 1; o < BINS; o++) {
+      const r = known[(k + step * o) % BINS];
+      if (!Number.isNaN(r)) return r;
+    }
+    return 0;
+  };
+  for (let k = 0; k < BINS; k++) if (Number.isNaN(known[k])) outer[k] = Math.max(near(k, 1), near(k, BINS - 1));
+  const big = Math.max(...outer), small = Math.min(...outer), tol = 0.03 * big;
+  if (big - small <= tol) return Infinity;
+  for (let k = 24; k >= 2; k--) {
+    const shift = Math.round(BINS / k);
+    const d = outer.map((r, i) => {
+      const j = (i + shift) % BINS;
+      const w = [outer[(j + BINS - 1) % BINS], outer[j], outer[(j + 1) % BINS]];
+      return Math.max(Math.min(...w) - r, r - Math.max(...w), 0);
+    });
+    const mean = d.reduce((x, y) => x + y, 0) / BINS;
+    d.sort((x, y) => x - y);
+    if (mean <= 0.5 * tol && d[Math.floor(0.95 * BINS)] <= tol) return k;
+  }
+  return 0;
+}
+
+/** The model axis to put along the bar on the 4th axis: the one the part turns about most (round
+ *  most of all; a flat star turns half a turn about an axis across it too, five times about its
+ *  own), X on a tie (a model made along X stays so), else X. (Mar's impeller from OpenSCAD, made
+ *  along Z: put on across the bar, turned by hand.) */
+export function barAxisOf(tris) {
+  if (!tris?.length) return "x";
+  let best = "x", order = 0;
+  for (const ax of ["x", "z", "y"]) {
+    const k = turnsAbout(tris, ax);
+    if (k > order) (best = ax), (order = k);
+  }
+  return best;
+}
+
 const ceilHalf = (x) => Math.ceil(x * 2) / 2;
 const r3 = (x) => Math.round(x * 1000) / 1000;
 
@@ -539,7 +611,7 @@ export function setupProject(ctx) {
   const { $, engine, state, readJob, writeJob, setMesh, showError, setStatus, generate, refreshAll, clearResults, resetProject, machineArg, currentMachine } = ctx;
   const p = { name: "untitled", dirty: false, fileName: null, pending: null };
   state.project = p;
-  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS, stockSpecOf, lyingBar, flatFaces, layFlat, UP_AXIS, rotation });
+  const dialog = setupDialog({ $, state, parseStl, readPart, partSummary, placePart, kindOf, KINDS, stockSpecOf, lyingBar, flatFaces, layFlat, UP_AXIS, rotation, barAxisOf });
 
   function show() {
     $("projectName").textContent = p.name;

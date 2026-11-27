@@ -204,35 +204,29 @@ impl Mesh {
         for p in self.triangles.iter().flatten() {
             let (y, z) = (p[1] - cy, p[2] - cz);
             let r = y.hypot(z);
+            // (a vertex on the axis, an end's middle, points no way)
+            if r < 1e-3 * size {
+                continue;
+            }
             let k = (((z.atan2(y).to_degrees() + 360.0) % 360.0) as usize).min(BINS - 1);
             if outer[k].is_nan() || outer[k] < r {
                 outer[k] = r;
             }
         }
-        // (a bin no vertex fell in: its neighbours')
+        // (a bin no vertex fell in: the larger of the nearest ones each side)
         if outer.iter().all(|r| r.is_nan()) {
             return None;
         }
-        for _ in 0..BINS {
-            let mut changed = false;
-            for k in 0..BINS {
-                if outer[k].is_nan() {
-                    let (l, r) = (outer[(k + BINS - 1) % BINS], outer[(k + 1) % BINS]);
-                    let fill = if l.is_nan() {
-                        r
-                    } else if r.is_nan() {
-                        l
-                    } else {
-                        l.max(r)
-                    };
-                    if !fill.is_nan() {
-                        outer[k] = fill;
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                break;
+        let known = outer.clone();
+        let near = |k: usize, step: usize| -> f64 {
+            (1..BINS)
+                .map(|o| known[(k + step * o) % BINS])
+                .find(|r| !r.is_nan())
+                .unwrap_or(0.0)
+        };
+        for k in 0..BINS {
+            if known[k].is_nan() {
+                outer[k] = near(k, 1).max(near(k, BINS - 1));
             }
         }
         let big = outer.iter().copied().fold(0.0, f64::max);
@@ -241,21 +235,29 @@ impl Mesh {
         if big - small <= tol {
             return Some([cy, cz]);
         }
+        // (a k-th of a turn on, the same within 3 %: on average and nearly everywhere; a degree's
+        // slack each side, a tip falling either side of a bin's edge)
         for k in 2..=24usize {
-            let shift = BINS as f64 / k as f64;
-            // (a k-th of a turn on, to the nearest degree, the same within 3 %: on average and
-            // nearly everywhere)
-            let s = shift.round() as usize;
+            let shift = (BINS as f64 / k as f64).round() as usize;
             let diffs: Vec<f64> = (0..BINS)
-                .map(|i| (outer[i] - outer[(i + s) % BINS]).abs())
+                .map(|i| {
+                    let j = (i + shift) % BINS;
+                    let w = [
+                        outer[(j + BINS - 1) % BINS],
+                        outer[j],
+                        outer[(j + 1) % BINS],
+                    ];
+                    let (lo, hi) = (
+                        w.iter().copied().fold(f64::INFINITY, f64::min),
+                        w.iter().copied().fold(0.0, f64::max),
+                    );
+                    (lo - outer[i]).max(outer[i] - hi).max(0.0)
+                })
                 .collect();
             let mean = diffs.iter().sum::<f64>() / BINS as f64;
-            let worst = {
-                let mut d = diffs.clone();
-                d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                d[(0.95 * BINS as f64) as usize]
-            };
-            if mean <= 0.5 * tol && worst <= tol && (shift - shift.round()).abs() < 0.5 {
+            let mut d = diffs;
+            d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            if mean <= 0.5 * tol && d[(0.95 * BINS as f64) as usize] <= tol {
                 return Some([cy, cz]);
             }
         }
@@ -783,10 +785,13 @@ mod tests {
                 tris.push([p(0.0, a), p(0.0, b), p(-10.0, b)]);
                 tris.push([p(0.0, a), p(-10.0, b), p(-10.0, a)]);
             }
-            for i in 1..n - 1 {
+            // (the ends: fans round their middle, a vertex on the axis, as an STL from OpenSCAD
+            // has; it fooled the round-or-repeating test, radius 0 a way)
+            for i in 0..n {
                 let p = |x: f64, q: [f64; 2]| [x, q[0] + dy, q[1] + dz];
-                tris.push([p(0.0, pts[0]), p(0.0, pts[i + 1]), p(0.0, pts[i])]);
-                tris.push([p(-10.0, pts[0]), p(-10.0, pts[i]), p(-10.0, pts[i + 1])]);
+                let (a, b) = (pts[i], pts[(i + 1) % n]);
+                tris.push([p(0.0, [0.0, 0.0]), p(0.0, b), p(0.0, a)]);
+                tris.push([p(-10.0, [0.0, 0.0]), p(-10.0, a), p(-10.0, b)]);
             }
             Mesh {
                 triangles: tris,

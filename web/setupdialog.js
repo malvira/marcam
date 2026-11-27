@@ -22,7 +22,7 @@ const COMMON = {
 };
 const BAR_SHAPES = ["round", "square", "rect", "hex"];
 
-export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS, stockSpecOf, lyingBar, flatFaces, layFlat, UP_AXIS, rotation }) {
+export function setupDialog({ $, state, parseStl, readPart, partSummary, placePart, KINDS, stockSpecOf, lyingBar, flatFaces, layFlat, UP_AXIS, rotation, barAxisOf }) {
   const dlg = $("setupDialog");
   let cur = null; // { mode, preset, parsed, resolve }
 
@@ -327,6 +327,13 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
     }
   }
 
+  /** On the 4th axis, the model's axis it turns about along the bar (X when it does, or none
+   *  does). */
+  function barAxis() {
+    const t = tris();
+    return t && barAxisOf ? barAxisOf(t) : "x";
+  }
+
   /** Labels and fields that depend on the setup type. */
   function layout(fromKindChange) {
     // (a rotary setup's work zero: the bar's front on its axis)
@@ -343,7 +350,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       // the type's own defaults, unless the user typed something
       if (!$("sdMargin").dataset.edited) $("sdMargin").value = DEFAULT_MARGIN[k];
       if (!$("sdOrigin").dataset.edited) $("sdOrigin").value = DEFAULT_ORIGIN[k];
-      if (!$("sdAxis").dataset.edited) $("sdAxis").value = bar(k) ? "x" : "z";
+      if (!$("sdAxis").dataset.edited) $("sdAxis").value = bar(k) ? barAxis() : "z";
     }
     preview();
   }
@@ -507,7 +514,7 @@ export function setupDialog({ $, state, parseStl, readPart, partSummary, placePa
       $("sdMargin").value = preset.margin ?? DEFAULT_MARGIN[k];
       $("sdOrigin").value = preset.origin ?? DEFAULT_ORIGIN[k];
       // (the setup's own axis; a change of type resets it to that type's, unless set here)
-      $("sdAxis").value = preset.axis ?? (bar(k) ? "x" : "z");
+      $("sdAxis").value = preset.axis ?? (bar(k) ? barAxis() : "z");
       $("sdTail").checked = !!preset.tailstock;
       ["sdRotX", "sdRotY", "sdRotZ"].forEach((id, i) => ($(id).value = String(preset.rotate?.[i] ?? 0)));
       cur.presetRotate = JSON.stringify(preset.rotate ?? [0, 0, 0]);
