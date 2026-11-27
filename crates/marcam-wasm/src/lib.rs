@@ -1022,7 +1022,12 @@ pub mod api {
                     .iter()
                     .flat_map(|i| i.to_le_bytes())
                     .collect();
-                json!({"key": t.key, "positions": f32s(&t.mesh.positions), "indices": b64(&idx), "ops": u16s(&t.mesh.ops)})
+                let mut o = json!({"key": t.key, "positions": f32s(&t.mesh.positions), "indices": b64(&idx), "ops": u16s(&t.mesh.ops)});
+                // (the surface's own normals, for the shading: zero where none)
+                if !t.mesh.normals.is_empty() {
+                    o["shade"] = json!(f32s(&t.mesh.normals));
+                }
+                o
             })
             .collect()
     }

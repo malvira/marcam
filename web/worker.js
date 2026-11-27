@@ -73,6 +73,18 @@ function prepare(cmd, result, transfer) {
       t.ops = new Uint16Array(b.buffer, 0, b.byteLength / 2);
     }
     t.normals = vertexNormals(t.positions, t.indices);
+    // (the cut surface's own normals where the engine kept them: the tool's, not the grid's
+    // facets; the triangles' where it sent zero)
+    if (typeof t.shade === "string") {
+      const b = bytes(t.shade);
+      const s = new Float32Array(b.buffer, 0, b.byteLength / 4);
+      if (s.length === t.normals.length) {
+        for (let k = 0; k < s.length; k += 3) {
+          if (s[k] !== 0 || s[k + 1] !== 0 || s[k + 2] !== 0) t.normals.set(s.subarray(k, k + 3), k);
+        }
+      }
+      delete t.shade;
+    }
     for (const a of [t.positions, t.indices, t.ops, t.normals]) if (a?.buffer && !transfer.includes(a.buffer)) transfer.push(a.buffer);
   }
   const at = (path) => {

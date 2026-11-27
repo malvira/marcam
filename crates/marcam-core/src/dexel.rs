@@ -35,6 +35,43 @@ pub struct Dexel {
     /// cutting operation (its tag, 0: never cut), and the one cutting now.
     cut_op: Option<Vec<u16>>,
     pub op: u16,
+    /// (A playback's surface, when kept: see [`Dexel::track_normals`]) each ray end's outward
+    /// normal, packed ([`pack_normal`]), and above it the operation that cut it there (0: the
+    /// bar's own), beside its interval.
+    normals: Option<[Vec<Vec<[u64; 2]>>; 3]>,
+}
+
+/// A ray end's record holds a normal (its low 32 bits; +Z packs to 0).
+const END_NORMAL: u64 = 1 << 48;
+
+/// A unit vector in 32 bits (octahedral, 16 bits a coordinate).
+fn pack_normal(n: [f64; 3]) -> u32 {
+    let l = n[0].abs() + n[1].abs() + n[2].abs();
+    if l < 1e-12 {
+        return 0;
+    }
+    let (mut x, mut y) = (n[0] / l, n[1] / l);
+    if n[2] < 0.0 {
+        let (ox, oy) = (x, y);
+        x = (1.0 - oy.abs()) * ox.signum();
+        y = (1.0 - ox.abs()) * oy.signum();
+    }
+    let q = |v: f64| ((v.clamp(-1.0, 1.0) * 32767.0).round() as i16) as u16 as u32;
+    q(x) | (q(y) << 16)
+}
+
+/// [`pack_normal`] undone (a unit vector).
+pub fn unpack_normal(v: u32) -> [f64; 3] {
+    let f = |b: u32| (b as u16 as i16) as f64 / 32767.0;
+    let (mut x, mut y) = (f(v & 0xffff), f(v >> 16));
+    let z = 1.0 - x.abs() - y.abs();
+    if z < 0.0 {
+        let (ox, oy) = (x, y);
+        x = (1.0 - oy.abs()) * ox.signum();
+        y = (1.0 - ox.abs()) * oy.signum();
+    }
+    let l = (x * x + y * y + z * z).sqrt().max(1e-12);
+    [x / l, y / l, z / l]
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -253,6 +290,60 @@ impl ToolSolid {
         }
     }
 
+    /// Its surface's outward normal at `q` (a point on it), at tip `tip`, direction `dir`
+    /// (unit): a ball's from its centre, a V-bit's cone across its slope, else the flat end, the
+    /// side or the top, whichever `q` is nearest.
+    pub fn normal_at(&self, tip: [f64; 3], dir: [f64; 3], q: [f64; 3]) -> [f64; 3] {
+        let unit = |v: [f64; 3]| {
+            let l = dot(v, v).sqrt();
+            if l < 1e-12 {
+                dir
+            } else {
+                [v[0] / l, v[1] / l, v[2] / l]
+            }
+        };
+        let v = sub(q, tip);
+        let t = dot(v, dir);
+        let rv = [v[0] - dir[0] * t, v[1] - dir[1] * t, v[2] - dir[2] * t];
+        let rho = dot(rv, rv).sqrt();
+        let radial = unit(rv);
+        let top = (t - self.height).abs();
+        if self.ball {
+            if t < self.radius {
+                let c = [
+                    tip[0] + dir[0] * self.radius,
+                    tip[1] + dir[1] * self.radius,
+                    tip[2] + dir[2] * self.radius,
+                ];
+                return unit(sub(q, c));
+            }
+            return if top < (rho - self.radius).abs() {
+                dir
+            } else {
+                radial
+            };
+        }
+        if self.cone > 0.0 {
+            let ac = (self.radius / self.cone).min(self.height);
+            if t <= ac + 1e-9 {
+                // (the cone: rho = k t; its gradient across)
+                return unit([
+                    radial[0] - dir[0] * self.cone,
+                    radial[1] - dir[1] * self.cone,
+                    radial[2] - dir[2] * self.cone,
+                ]);
+            }
+        }
+        let (bottom, side) = (t.abs(), (rho - self.radius).abs());
+        if bottom <= side && bottom <= top {
+            [-dir[0], -dir[1], -dir[2]]
+        } else if top <= side {
+            dir
+        } else {
+            radial
+        }
+    }
+
     /// The box round the tool at a pose.
     fn bounds(&self, tip: [f64; 3], dir: [f64; 3]) -> ([f64; 3], [f64; 3]) {
         let top = [
@@ -308,6 +399,7 @@ impl Dexel {
             radius,
             cut_op: None,
             op: 0,
+            normals: None,
         };
         let inside_yz = |y: f64, z: f64| y * y + z * z <= radius * radius;
         for d in 0..3 {
@@ -414,13 +506,49 @@ impl Dexel {
             .flatten()
             .map(|r| 24 + 8 * r.capacity())
             .sum();
-        rays + self.cut_op.as_ref().map_or(0, |o| 2 * o.len())
+        let normals: usize = self.normals.as_ref().map_or(0, |nm| {
+            nm.iter().flatten().map(|r| 24 + 16 * r.capacity()).sum()
+        });
+        rays + normals + self.cut_op.as_ref().map_or(0, |o| 2 * o.len())
     }
 
     /// Keep which operation last cut at each grid point (the playback's colours by operation);
     /// [`SurfaceMesh::ops`] then says it at each vertex.
     pub fn track_ops(&mut self) {
         self.cut_op = Some(vec![0; self.n[0] * self.n[1] * self.n[2]]);
+    }
+
+    /// Keep each ray end's outward normal (the playback's surface drawn with its creases: see
+    /// [`Dexel::surface_mesh`]): the bar's own (its ends along X, its round side), then the
+    /// tool's surface wherever a cut ends a ray. Only [`Dexel::subtract`] keeps them up.
+    pub fn track_normals(&mut self) {
+        let mut all: [Vec<Vec<[u64; 2]>>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        for d in 0..3 {
+            let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+            all[d] = self.rays[d]
+                .iter()
+                .enumerate()
+                .map(|(k, ray)| {
+                    let mut p = [0.0; 3];
+                    p[a] = self.coord(a, k / self.n[b]);
+                    p[b] = self.coord(b, k % self.n[b]);
+                    ray.iter()
+                        .map(|&[s0, s1]| {
+                            let at = |sv: f32, sign: f64| {
+                                if d == 0 {
+                                    return pack_normal([sign, 0.0, 0.0]) as u64 | END_NORMAL;
+                                }
+                                let mut q = p;
+                                q[d] = sv as f64;
+                                pack_normal([0.0, q[1], q[2]]) as u64 | END_NORMAL
+                            };
+                            [at(s0, -1.0), at(s1, 1.0)]
+                        })
+                        .collect()
+                })
+                .collect();
+        }
+        self.normals = Some(all);
     }
 
     /// Takes the tool at a pose out of the stock; returns the volume taken (mm3, the mean of
@@ -431,6 +559,40 @@ impl Dexel {
         let mut taken = 0.0;
         let (n, lo, h, op) = (self.n, self.lo, self.h, self.op);
         for (d, k, s0, s1) in cuts {
+            // (the surface kept: the ends the cut makes face into the tool)
+            if let Some(nm) = self.normals.as_mut() {
+                let ray = &self.rays[d][k];
+                let (f0, f1) = (s0 as f32, s1 as f32);
+                if !ray.is_empty() && ray.iter().any(|&[a, b]| b > f0 && a < f1) {
+                    let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+                    let mut p = [0.0; 3];
+                    p[a] = lo[a] + (k / n[b]) as f64 * h;
+                    p[b] = lo[b] + (k % n[b]) as f64 * h;
+                    let face = |sv: f64| {
+                        let mut q = p;
+                        q[d] = sv;
+                        let t = tool.normal_at(tip, dir, q);
+                        pack_normal([-t[0], -t[1], -t[2]]) as u64 | (op as u64) << 32 | END_NORMAL
+                    };
+                    let (e0, e1) = (face(s0), face(s1));
+                    let old = &nm[d][k];
+                    let mut out_n = Vec::with_capacity(ray.len() + 1);
+                    for (i, &[ra, rb]) in ray.iter().enumerate() {
+                        let [na, nb] = old.get(i).copied().unwrap_or([0, 0]);
+                        if rb <= f0 || ra >= f1 {
+                            out_n.push([na, nb]);
+                            continue;
+                        }
+                        if ra < f0 {
+                            out_n.push([na, e0]);
+                        }
+                        if rb > f1 {
+                            out_n.push([e1, nb]);
+                        }
+                    }
+                    nm[d][k] = out_n;
+                }
+            }
             let ray = &mut self.rays[d][k];
             if ray.is_empty() {
                 continue;
@@ -484,6 +646,8 @@ impl Dexel {
         dir: [f64; 3],
         log: &mut Vec<(usize, usize, Vec<[f32; 2]>)>,
     ) -> f64 {
+        // (the normals not kept up here: dropped rather than wrong)
+        self.normals = None;
         let mut cuts: Vec<(usize, usize, f64, f64)> = Vec::new();
         self.crossing(tool, tip, dir, |d, k, s0, s1| cuts.push((d, k, s0, s1)));
         let mut taken = 0.0;
@@ -658,32 +822,53 @@ impl Dexel {
         if (0..3).any(|k| lo[k] >= hi[k]) {
             return out;
         }
-        // the points looked at: the region, one before it and one after (the cells round its
-        // edges)
-        let b0 = [0, 1, 2].map(|k| lo[k].saturating_sub(1));
-        let b1 = [0, 1, 2].map(|k| (hi[k] + 1).min(n[k]));
+        // the points looked at: the region, two before it and two after (the cells round its
+        // edges, and theirs beside them: a vertex is smoothed towards its neighbours')
+        let b0 = [0, 1, 2].map(|k| lo[k].saturating_sub(2));
+        let b1 = [0, 1, 2].map(|k| (hi[k] + 2).min(n[k]));
         let span = [0, 1, 2].map(|k| b1[k] - b0[k]);
-        let merge = |ray: &[[f32; 2]]| {
+        // (a ray's intervals, gaps under half a cell closed, and their ends' normals when kept)
+        let merge = |ray: &[[f32; 2]], nm: Option<&Vec<[u64; 2]>>| {
             let mut m: Vec<[f32; 2]> = Vec::with_capacity(ray.len());
-            for &[s0, s1] in ray {
+            let mut mn: Vec<[u64; 2]> = Vec::with_capacity(ray.len());
+            for (i, &[s0, s1]) in ray.iter().enumerate() {
+                let e = nm.and_then(|v| v.get(i).copied()).unwrap_or([0, 0]);
                 match m.last_mut() {
-                    Some(l) if s0 - l[1] < 0.5 * h as f32 => l[1] = l[1].max(s1),
-                    _ => m.push([s0, s1]),
+                    Some(l) if s0 - l[1] < 0.5 * h as f32 => {
+                        if s1 > l[1] {
+                            l[1] = s1;
+                            if let Some(ln) = mn.last_mut() {
+                                ln[1] = e[1];
+                            }
+                        }
+                    }
+                    _ => {
+                        m.push([s0, s1]);
+                        mn.push(e);
+                    }
                 }
             }
-            m
+            (m, mn)
         };
+        let kept = self.normals.as_ref();
         // the rays of each family through the box, gaps closed: keyed by their two indices
+        let mut ends: [Vec<Vec<[u64; 2]>>; 3] = [Vec::new(), Vec::new(), Vec::new()];
         let rays: [Vec<Vec<[f32; 2]>>; 3] = [0, 1, 2].map(|d| {
             let (a, b) = ((d + 1) % 3, (d + 2) % 3);
             let mut v = Vec::with_capacity(span[a] * span[b]);
+            let mut vn = Vec::with_capacity(span[a] * span[b]);
             for ia in b0[a]..b1[a] {
                 for ib in b0[b]..b1[b] {
-                    v.push(merge(&self.rays[d][ia * n[b] + ib]));
+                    let k = ia * n[b] + ib;
+                    let (m, mn) = merge(&self.rays[d][k], kept.map(|nm| &nm[d][k]));
+                    v.push(m);
+                    vn.push(mn);
                 }
             }
+            ends[d] = vn;
             v
         });
+        let ends = ends;
         let ray = |d: usize, g: [usize; 3]| {
             let (a, b) = ((d + 1) % 3, (d + 2) % 3);
             &rays[d][(g[a] - b0[a]) * span[b] + (g[b] - b0[b])]
@@ -711,34 +896,51 @@ impl Dexel {
             let q = idx(g);
             inside[q / 64] >> (q % 64) & 1 == 1
         };
-        // where the surface crosses the edge from grid point g along axis d
-        let crossing = |d: usize, g: [usize; 3]| -> [f64; 3] {
+        // where the surface crosses the edge from grid point g along axis d, and (its ends'
+        // normals kept) the surface's normal there and the operation that cut it
+        let ends_kept = kept.is_some();
+        let crossing = |d: usize, g: [usize; 3]| -> ([f64; 3], Option<[f64; 3]>, Option<u16>) {
             let mut p = [0, 1, 2].map(|c| self.coord(c, g[c]));
             let (lo_d, hi_d) = (p[d], p[d] + h);
             let mut s = lo_d + 0.5 * h;
             let mut best = f64::INFINITY;
-            for &[s0, s1] in ray(d, g) {
-                for e in [s0 as f64, s1 as f64] {
+            let mut normal = None;
+            let mut by = None;
+            let (a, b) = ((d + 1) % 3, (d + 2) % 3);
+            let idx = (g[a] - b0[a]) * span[b] + (g[b] - b0[b]);
+            for (i, &[s0, s1]) in rays[d][idx].iter().enumerate() {
+                for (e, end) in [(s0 as f64, 0), (s1 as f64, 1)] {
                     if e >= lo_d - 1e-9 && e <= hi_d + 1e-9 {
                         let off = (e - (lo_d + 0.5 * h)).abs();
                         if off < best {
                             best = off;
                             s = e;
+                            let e = ends[d][idx].get(i).map(|en| en[end]).filter(|_| ends_kept);
+                            normal = e
+                                .filter(|&v| v & END_NORMAL != 0)
+                                .map(|v| unpack_normal(v as u32));
+                            by = e.map(|v| (v >> 32) as u16);
                         }
                     }
                 }
             }
             p[d] = s.clamp(lo_d, hi_d);
-            p
+            (p, normal, by)
         };
-        let mut vert: std::collections::HashMap<[usize; 3], u32> = Default::default();
-        // a cell's vertex: the mean of its edges' crossings (made when first wanted)
-        let mut vertex = |out: &mut SurfaceMesh, c: [usize; 3]| -> u32 {
-            if let Some(&v) = vert.get(&c) {
+        // a cell's point, before smoothing: the mean of its edges' crossings; its normal for
+        // the shading, the mean of theirs (the tool's surface, when the ends keep it); and the
+        // operation that cut most of them, when kept (made when first wanted)
+        type Based = ([f64; 3], Option<[f64; 3]>, Option<u16>);
+        let mut based: std::collections::HashMap<[usize; 3], Based> = Default::default();
+        let mut base = |c: [usize; 3]| -> Based {
+            if let Some(&v) = based.get(&c) {
                 return v;
             }
             let mut sum = [0.0; 3];
             let mut cnt = 0.0;
+            let mut nsum = [0.0f64; 3];
+            let mut byc: Vec<u16> = Vec::new();
+            let mut all = ends_kept;
             for d in 0..3 {
                 let (a, b) = ((d + 1) % 3, (d + 2) % 3);
                 for (ua, ub) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
@@ -748,23 +950,107 @@ impl Dexel {
                     let mut g1 = g0;
                     g1[d] += 1;
                     if at(g0) != at(g1) {
-                        let p = crossing(d, g0);
+                        let (p, nrm, by) = crossing(d, g0);
+                        byc.extend(by);
                         for t in 0..3 {
                             sum[t] += p[t];
+                            nsum[t] += nrm.map_or(0.0, |v| v[t]);
                         }
+                        all &= nrm.is_some();
                         cnt += 1.0;
                     }
                 }
             }
-            let p = if cnt > 0.0 {
+            let mean = if cnt > 0.0 {
                 sum.map(|v| v / cnt)
             } else {
                 [0, 1, 2].map(|t| self.coord(t, c[t]) + 0.5 * h)
             };
+            let nl = dot(nsum, nsum).sqrt();
+            let normal = (all && cnt > 0.0 && nl > 1e-6).then(|| nsum.map(|v| v / nl));
+            byc.sort_unstable();
+            let mut most = None;
+            let (mut best, mut run) = (0usize, 0usize);
+            for (i, &o) in byc.iter().enumerate() {
+                run = if i > 0 && byc[i - 1] == o { run + 1 } else { 1 };
+                if run >= best {
+                    best = run;
+                    most = Some(o);
+                }
+            }
+            let v = (mean, normal, most);
+            based.insert(c, v);
+            v
+        };
+        let mut vert: std::collections::HashMap<[usize; 3], u32> = Default::default();
+        // a cell's vertex: its point halfway to the mean of its neighbours' (the cells beside
+        // it the surface runs on into), kept in the cell: the grid's terracing smoothed off, the
+        // same in every tile
+        let mut vertex = |out: &mut SurfaceMesh, c: [usize; 3]| -> u32 {
+            if let Some(&v) = vert.get(&c) {
+                return v;
+            }
+            let (own, normal, most) = base(c);
+            let mut p = own;
+            // (its shading normal likewise: its own and its neighbours', the tool's marks under
+            // a cell (a ball's scallops caught at one grid point and not the next) smoothed off)
+            let mut nsum = normal.unwrap_or([0.0; 3]);
+            {
+                let (mut sum, mut cnt) = ([0.0; 3], 0.0);
+                for t in 0..3 {
+                    let (a, b) = ((t + 1) % 3, (t + 2) % 3);
+                    for up in [false, true] {
+                        // (the face between them, and its cell beyond, inside the grid)
+                        if (!up && c[t] == 0) || (up && c[t] + 2 >= n[t]) {
+                            continue;
+                        }
+                        let mut nb = c;
+                        nb[t] = if up { c[t] + 1 } else { c[t] - 1 };
+                        if (0..3).any(|k| nb[k] < b0[k] || nb[k] + 1 >= b1[k]) {
+                            continue;
+                        }
+                        let face = if up { c[t] + 1 } else { c[t] };
+                        let mut joined = false;
+                        for (e, o) in [(a, b), (b, a)] {
+                            for uo in [0, 1] {
+                                let mut g0 = c;
+                                g0[t] = face;
+                                g0[o] = c[o] + uo;
+                                let mut g1 = g0;
+                                g1[e] += 1;
+                                joined |= at(g0) != at(g1);
+                            }
+                        }
+                        if joined {
+                            let (q, qn, _) = base(nb);
+                            for k in 0..3 {
+                                sum[k] += q[k];
+                                nsum[k] += qn.map_or(0.0, |v| v[k]);
+                            }
+                            cnt += 1.0;
+                        }
+                    }
+                }
+                if cnt > 0.0 {
+                    p = [0, 1, 2].map(|k| {
+                        let lo = self.coord(k, c[k]);
+                        (0.5 * own[k] + 0.5 * sum[k] / cnt).clamp(lo, lo + h)
+                    });
+                }
+            }
             let v = (out.positions.len() / 3) as u32;
             out.positions.extend(p.map(|x| x as f32));
-            // (its colour: the latest operation that cut a corner of its cell)
-            if let Some(ops) = self.cut_op.as_ref() {
+            if ends_kept {
+                let l = dot(nsum, nsum).sqrt();
+                let nv = if normal.is_some() && l > 1e-6 { nsum.map(|v| v / l) } else { [0.0; 3] };
+                out.normals.extend(nv.map(|x| x as f32));
+            }
+            // (its colour: the operation that cut most of its crossings, when the ray ends keep
+            // it; else the latest that cut a corner of its cell, a finish thinner than the grid
+            // then caught at some corners and not others: its edge sawn)
+            if let (Some(_), Some(m)) = (self.cut_op.as_ref(), most) {
+                out.ops.push(m);
+            } else if let Some(ops) = self.cut_op.as_ref() {
                 let mut o = 0u16;
                 for (ua, ub, uc) in [
                     (0, 0, 0),
@@ -860,6 +1146,9 @@ pub struct SurfaceMesh {
     pub indices: Vec<u32>,
     /// Each vertex's last cutting operation (tag; 0: uncut), when the stock keeps them.
     pub ops: Vec<u16>,
+    /// Each vertex's normal for the shading (xyz; zero: none, the triangles' to be taken),
+    /// when the stock keeps its surface's normals.
+    pub normals: Vec<f32>,
 }
 
 /// What a replay of moves through the stock found.
@@ -1213,5 +1502,77 @@ mod tests {
             }
         }
         assert_eq!(tiles, m.indices.len());
+    }
+
+    /// (Mar: the simulation's jagged edges) a flat end mill's pocket, drawn from the ray ends'
+    /// kept normals and operations: every vertex (smoothed) within 0.6 of a cell of the cut; the
+    /// floor shaded flat up and the wall across, from the tool's own surface; and a finish
+    /// thinner than the grid (0.1 mm at 0.25) coloured all its own, not caught at some grid
+    /// points and not others (its edge sawn). The normals round trip through their 32 bits.
+    #[test]
+    fn a_pocket_is_drawn_from_the_tool_s_surface() {
+        for n in [[0.3, -0.5, 0.81], [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.6, 0.0, -0.8]] {
+            let l = dot(n, n).sqrt();
+            let n = n.map(|v| v / l);
+            let m = unpack_normal(pack_normal(n));
+            assert!(dot(m, n) > 1.0 - 1e-8, "{n:?} {m:?}");
+        }
+        let h = 0.25;
+        let t = ToolSolid {
+            radius: 3.0,
+            ball: false,
+            height: 20.0,
+            cone: 0.0,
+        };
+        let c = [-10.0, 0.37];
+        let mut d = Dexel::bar(10.0, 20.0, h);
+        d.track_ops();
+        d.track_normals();
+        d.op = 2;
+        d.subtract(&t, [c[0], c[1], 5.13], [0.0, 0.0, 1.0]);
+        // (the finish: 0.1 mm off the floor, inside the wall)
+        let floor = 5.03;
+        d.op = 3;
+        let finish = ToolSolid { radius: 2.5, ..t };
+        d.subtract(&finish, [c[0], c[1], floor], [0.0, 0.0, 1.0]);
+        let m = d.surface_mesh();
+        assert_eq!(m.normals.len(), m.positions.len());
+        assert_eq!(m.ops.len(), m.positions.len() / 3);
+        let (mut worst, mut floors, mut walls) = (0.0f64, 0, 0);
+        for (k, v) in m.positions.chunks(3).enumerate() {
+            let (x, y, z) = (v[0] as f64, v[1] as f64, v[2] as f64);
+            let nv = [0, 1, 2].map(|i| m.normals[3 * k + i] as f64);
+            let rho = ((x - c[0]).powi(2) + (y - c[1]).powi(2)).sqrt();
+            // (the pocket, away from the bar's round top and the finish's step)
+            if rho > t.radius + 1.0 || z < floor - 1.0 || (y * y + z * z).sqrt() > 9.0 {
+                continue;
+            }
+            let wall = t.radius;
+            let off = if z >= floor && rho <= wall {
+                (wall - rho).min(z - floor)
+            } else if z >= floor {
+                rho - wall
+            } else if rho <= wall {
+                floor - z
+            } else {
+                (rho - wall).hypot(floor - z)
+            };
+            // (the finish's step, 0.1 down at radius 2.5, lies inside that: the floor's)
+            worst = worst.max(off.min((z - 5.13).abs().max(rho - 2.5)).max(0.0));
+            if rho < 2.0 && (z - floor).abs() < 0.5 * h {
+                floors += 1;
+                assert!(nv[2] > 0.999, "the floor at {v:?}: {nv:?}");
+                assert_eq!(m.ops[k], 3, "the finished floor at {v:?}");
+            }
+            if (rho - wall).abs() < 0.5 * h && z > 6.0 && z < 8.0 {
+                walls += 1;
+                let inward = [(c[0] - x) / rho, (c[1] - y) / rho, 0.0];
+                assert!(dot(nv, inward) > 0.98, "the wall at {v:?}: {nv:?}");
+                assert_eq!(m.ops[k], 2, "the roughed wall at {v:?}");
+            }
+        }
+        assert!(floors > 100 && walls > 50, "{floors} {walls}");
+        // (the floor's corner into the wall rounded off inside its cell, its worst)
+        assert!(worst < 0.6 * h, "a vertex {worst} off the cut");
     }
 }

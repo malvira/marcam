@@ -99,6 +99,7 @@ impl SolidPlayback {
         }
         let mut dx = Dexel::bar(job.stock.radius, job.stock.length, h);
         dx.track_ops();
+        dx.track_normals();
         let mut p = SolidPlayback {
             radius: job.stock.radius,
             length: job.stock.length,
@@ -147,6 +148,7 @@ impl SolidPlayback {
     fn bar(&self) -> Dexel {
         let mut dx = Dexel::bar(self.radius, self.length, self.h);
         dx.track_ops();
+        dx.track_normals();
         dx
     }
 
