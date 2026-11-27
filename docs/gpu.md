@@ -232,3 +232,46 @@ Where there is no WebGPU, as on CI, the same checks assert the labelled fallback
 **Speed in the browser.** Knob at Ultra (1.6M cells), machining playback on the GPU: to the
 last of 36 898 moves in 0.26 s; back to the middle in 0.16 s.
 
+
+## The playback's stock drawn exact (ray cast per pixel)
+
+Mar: "there cant be visual artifacts as that defeats the point of the sim". Any mesh made from
+the tri-dexel's 0.25 mm grid shows that grid at some zoom, however it is smoothed. So the
+stock the playback shows, once the view rests, is not a mesh. Each pixel's ray meets the bar
+minus the tool's swept volumes, worked out on the GPU (`web/gpu/exact.js`, WebGL2 inside
+three.js's own material, so it is lit and depth-tested like the rest of the scene). The
+reference for it, on the CPU, is `crates/marcam-core/src/exact.rs`.
+
+- **Pieces.** Every cutting move becomes pieces. A straight move with A held is one piece,
+  exact: the tool (flat, ball or V, as the tri-dexel takes it) swept along a segment is convex,
+  so a ray meets it in one interval. Each tool part is one quadric and a few linear constraints
+  in (t, s), and the interval's ends are found in closed form. A turning move (rotary, or a
+  pose that turns) is cut into pieces of at most 2°, each seen in poses near enough that a ray
+  meeting the tool between two of them comes within 0.5 µm of one. The tool's distance to a
+  point changes no faster than the piece's speed (a Lipschitz bound), so a few poses prove a
+  point out of it, or find the pose holding it (a golden search between poses).
+- **A ray.** From where it enters the bar: while its point is inside a piece played before the
+  playback's place, it moves on to where that piece's volume ends along it, the furthest of
+  those found. Where it stops is the surface: the bar's own, or the exit of the piece that cut
+  it there. That tool gives the normal and its operation gives the colour. A BVH over the
+  tools' stretches (each node holding the first segment under it, so the playback's place is
+  just a cutoff) finds the pieces a point is in.
+- **When.** While the view moves (orbiting, scrubbing, playing) the tri-dexel's tiles show. Once
+  it has rested 150 ms the exact view is drawn into a target of its own, in 128 px tiles under a
+  per-frame pixel budget, so the GPU is never handed a whole frame at once. When it is whole it
+  replaces the tiles. Drawing the knob takes about 55 ms, impeller-small about 0.5 µs a pixel
+  (RTX 5080). A browser without a GPU (SwiftShader, llvmpipe) keeps the tiles.
+- **The GPU compiler.** On Windows, WebGL goes through ANGLE to D3D11's FXC, which inlines every
+  call. The shader is therefore written with one call site for each costly function (loops
+  over the work instead of calls in many places), which took the first build from 87 s to about
+  3 s. It is built off the page (KHR_parallel_shader_compile, ahead of the first playback), and
+  the browser keeps it after that (about 10 ms).
+- **Checks.** `cargo test -p marcam-core exact` compares straight sweeps with brute force, and
+  turning moves with the tool's poses every 0.01° (no miss, no invented material, no material
+  passed over). `examples/exact_synth.rs` cuts a slot, a pocket, a diamond knurl and a 4-axis
+  helix into a bar and works out each pixel by brute force from the tool's poses. The CPU cast
+  matches it exactly, and `web/tests/exact_probe.mjs` holds the GPU's within 1 px at operation
+  boundaries at four views, extreme zoom included.
+
+The tri-dexel stays for everything else: the reports (material left, gouges, rapids through the
+stock), collisions, rest material and snapshots.

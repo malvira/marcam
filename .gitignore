@@ -14,3 +14,4 @@ tests/local/
 web/tests/screenshots/stress_fail_*
 web/tests/screenshots/step_failure.png
 web/tests/screenshots/usereye/
+web/tests/out/

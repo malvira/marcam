@@ -91,7 +91,7 @@ async function start() {
   }
   const profile = mkdtempSync(join(tmpdir(), "marcam-eye-"));
   const dport = await freePort();
-  children.push(spawn(findBrowser(), ["--headless=new", `--remote-debugging-port=${dport}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", ...(process.env.MARCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []), "about:blank"], { stdio: "ignore" }));
+  children.push(spawn(findBrowser(), ["--headless=new", `--remote-debugging-port=${dport}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows", ...(process.env.MARCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []), "about:blank"], { stdio: "ignore" }));
   const version = await waitFor(async () => { try { return (await httpGet(`http://127.0.0.1:${dport}/json/version`)).json(); } catch { return null; } }, "the browser", 20000);
   const ws = new WebSocket(version.webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener("open", r, { once: true }));
@@ -2814,6 +2814,104 @@ try {
       })()`).then(JSON.parse);
       check("the playback's stock shaded from the tool's own surface: on the turned body its normals point out from the axis (as well as the grid's facets' at least) and are not the facets'",
         sh.n > 500 && sh.own >= sh.facet - 0.01 && sh.own > 0.6 && sh.differ > 0.5, JSON.stringify(sh));
+    }
+    // (Mar: "there cant be visual artifacts as that defeats the point of the sim") the
+    // playback's stock drawn exact once the view rests: the bar less the tool's own swept
+    // volumes, a ray each pixel (web/gpu/exact.js), shown instead of the grid's tiles; the
+    // knob's knurl and turned body in their operations' colours on screen. (A browser
+    // drawing without a GPU keeps the tiles: said, not checked.)
+    {
+      const soft = await read("window.__marcam.machining.state.exactSkipped || ''");
+      if (soft) console.log(`      (the exact stock skipped: ${soft})`);
+      else {
+        await waitFor(() => read("!!window.__marcam.machining.state.exact?.complete"), "the stock drawn exact", 120000 * SLACK).catch(() => {});
+        await shot("playback_exact");
+        const ex = await read(`(() => {
+          const m = window.__marcam.machining.state, v = window.__marcam.state.three;
+          const c = v.renderer.domElement, w = c.width, h = c.height;
+          const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+          const cx = cv.getContext('2d'); cx.drawImage(c, 0, 0);
+          const px = cx.getImageData(0, 0, w, h).data;
+          // the pixels near each operation's colour (sRGB, as drawn: lit, so by hue)
+          const hue = (r, g, b) => { const mx = Math.max(r, g, b), mn = Math.min(r, g, b); if (mx - mn < 30) return -1; let H = mx === r ? (g - b) / (mx - mn) : mx === g ? 2 + (b - r) / (mx - mn) : 4 + (r - g) / (mx - mn); return ((H * 60) + 360) % 360; };
+          const want = m.session.ops.map((o) => { const [r, g, b] = m.colors[o.tag] || [0, 0, 0]; return { tag: o.tag, h: hue(r * 255, g * 255, b * 255) }; });
+          const seen = Object.fromEntries(want.map((o) => [o.tag, 0]));
+          for (let i = 0; i < px.length; i += 16) {
+            const H = hue(px[i], px[i + 1], px[i + 2]);
+            if (H < 0) continue;
+            for (const o of want) if (o.h >= 0 && Math.min(Math.abs(H - o.h), 360 - Math.abs(H - o.h)) < 12) seen[o.tag]++;
+          }
+          return JSON.stringify({ complete: !!m.exact?.complete, shown: !!m.exact?.quad.visible, tiles: !!m.stockMesh?.visible, settle: Math.round(m.exact?.settleMs || -1), seen });
+        })()`).then(JSON.parse);
+        const tags = Object.values(ex.seen);
+        check("the playback's stock drawn exact once the view rests (the tool's own swept volumes, not the grid's tiles), its operations' colours on screen",
+          ex.complete && ex.shown && !ex.tiles && tags.filter((n) => n > 50).length >= 2, JSON.stringify(ex));
+        // turned, the view shows the tiles at once, and the exact stock again once it rests
+        const back = await read(`(async () => {
+          const v = window.__marcam.state.three, m = window.__marcam.machining.state;
+          // (the view drawn again for the new camera: not the drawing of the one before)
+          const key0 = m.exact?.key;
+          v.camera.position.applyAxisAngle(new v.THREE.Vector3(0, 0, 1), 0.2);
+          v.controls.update();
+          window.__marcam.kickView?.();
+          await new Promise((r) => setTimeout(r, 60));
+          const moving = { exact: !!m.exact?.quad.visible, tiles: !!m.stockMesh?.visible };
+          const t0 = performance.now();
+          while (!(m.exact?.complete && m.exact.key !== key0) && performance.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 50));
+          // (what held it, if anything: the page's frames, the view's state)
+          let raf = 0;
+          const r0 = performance.now();
+          await new Promise((res) => { const f = () => { raf++; if (performance.now() - r0 < 500) requestAnimationFrame(f); else res(); }; requestAnimationFrame(f); setTimeout(res, 1000); });
+          const why = { vis: document.visibilityState, focus: document.hasFocus(), raf, ready: !!m.exact?.ready, progress: m.exact?.progress, open: m.open, solid: m.solid, size: [v.renderer.domElement.width, v.renderer.domElement.height] };
+          return JSON.stringify({ moving, again: !!m.exact?.complete && !!m.exact?.quad.visible, ms: Math.round(performance.now() - t0), why });
+        })()`).then(JSON.parse);
+        check("the view turned: the tiles at once, the stock drawn exact again once it rests (within 2 s)", !back.moving.exact && back.moving.tiles && back.again && back.ms < 2000 * SLACK, JSON.stringify(back));
+        // close in 16 and 64 times on the stock's surface (at the view's middle, as a person
+        // zooms on a feature): the exact stock still whole surfaces and clean edges there, no
+        // speckle (the camera's nearness once left its cut stock salt and pepper): few pixels
+        // unlike all four of their neighbours. And with the camera inside the stock (closed in
+        // past its surface): what is nearer than the view's near plane cut away flat
+        for (const k of [16, 64, "inside"]) {
+          const z = await read(`(async () => {
+            const v = window.__marcam.state.three, m = window.__marcam.machining.state;
+            const key0 = m.exact?.key;
+            const rc = new v.THREE.Raycaster();
+            rc.setFromCamera(new v.THREE.Vector2(0, 0), v.camera);
+            const was = m.stockMesh.visible;
+            m.stockMesh.visible = true;
+            const h = rc.intersectObject(m.stockMesh, true)[0];
+            m.stockMesh.visible = was;
+            if (!h) return JSON.stringify({ hit: false });
+            const dir = h.point.clone().sub(v.camera.position).normalize();
+            const target = ${k === "inside" ? "h.point.clone().addScaledVector(dir, 2)" : "h.point.clone()"};
+            const p = ${k === "inside" ? "target.clone().addScaledVector(dir, -0.5)" : `v.camera.position.clone().sub(h.point).multiplyScalar(${1 / k}).add(h.point)`};
+            v.camera.position.copy(p);
+            v.controls.target.copy(target);
+            v.controls.update();
+            window.__marcam.kickView?.();
+            await new Promise((r) => setTimeout(r, 100));
+            const t0 = performance.now();
+            while (!(m.exact?.complete && m.exact.key !== key0) && performance.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 50));
+            await new Promise((r) => setTimeout(r, 200));
+            const c = v.renderer.domElement, w = c.width, hh = c.height;
+            const cv = document.createElement('canvas'); cv.width = w; cv.height = hh;
+            const cx = cv.getContext('2d'); cx.drawImage(c, 0, 0);
+            const px = cx.getImageData(0, 0, w, hh).data;
+            const at = (x, y) => 4 * (y * w + x);
+            const diff = (i, j) => Math.abs(px[i] - px[j]) + Math.abs(px[i + 1] - px[j + 1]) + Math.abs(px[i + 2] - px[j + 2]);
+            let drawn = 0, lone = 0;
+            for (let y = 1; y < hh - 1; y += 2) for (let x = 1; x < w - 1; x += 2) {
+              const i = at(x, y);
+              if (px[i] + px[i + 1] + px[i + 2] < 30) continue;
+              drawn++;
+              if ([at(x - 1, y), at(x + 1, y), at(x, y - 1), at(x, y + 1)].every((j) => diff(i, j) > 60)) lone++;
+            }
+            return JSON.stringify({ hit: true, complete: !!m.exact?.complete && m.exact.key !== key0, drawn, lone: +(lone / Math.max(1, drawn)).toFixed(4) });
+          })()`).then(JSON.parse);
+          await shot(`playback_exact_${k}x`);
+          check(k === "inside" ? "the stock drawn exact with the camera inside it: cut away flat at the near plane, no speckle" : `the stock drawn exact closed in ${k} times: whole surfaces, no speckle (under 1% of pixels unlike all their neighbours)`, z.hit && z.complete && z.drawn > 1000 && z.lone < 0.01, JSON.stringify(z));
+        }
+      }
     }
     // (Mar: a 10 s scrub to the middle of the impeller) its snapshots built in the background
     // while it sits; then the bar clicked near the start and at three quarters, as a person

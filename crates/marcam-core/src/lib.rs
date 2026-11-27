@@ -14,6 +14,7 @@ pub mod dexel;
 pub mod dropcutter;
 pub mod engrave;
 pub mod estimate;
+pub mod exact;
 pub mod feeds;
 pub mod gcode_in;
 pub mod geom;

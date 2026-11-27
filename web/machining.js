@@ -7,6 +7,7 @@
 
 import { blockSolid, heightmapSolid, stockObject, STOCK_LEFT, WALL_BAND } from "./meshes.js";
 import { GpuStock } from "./gpu/gpusim.js";
+import { ExactStock } from "./gpu/exact.js";
 import { colorNum, colorRgb } from "./colors.js";
 
 const PALETTE = ["#3b82f6", "#f59e0b", "#10b981", "#ef4444", "#a855f7", "#14b8a6", "#e11d48", "#84cc16"];
@@ -56,8 +57,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** Dispose an object tree's geometries and materials. */
   const disposeTree = (o) =>
     o.traverse((c) => {
-      // (the part's copies share the main view's geometry)
-      if (c.userData.shared) return;
+      // (the part's copies share the main view's geometry; the exact stock is its own: see
+      // dropExact)
+      if (c.userData.shared || c.userData.exactStock) return;
       c.geometry?.dispose();
       for (const mat of [].concat(c.material || [])) mat.dispose();
     });
@@ -413,6 +415,84 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     }
   }
 
+  /** The stock drawn exact (see gpu/exact.js) for a 3D playback's session: its pieces asked of
+   *  the engine once, the tiles shown meanwhile (and wherever the GPU cannot: no WebGL2). */
+  async function ensureExact(session) {
+    // (window.__marcam.noExact: the tiles only, as before the exact stock; for comparisons)
+    if (!session?.solid || m.exactFor === session || window.__marcam?.noExact) return;
+    m.exactFor = session;
+    const v = await getThree();
+    if (!v || v.failed || !v.renderer.capabilities.isWebGL2) return;
+    // (no GPU, the browser drawing in software: a frame of the exact stock would take it
+    // seconds; the tiles only)
+    if (softwareGl(v)) {
+      m.exactSkipped = "software GL";
+      return;
+    }
+    ExactStock.prewarm(v.THREE, v.renderer, v.camera, v.scene);
+    // (built only once planning is idle: its seconds of work never compete with a plan's)
+    while (window.__marcam?.planIdle?.() === false) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (m.session !== session) return;
+    }
+    let res;
+    try {
+      ({ result: res } = await engine("simExact"));
+    } catch (e) {
+      console.warn("exact stock:", e.message);
+      return;
+    }
+    if (m.session !== session) return;
+    dropExact();
+    const ex = (m.exact = new ExactStock(v.THREE, res, colorOf));
+    ex.session = session;
+    ex.ready = false;
+    ex.mesh.visible = false;
+    attachExact();
+    // (shown once its program is built: the tiles meanwhile)
+    const t0 = performance.now();
+    await ex.compile(v.renderer, v.camera, v.scene);
+    if (m.exact !== ex) return;
+    ex.ready = true;
+    ex.readyMs = performance.now() - t0;
+    applyLayers();
+  }
+  /** Whether the browser draws without a GPU (SwiftShader, llvmpipe, Windows' basic driver). */
+  function softwareGl(v) {
+    try {
+      const gl = v.renderer.getContext();
+      const e = gl.getExtension("WEBGL_debug_renderer_info");
+      const name = e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+      return /swiftshader|llvmpipe|softpipe|basic render/i.test(String(name));
+    } catch {
+      return false;
+    }
+  }
+  /** The exact stock's view (drawn whole when the view rests: see exactStep) into the scene. */
+  function attachExact() {
+    const v = state.three;
+    if (!m.exact || !v || v.failed || !v.groups.machining) return;
+    if (m.exact.session !== m.session) return dropExact();
+    if (m.exact.quad.parent !== v.groups.machining) v.groups.machining.add(m.exact.quad);
+    applyLayers();
+    placeTool();
+  }
+  function dropExact() {
+    if (!m.exact) return;
+    m.exact.dispose();
+    m.exact = null;
+  }
+  /** Each frame, before the view is drawn: the exact stock drawn on, a share at a time, while
+   *  the view rests; shown instead of the tiles once whole. Whether it is still at it (the view
+   *  is then drawn again next frame). */
+  function exactStep() {
+    const v = state.three, ex = m.exact;
+    if (!ex?.ready || !v || v.failed || !v.groups.work || !m.solid || !stockOn() || !m.open) return false;
+    const busy = ex.step(v.renderer, v.camera, v.scene, v.groups.work);
+    if (ex.quad.visible !== !!ex.complete) applyLayers();
+    return busy;
+  }
+
   /** Build the stock solid and the tool from the current arrays. */
   async function buildScene() {
     const v = await getThree();
@@ -476,6 +556,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       s.solid.tiles = null;
       m.stockMesh = grp;
       next.add(grp);
+      // (and drawn exact as soon as the engine has its pieces)
+      ensureExact(s);
       const { stock_radius: rr } = s;
       const len = (state.result?.stock?.length ?? 0) || 0;
       const ghost = stockObject(THREE, new THREE.CylinderGeometry(rr, rr, len || 1, 64, 1, false).rotateZ(-Math.PI / 2).translate(-(len || 1) / 2, 0, 0), 0.1);
@@ -483,6 +565,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.ghost = ghost;
       next.add(ghost);
       swap();
+      attachExact();
       m.toolNumber = null;
       showMachining(true);
       placeTool();
@@ -603,7 +686,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     for (const o of m.paths?.cut || []) o.visible = view.paths !== "off";
     for (const o of m.paths?.rapid || []) o.visible = view.paths !== "off" && view.rapids;
     // the stock as the toggle says at once (while the playback is made again without it)
-    if (m.stockMesh) m.stockMesh.visible = stockOn();
+    // (the exact stock, once there, instead of the tri-dexel's tiles: see ensureExact)
+    // (the exact stock once drawn whole for the view as it is; the tiles meanwhile)
+    const exact = !!(m.exact?.ready && m.exact.complete && m.solid && stockOn());
+    if (m.stockMesh) m.stockMesh.visible = stockOn() && !exact;
+    if (m.exact) m.exact.quad.visible = exact;
     if (m.ghost) m.ghost.visible = stockOn() && $("simGhost").checked;
     // at rest with the stock on: the background simulation's stock instead of the part
     // (and only while it is in the scene, shown)
@@ -733,6 +820,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // (Mar: "the wrong playback speed", chunky when fast) the playhead: where the clock is
     // while playing, the stock catching up behind it; else the stock's place
     const at = head();
+    // (the exact stock cut to the playhead, not to where the tiles have caught up)
+    if (m.exact) m.exact.setCut(Math.max(0, Math.min(Math.floor(at), s.segments)));
     const k = Math.max(0, Math.min(at, s.segments) - 1);
     const p = s.path;
     // machine tool tip, A, rapid, tool, operation tag
@@ -1157,6 +1246,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
    *  plan (nothing asked, the status left alone, at the end the first time). */
   async function open(opts = {}) {
     if (!opts.auto) showError("");
+    // (the exact stock's program built ahead, while the engine plays the job: see ensureExact)
+    getThree().then((v) => v && !v.failed && v.renderer.capabilities.isWebGL2 && !softwareGl(v) && ExactStock.prewarm(v.THREE, v.renderer, v.camera, v.scene)).catch(() => {});
     let job;
     try {
       job = readJob();
@@ -1363,6 +1454,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function reset() {
     epoch++;
     close();
+    dropExact();
     Object.assign(m, { session: null, r: null, op: null, pos: 0, target: 0, wanted: null, busy: false, stockMesh: null, ghost: null, dgrid: null, dr: null, dop: null, toolNumber: null, colors: {} });
     // (the play button disabled with the session gone: close drew it while it was there)
     renderToggles();
@@ -1531,6 +1623,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       localStorage.setItem("marcam.opColors", JSON.stringify(saved));
     } catch {}
     // recolour every vertex from the tag mirror
+    m.exact?.recolor(colorOf);
     if (m.solid) {
       for (const t of m.tiles?.values() || []) {
         const col = t.geometry.attributes.color.array;
@@ -1659,5 +1752,5 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   }
 
   renderToggles();
-  return { open, close, seek, jumpTo, renderSimProgress, reset, applyHidden, colorOf, lost, recolor, syncFrame, expand, collapse, toggle, renderToggles, state: m };
+  return { open, close, seek, jumpTo, renderSimProgress, reset, applyHidden, colorOf, lost, recolor, syncFrame, exactStep, expand, collapse, toggle, renderToggles, state: m };
 }

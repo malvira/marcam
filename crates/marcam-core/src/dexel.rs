@@ -1192,7 +1192,7 @@ pub struct Heavy {
 }
 
 /// The tool's tip and direction a fraction `f` along a move from `from`.
-fn seg_at(seg: &crate::sim::Segment, from: [f64; 3], f: f64) -> ([f64; 3], [f64; 3]) {
+pub fn seg_at(seg: &crate::sim::Segment, from: [f64; 3], f: f64) -> ([f64; 3], [f64; 3]) {
     let p = [0, 1, 2].map(|k| from[k] + (seg.to[k] - from[k]) * f);
     match seg.index_a {
         // (a pose that turns as it goes: A from where it started)

@@ -134,6 +134,9 @@ export async function load(source, opts = {}) {
     simWarm: (budget, opts) => call("sim_warm", String(budget), opts || {}),
     // drop the playback and GPU sessions (a new project)
     simClose: () => call("sim_close"),
+    // the open 3D playback's stock for the exact view: the bar, the tools, the tool's swept
+    // pieces and the hierarchy over them (base64 f32)
+    simExact: () => call("sim_exact"),
     // polylines (mm, Y up) from SVG text, placed with its box at opts.at and opts.height tall
     svgPaths: (svgText, opts) => call("svg_paths", svgText, opts || {}),
     // machining time of any G-code text: {total_s, feed_s, rapid_s, other_s, ...}

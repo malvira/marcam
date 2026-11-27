@@ -27,6 +27,7 @@ const BASE64 = {
   simOpen: [["path"], ["times"], ["moves"]],
   simSurface: [["positions"], ["indices"], ["left"]],
   simSeek: [["r"], ["z"], ["op"]],
+  simExact: [["pieces"], ["nodes"], ["prims"]],
   faceRegions: [["triangles"], ["region_of"]],
   carriedMesh: [["stl"]],
 };

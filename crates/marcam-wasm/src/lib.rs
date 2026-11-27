@@ -1959,6 +1959,41 @@ pub mod api {
         })
     }
 
+    /// The open 3D playback's stock for the exact view (see [`marcam::exact`]): the bar
+    /// (`radius`, `length`), its tools (`[radius, ball, cone]` each), the tool's swept pieces
+    /// (`pieces`: base64 f32, 16 a piece) and the hierarchy over them (`nodes`: base64 f32, 12
+    /// a node) whose leaves name pieces through `prims` (base64 f32: a piece's index each, its
+    /// tool's stretches boxed apart). A piece: tip (or a turning one's machine tip), the tool's reach; its move (the
+    /// machine's), its segment; its axis (a turning one's A from, A by, speed: radians, from
+    /// within one turn), tool * 65536 + operation; its poses, 1 if it turns. A node: its box
+    /// low corner, its first child or prim; high corner, its prims' count (0: two children);
+    /// the first segment under it.
+    pub fn sim_exact() -> Value {
+        SESSION.with(|s| {
+            let s = s.borrow();
+            let Some(Session::Solid(pb)) = s.as_ref() else {
+                return err("no 3D playback open");
+            };
+            let sc = pb.exact_scene();
+            let (pieces, nodes, prims) = sc.packed();
+            let tools: Vec<[f64; 3]> = sc
+                .tools
+                .iter()
+                .map(|t| [t.radius, if t.ball { 1.0 } else { 0.0 }, t.cone])
+                .collect();
+            json!({
+                "radius": sc.radius,
+                "length": sc.length,
+                "tools": tools,
+                "count": sc.pieces.len(),
+                "node_count": sc.nodes.len(),
+                "pieces": f32s(&pieces),
+                "nodes": f32s(&nodes),
+                "prims": f32s(&prims),
+            })
+        })
+    }
+
     /// Drop the open playback and GPU sessions (their stock grids): a new project starts clean.
     pub fn sim_close() -> Value {
         let had = SESSION.with(|s| s.borrow_mut().take().is_some());
@@ -2649,6 +2684,7 @@ pub mod api {
             "sim_seek" => sim_seek(s(a).trim().parse().unwrap_or(0)),
             "sim_warm" => sim_warm(s(a).trim().parse().unwrap_or(0.0), &s(b)),
             "sim_close" => sim_close(),
+            "sim_exact" => sim_exact(),
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&d(a), &s(b), c),
             "gap_keys" => gap_keys(&s(a)),

@@ -125,6 +125,15 @@ impl SolidPlayback {
         self.h
     }
 
+    /// The bar and the tool's swept volumes of every cutting segment, for the exact view
+    /// ([`crate::exact`]): the playback's place is a cutoff in its segments.
+    pub fn exact_scene(&self) -> crate::exact::Scene {
+        let tools = &self.tools;
+        crate::exact::Scene::of(self.radius, self.length, &self.segments, &|n| {
+            tools.iter().find(|(m, _)| *m == n).map(|(_, t)| *t)
+        })
+    }
+
     pub fn position(&self) -> usize {
         self.pos
     }

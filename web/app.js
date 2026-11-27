@@ -29,7 +29,7 @@ const $ = (id) => document.getElementById(id);
 // Two workers, each with the engine: one plans and answers the editor (forms, picks, the
 // part), the other simulates (the batch simulation, the playback), so a simulation running
 // in the background never holds up an edit. A cancel ends the simulating one only.
-const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simWarm", "simClose", "gpuOpen", "gpuStats", "simSurface", "simHeavy"]);
+const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simWarm", "simClose", "gpuOpen", "gpuStats", "simSurface", "simHeavy", "simExact"]);
 const workers = { main: null, sim: null };
 const TEST_SIM_DELAY = Math.max(0, +new URLSearchParams(location.search).get("testSimDelayMs") || 0);
 let nextId = 1;
@@ -1638,8 +1638,10 @@ async function makeThree() {
       requestAnimationFrame(loop);
       controls.update();
       window.__marcam.machining?.syncFrame?.();
+      // (the playback's exact stock drawn on while the view rests: see machining.js exactStep)
+      const exactBusy = window.__marcam.machining?.exactStep?.() || false;
       const sig = signature();
-      const busy = t < activeUntil || state.machining?.playing || cube.busy();
+      const busy = t < activeUntil || state.machining?.playing || cube.busy() || exactBusy;
       if (!busy && sig === lastSig && t - lastDraw < 500) return;
       lastSig = sig;
       lastDraw = t;
