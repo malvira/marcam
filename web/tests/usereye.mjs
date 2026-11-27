@@ -1672,7 +1672,8 @@ try {
       /Cylinder 20\.00/.test(odBand) && back && front && Math.abs(back[1] - 10) < 0.3 && Math.abs(front[1] - 10) < 0.3 && back[0] > -frame.length + 1.9 && front[0] <= -15 && /OK/.test(k.tab) && !k.error, `${odBand}; ${JSON.stringify(body)} ${JSON.stringify(k)}`);
     // its playback starts from the piece setup 1 left: the boss end narrower than the bar
     await click("#vtPlay");
-    await waitFor(() => read("!!window.__marcam.state.machining?.r && window.__marcam.state.machining.open"), "the playback", 120000).catch(() => {});
+    // (its own playback: a stock grid of its own, not the one before's arrays)
+    await waitFor(() => read("(() => { const m = window.__marcam.state.machining; return !!m?.r && m.open && !!m.session?.grid && !m.busy; })()"), "the playback", 120000).catch(() => {});
     await sleep(500);
     const ends = await read("(() => { const m = window.__marcam.state.machining; const g = m.session.grid; const at = (x) => { const i = Math.round((x - g.x0) / g.dx - 0.5); let mx = 0; for (let j = 0; j < g.na; j++) mx = Math.max(mx, m.r[i * g.na + j]); return +mx.toFixed(2); }; return { boss: at(-3), od: at(-10), bar: at(-40) }; })()");
     await shot("carry_setup2_playing");
