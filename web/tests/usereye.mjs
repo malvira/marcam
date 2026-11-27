@@ -2684,7 +2684,8 @@ try {
     check("another project loaded while the one before's stock in 3D was being made: that work stopped at once", leftOver === 0, JSON.stringify({ building, leftOver }));
     // (from here nothing is clicked, nothing moved over the view)
     await settled();
-    const shown = await waitFor(() => read("(() => { const v = window.__marcam.state.three; const g = v?.groups?.simFinal; return !!window.__marcam.state.sim && !!g && g.visible && g.children.length > 0; })()"), "the stock, by itself", 240000 * SLACK).catch(() => false);
+    // (the background simulation's stock, or the sim's stock drawn exact in its place)
+    const shown = await waitFor(() => read("(() => { const v = window.__marcam.state.three; const g = v?.groups?.simFinal; const ex = window.__marcam.state.machining.exact; return !!window.__marcam.state.sim && ((!!g && g.visible && g.children.length > 0) || (!!ex?.quad.visible && !!ex.complete)); })()"), "the stock, by itself", 240000 * SLACK).catch(() => false);
     await sleep(1500);
     const img = await shot("stock_without_a_click");
     const vr = await viewRect();
@@ -3283,13 +3284,17 @@ try {
     await read("(() => { const s = document.getElementById('example'); s.value = 'knob'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
     await click("#loadExample");
     await settled();
+    // (the stock on, as it is left from one session to the next: its button pressed if the
+    // project's loading left it off)
+    const stockBtn2 = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return b.getAttribute('aria-pressed') === 'true' ? null : [r.left + r.width / 2, r.top + r.height / 2]; })()");
+    if (stockBtn2) await drag(stockBtn2, stockBtn2, 1);
     const soft = await read("window.__marcam.machining.state.exactSkipped || ''");
     if (soft) console.log(`      (the stock at rest checked without the exact stock: ${soft})`);
     else {
       const t0 = Date.now();
       const shown = await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !m.expanded && !!m.exact?.complete && !!m.exact.quad.visible; })()"), "the sim's stock at rest", 60000 * SLACK).catch(() => false);
       const a = await shot("rest_sim_untouched");
-      check("planned, the view never clicked: the sim's stock (exact, the whole job's) on the screen by itself", !!shown, `${Date.now() - t0} ms; ${await read("JSON.stringify({ open: window.__marcam.machining.state.open, expanded: window.__marcam.machining.state.expanded, exact: !!window.__marcam.machining.state.exact })")}`);
+      check("planned, the view never clicked: the sim's stock (exact, the whole job's) on the screen by itself", !!shown, `${Date.now() - t0} ms; ${await read(`(() => { const m = window.__marcam.machining.state, t = window.__marcam.state.tree, e = m.exact; return JSON.stringify({ open: m.open, expanded: m.expanded, segs: m.session?.segments, exact: !!e, ready: e?.ready, complete: e?.complete, showing: e?.showing, quad: e?.quad.visible, keyOk: e?.key0 === m.exactFor, focus: t?.focus, selected: t?.selected, editing: m.editing, stock: m.view.stock, left: m.view.left, inFlight: window.__marcam.inFlight() }); })()`)}`);
       const vr = await viewRect();
       const differ = (p, q) => {
         let d = 0, n = 0;
@@ -3319,6 +3324,23 @@ try {
       }
     }
     await clean("the stock at rest and material left");
+  }
+  // ---------------------------------------------------------------- an operation added
+  // (Mar: "adding a new operation will trigger a full toolpath regen when it shouldn't. should
+  // only start generating the new toolpath") the knob as planned, an operation added in the
+  // tree: it alone planned, the ones before replayed, their G-code the same
+  {
+    const before = await read("JSON.stringify({ n: (window.__marcam.state.result?.programs || []).length, ops: (() => { const t = window.__marcam.state.tree; const st = t?.doc?.setups?.find((x) => x.id === t.setup) || t?.doc?.setups?.[0]; return st?.operations?.length ?? -1; })(), gcode: (window.__marcam.state.result?.programs || []).map((p) => [p.name, (p.gcode || '').length, (p.gcode || '').slice(0, 2000)]) })").then(JSON.parse);
+    const kind = await read("(() => { const s = document.getElementById('treeAddType'); const o = [...s.options].find((o) => /turning|face|contour|pocket/i.test(o.value)) || s.options[0]; s.value = o.value; s.dispatchEvent(new Event('change', { bubbles: true })); return o.value; })()");
+    const t0 = Date.now();
+    await read("(() => { window.__resBefore = window.__marcam.state.result; return true; })()");
+    await click("#treeAdd");
+    const added = await waitFor(() => read(`(() => { const t = window.__marcam.state.tree; const st = t?.doc?.setups?.find((x) => x.id === t.setup) || t?.doc?.setups?.[0]; return st?.operations?.length === ${before.ops + 1} && document.body.dataset.state === 'done' && window.__marcam.state.result !== window.__resBefore && window.__marcam.state.result?.plan_cache != null; })()`), "the operation added and planned", 240000 * SLACK).catch(() => false);
+    await settled();
+    const after = await read("JSON.stringify({ pc: window.__marcam.state.result?.plan_cache, gcode: (window.__marcam.state.result?.programs || []).map((p) => [p.name, (p.gcode || '').length, (p.gcode || '').slice(0, 2000)]) })").then(JSON.parse);
+    const same = before.gcode.every(([name, len, head]) => after.gcode.some(([n2, l2, h2]) => n2 === name && h2 === head && (l2 === len || l2 > len)));
+    check(`an operation added (${kind}): it alone planned, the ${before.ops} before it replayed, their G-code the same`, !!added && after.pc?.planned === 1 && after.pc?.reused === before.ops && same, JSON.stringify({ ms: Date.now() - t0, pc: after.pc, same, ops: before.ops }));
+    await clean("an operation added");
   }
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);

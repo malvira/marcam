@@ -306,3 +306,60 @@ operations = ["op1", "op2", "op3"]
         "the roughing edited: it and the rest roughing planned ({misses})"
     );
 }
+
+/// (Mar: "adding a new operation will trigger a full toolpath regen when it shouldn't") an
+/// operation added at the end with a tool of its own: it alone is planned, every one before it
+/// replayed as it was.
+#[test]
+fn an_operation_added_with_a_new_tool_plans_it_alone() {
+    for (name, job, mesh, _) in &examples() {
+        let mut cache = PlanCache::new();
+        let first = plan_with_mesh_cached(job, mesh.as_ref(), &mut cache).unwrap();
+        cache.take_counts();
+        let (pi, oi) = (
+            job.programs.len() - 1,
+            job.programs.last().unwrap().operations.len() - 1,
+        );
+        let added = with(job, |v| {
+            let last = v["programs"][pi]["operations"][oi].clone();
+            let number = last["tool"].as_u64().unwrap();
+            let mut tool = v["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["number"].as_u64() == Some(number))
+                .unwrap()
+                .clone();
+            tool["number"] = serde_json::json!(99);
+            v["tools"].as_array_mut().unwrap().push(tool);
+            let mut op = last;
+            op["tool"] = serde_json::json!(99);
+            v["programs"][pi]["operations"]
+                .as_array_mut()
+                .unwrap()
+                .push(op);
+        });
+        let Ok(fresh) = plan_with_mesh(&added, mesh.as_ref()) else {
+            continue;
+        };
+        let cached = plan_with_mesh_cached(&added, mesh.as_ref(), &mut cache).unwrap();
+        assert_eq!(cached, fresh, "{name}: after adding an operation");
+        let (hits, misses) = cache.take_counts();
+        assert_eq!(
+            (hits, misses),
+            (ops(job), 1),
+            "{name}: the new operation alone planned"
+        );
+        // (the ones before: the same moves as before it was added)
+        for (a, b) in first.iter().zip(&cached) {
+            if a.name == b.name {
+                assert!(
+                    b.moves
+                        .starts_with(&a.moves[..a.moves.len().min(b.moves.len())])
+                        || a.moves.len() <= b.moves.len(),
+                    "{name}"
+                );
+            }
+        }
+    }
+}

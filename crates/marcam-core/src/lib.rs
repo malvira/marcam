@@ -195,6 +195,10 @@ struct Ctx<'a> {
     job_key: u64,
     /// The moves of the programs planned so far, kept when a rest roughing needs them.
     prior: Vec<Vec<Move>>,
+    /// The tools of the operations so far (this one's included): part of each cache key, so an
+    /// operation added with a new tool after it leaves it planned (Mar: "adding a new operation
+    /// will trigger a full toolpath regen")
+    tools_so_far: Vec<u32>,
 }
 
 /// A hasher fed by a writer (a value serialised straight into it, without the text).
@@ -1149,7 +1153,6 @@ pub(crate) fn job_key(job: &Job, mesh: Option<&Mesh>) -> u64 {
         job.spindle_rpm,
         &job.part.profile,
         &job.part.mesh,
-        &job.tools,
     ))
     .unwrap_or_default();
     // (the stock carried from the setup before)
@@ -1626,9 +1629,21 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
             && in_process(op)
             && (job.carried.is_some() || has_cuts(&ctx.prior, &b.moves));
         // planned before with everything the same: replay it (renumbered)
+        if !ctx.tools_so_far.contains(&number) {
+            ctx.tools_so_far.push(number);
+        }
+        // (an operation on the stock the ones before left: their tools too, which shaped it;
+        // one on its own: its own tool alone, below)
+        let on_prior = uses_prior(op) || aware;
+        let tools_so_far: Vec<_> = if on_prior {
+            ctx.tools_so_far.iter().map(|&n| job.tool(n)).collect()
+        } else {
+            Vec::new()
+        };
         let key = ctx.cache.as_ref().map(|_| {
             hash_of(&(
                 ctx.job_key,
+                serde_json::to_string(&tools_so_far).unwrap_or_default(),
                 serde_json::to_string(&(
                     op,
                     tool,
@@ -2985,6 +3000,7 @@ fn plan_cached(
         },
         cache,
         prior: Vec::new(),
+        tools_so_far: Vec::new(),
     };
     // (a rest roughing works on what the programs before it left)
     let rest = job.programs.iter().any(|p| {
