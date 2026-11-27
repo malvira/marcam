@@ -59,12 +59,16 @@ fn leave_xy() -> f64 {
 pub struct Reach {
     pub parts: Vec<(f64, f64)>,
     pub clear: f64,
+    /// A region of a level (a way in and the cuts after it) taking less of the stock than this
+    /// (mm3 a second, its cutting, links and way in counted) is left (0: none left so).
+    pub min_rate: f64,
 }
 
 thread_local! {
     static REACH: std::cell::RefCell<Option<Reach>> = const { std::cell::RefCell::new(None) };
-    /// What the reach left: (cells of material it kept the tool from, the deepest it reached).
-    static REACH_LEFT: std::cell::Cell<(usize, f64)> = const { std::cell::Cell::new((0, f64::INFINITY)) };
+    /// What the reach left: (cells of material it kept the tool from, the deepest it reached,
+    /// the regions left as not worth their time).
+    static REACH_LEFT: std::cell::Cell<(usize, f64, usize)> = const { std::cell::Cell::new((0, f64::INFINITY, 0)) };
 }
 
 /// [`Reach`] kept by [`adaptive_rough`] while it lives: a level cut only where the shank and
@@ -75,13 +79,13 @@ pub struct ReachGuard;
 impl ReachGuard {
     pub fn set(r: Option<Reach>) -> ReachGuard {
         REACH.with(|m| *m.borrow_mut() = r);
-        REACH_LEFT.with(|m| m.set((0, f64::INFINITY)));
+        REACH_LEFT.with(|m| m.set((0, f64::INFINITY, 0)));
         ReachGuard
     }
 
-    /// The material the reach kept the tool from (grid cells, as the levels found them), and
-    /// the lowest level it cut.
-    pub fn left(&self) -> (usize, f64) {
+    /// The material the reach kept the tool from (grid cells, as the levels found them), the
+    /// lowest level it cut, and the regions left as slower than [`Reach::min_rate`].
+    pub fn left(&self) -> (usize, f64, usize) {
         REACH_LEFT.with(|m| m.get())
     }
 }
@@ -2215,6 +2219,124 @@ pub const ADAPTIVE_MAX_CELLS: usize = 1_500_000;
 /// links at depth. It ends at the safe height.
 use crate::strategy::adaptive::SLOT_FEED;
 
+/// [`adaptive_rough`]'s deep pass: the level's regions (a way in, and the cuts and links after
+/// it) that take the stock left in the level's layer slower than `min_rate` (mm3 a second:
+/// their cutting and links at the feed, a helix's turns, the way in and out about 1.5 s)
+/// dropped: their steps gone, their cells not cut, the material left closed to the levels
+/// below. Returns how many were dropped.
+#[allow(clippy::too_many_arguments)]
+fn drop_slow_regions(
+    cl: &mut crate::strategy::adaptive::Cleared,
+    g: &crate::strategy::adaptive::Grid,
+    open: &mut [bool],
+    stock_here: &[bool],
+    mat_top: &[f64],
+    z: f64,
+    layer: f64,
+    op: &Raster3d,
+    r: f64,
+    min_rate: f64,
+) -> usize {
+    use crate::strategy::adaptive::Step;
+    let n = g.len();
+    let entry = |s: &Step| matches!(s, Step::Down(_) | Step::Plunge(_) | Step::Helix { .. });
+    let mut starts: Vec<usize> = (0..cl.steps.len())
+        .filter(|&i| entry(&cl.steps[i]))
+        .collect();
+    if starts.first() != Some(&0) {
+        starts.insert(0, 0);
+    }
+    let feed = op.feed.max(1.0);
+    let mut owner = vec![usize::MAX; n];
+    let mut keep = vec![true; cl.steps.len()];
+    let mut dropped_cells = vec![false; n];
+    let mut kept_cells = vec![false; n];
+    let mut dropped = 0;
+    for (ri, &s0) in starts.iter().enumerate() {
+        let s1 = starts.get(ri + 1).copied().unwrap_or(cl.steps.len());
+        let mut cells: Vec<usize> = Vec::new();
+        let mut secs = 1.5;
+        {
+            let mut mark = |q: [f64; 2], rad: f64| {
+                g.disc(q, rad, |c| {
+                    if owner[c] != ri {
+                        owner[c] = ri;
+                        cells.push(c);
+                    }
+                })
+            };
+            for st in &cl.steps[s0..s1] {
+                match st {
+                    Step::Down(q) | Step::Plunge(q) => mark(*q, r),
+                    Step::Helix { centre, radius, .. } => {
+                        mark(*centre, radius + r);
+                        secs += 2.0 * std::f64::consts::TAU * radius / feed * 60.0;
+                    }
+                    Step::Cut(pts) | Step::Link(pts) => {
+                        for w in pts.windows(2) {
+                            let len = (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]);
+                            secs += len / feed * 60.0;
+                            let k = (len / (0.5 * g.h)).ceil().max(1.0) as usize;
+                            for i in 0..=k {
+                                let t = i as f64 / k as f64;
+                                mark(
+                                    [
+                                        w[0][0] + (w[1][0] - w[0][0]) * t,
+                                        w[0][1] + (w[1][1] - w[0][1]) * t,
+                                    ],
+                                    r,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let vol: f64 = cells
+            .iter()
+            .filter(|&&c| stock_here[c] && !kept_cells[c])
+            .map(|&c| (mat_top[c].min(z + layer) - z).max(0.0) * g.h * g.h)
+            .sum();
+        if vol / secs < min_rate {
+            dropped += 1;
+            keep[s0..s1].iter_mut().for_each(|k| *k = false);
+            for c in cells {
+                dropped_cells[c] = true;
+            }
+        } else {
+            for c in cells {
+                kept_cells[c] = true;
+            }
+        }
+    }
+    if dropped == 0 {
+        return 0;
+    }
+    let mut new_index = vec![usize::MAX; cl.steps.len()];
+    let mut steps = Vec::new();
+    for (i, st) in std::mem::take(&mut cl.steps).into_iter().enumerate() {
+        if keep[i] {
+            new_index[i] = steps.len();
+            steps.push(st);
+        }
+    }
+    cl.steps = steps;
+    cl.heavy = std::mem::take(&mut cl.heavy)
+        .into_iter()
+        .filter(|(i, _)| keep[*i])
+        .map(|(i, v)| (new_index[i], v))
+        .collect();
+    for c in 0..n {
+        if dropped_cells[c] && !kept_cells[c] {
+            cl.cut[c] = false;
+            if stock_here[c] {
+                open[c] = false;
+            }
+        }
+    }
+    dropped
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_adaptive(
     b: &mut Builder,
@@ -2634,6 +2756,7 @@ pub fn adaptive_rough(
     };
     let mut reach_left = 0usize;
     let mut reach_low = f64::INFINITY;
+    let mut slow_left = 0usize;
     for z in levels(top, floor, op.step_down.max(d * 0.05)) {
         if crate::budget::over() {
             break;
@@ -2699,7 +2822,23 @@ pub fn adaptive_rough(
                 }
             }
         }
-        let cl = clear_level(g, &allowed, &stock_here, &mut open, params, None);
+        let mut cl = clear_level(g, &allowed, &stock_here, &mut open, params, None);
+        // (the deep pass: a region that takes the stock slower than the operations after it
+        // would is left to them, its cells as they were, closed to the levels below)
+        if let Some(rc) = reach.as_ref().filter(|rc| rc.min_rate > 0.0) {
+            slow_left += drop_slow_regions(
+                &mut cl,
+                &g,
+                &mut open,
+                &stock_here,
+                &mat_top,
+                z,
+                layer,
+                op,
+                r,
+                rc.min_rate,
+            );
+        }
         if cl.cut.iter().any(|&c| c) {
             reach_low = reach_low.min(z);
         }
@@ -2800,7 +2939,7 @@ pub fn adaptive_rough(
         }
     }
     if reach.is_some() {
-        REACH_LEFT.with(|m| m.set((reach_left, reach_low)));
+        REACH_LEFT.with(|m| m.set((reach_left, reach_low, slow_left)));
     }
     if plunges > 0 {
         b.warnings.push(format!(

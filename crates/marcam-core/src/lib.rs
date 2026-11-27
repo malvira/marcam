@@ -2265,14 +2265,28 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                 let mut stock3d = indexed_dexel(job, &ctx.prior);
                 let mut applied = 0;
                 let n_angles = angles.len();
-                for (k_angle, index) in angles.into_iter().enumerate() {
-                    // (and within it, angle k of m)
+                let body = job.tool(o.tool).map(collision::ToolBody::of);
+                // (two passes. First every angle as deep as the shank and the holder clear the
+                // highest stock anywhere at it, as before. Then, at each angle that held it
+                // back, deeper, region by region, as far as they clear the stock round them
+                // as it stands, on what every angle's first pass left: cut deep at one angle,
+                // what the next would have taken anyway cost the impeller-v4 4 minutes. And
+                // only where it is worth the time: a region taking the stock slower than the
+                // rest roughing after it would is left to it)
+                let mut deep: Vec<(f64, f64)> = Vec::new();
+                let mut queue: std::collections::VecDeque<(f64, Option<f64>)> =
+                    angles.iter().map(|&a| (a, None)).collect();
+                let mut k_angle = 0;
+                while let Some((index, cap)) = queue.pop_front() {
+                    // (and within it, angle k of m: each angle twice at most)
                     phase(&format!(
-                        "planning {} ({}) [op {op_at}/{op_total}] [angle {}/{n_angles}]",
+                        "planning {} ({}) [op {op_at}/{op_total}] [angle {}/{}]",
                         op_name(op),
                         prog.name,
-                        k_angle + 1
+                        k_angle + 1,
+                        2 * n_angles
                     ));
+                    k_angle += 1;
                     // (each angle its own share of the work: one is a 3-axis roughing)
                     budget::start(budget::OP_LIMIT);
                     let turned = mesh.rotated_x(index);
@@ -2292,48 +2306,75 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                         let j = (((y - hm.y0) / hm.cell).max(0.0) as usize).min(hm.ny - 1);
                         bots[j * hm.nx + i]
                     };
-                    let indexed_from = b.moves.len();
-                    let indexed_start = [b.x.unwrap_or(sb.min[0]), 0.0, safe_r];
-                    b.rapid_r(safe_r);
-                    b.rapid(None, None, Some(index));
-                    b.p3 = Some(indexed_start);
                     let mut oi = o.clone();
                     oi.index_a = index;
                     oi.pattern = "adaptive".into();
                     // (Mar's impeller on a 24 mm bar, roughed at each angle to Z 0 with a
                     // 3.175 x 12 tool: its holder, 17 mm up the tool, went 6.7 mm into the bar
-                    // round the pocket, 6845 moves; its shank, deeper than the flutes, rubbing
-                    // the pocket's walls) the shank above the flutes and the holder kept twice
-                    // the near-miss margin clear of the stock round them as each level finds
-                    // it: a region cut as deep as that allows there (a pocket between walls
-                    // cut low before it, deeper than one under the bar's full height); what is
-                    // under that is left for the operations after, and said
-                    let body = job.tool(o.tool).map(collision::ToolBody::of);
-                    let reach = body.map(|body| {
-                        let mut parts = vec![(body.holder_radius, body.stickout)];
-                        if body.flute_length < body.stickout {
-                            parts.push((body.shank_radius, body.flute_length));
+                    // round the pocket, 6845 moves) the first pass: no deeper than the flutes
+                    // reach (and the holder clears) from the highest stock at this angle, by
+                    // twice the near-miss margin
+                    let (reach, material) = match cap {
+                        None => {
+                            if let Some(body) = body {
+                                let top =
+                                    hm.z.iter()
+                                        .copied()
+                                        .filter(|z| z.is_finite())
+                                        .fold(f64::NEG_INFINITY, f64::max);
+                                let lowest = top - body.stickout.min(body.flute_length)
+                                    + 2.0 * collision::NEAR_MISS;
+                                if top.is_finite() && oi.floor < lowest {
+                                    oi.floor = lowest;
+                                    deep.push((index, lowest));
+                                }
+                            }
+                            (None, None)
                         }
-                        strategy::three_axis::Reach {
-                            parts,
-                            clear: 2.0 * collision::NEAR_MISS,
+                        // the deep pass: below the cap, region by region
+                        Some(cap) => {
+                            let reach = body.map(|body| {
+                                let mut parts = vec![(body.holder_radius, body.stickout)];
+                                if body.flute_length < body.stickout {
+                                    parts.push((body.shank_radius, body.flute_length));
+                                }
+                                strategy::three_axis::Reach {
+                                    parts,
+                                    clear: 2.0 * collision::NEAR_MISS,
+                                    min_rate: DEEP_RATE.with(|r| r.get()).unwrap_or(DEEP_MIN_RATE),
+                                }
+                            });
+                            (reach, Some(cap))
                         }
-                    });
+                    };
+                    let indexed_from = b.moves.len();
+                    let before = (b.x, b.r, b.a, b.p3);
+                    let indexed_start = [b.x.unwrap_or(sb.min[0]), 0.0, safe_r];
+                    b.rapid_r(safe_r);
+                    b.rapid(None, None, Some(index));
+                    b.p3 = Some(indexed_start);
+                    let turned_at = b.moves.len();
+                    let warned = b.warnings.len();
+                    let deep_pass = cap.is_some();
                     let reach_guard = strategy::three_axis::ReachGuard::set(reach);
-                    strategy::three_axis::adaptive_rough(
-                        &mut b,
-                        &dc,
-                        &|x, y| hm.at(x, y),
-                        &bottom,
-                        &sb,
-                        bar_x,
-                        safe_r,
-                        &oi,
-                    )
-                    .map_err(err)?;
-                    let (kept_from, lowest) = reach_guard.left();
+                    {
+                        let _below = strategy::three_axis::MaterialGuard::set(material);
+                        strategy::three_axis::adaptive_rough(
+                            &mut b,
+                            &dc,
+                            &|x, y| hm.at(x, y),
+                            &bottom,
+                            &sb,
+                            bar_x,
+                            safe_r,
+                            &oi,
+                        )
+                        .map_err(err)?;
+                    }
+                    let (kept_from, lowest, slow) = reach_guard.left();
                     drop(reach_guard);
-                    if kept_from > 0 {
+                    let mut said: Option<String> = None;
+                    if deep_pass && (kept_from > 0 || slow > 0) {
                         if let Some(body) = body {
                             let what = if body.flute_length < body.stickout {
                                 format!(
@@ -2344,12 +2385,18 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                                 format!("the holder, {:.1} mm up T{},", body.stickout, o.tool)
                             };
                             let reached = if lowest.is_finite() {
-                                format!(" (cut down to Z {lowest:.2} where it clears)")
+                                format!(" (down to Z {lowest:.2} where it clears)")
                             } else {
                                 String::new()
                             };
-                            b.warnings.push(format!(
-                                "indexed roughing at A {index:.1}: material left where {what} would come within {:.1} mm of the stock round it{reached}; the rest is left for the operations after",
+                            let slow_said = if slow > 0 {
+                                format!("; {slow} region(s) left as quicker for the rest roughing")
+                            } else {
+                                String::new()
+                            };
+                            said = Some(format!(
+                                "indexed roughing at A {index:.1}: below Z {:.2} only where {what} keeps {:.1} mm from the stock round it{reached}{slow_said}; the rest is left for the operations after",
+                                cap.unwrap_or(0.0),
                                 2.0 * collision::NEAR_MISS
                             ));
                         }
@@ -2357,12 +2404,32 @@ fn plan_program(ctx: &mut Ctx, prog: &Program, next_op: &mut u32) -> Result<Tool
                     if budget::over() {
                         break;
                     }
+                    // (a deep pass with nothing to cut: not even its turn of A)
+                    let cut_any = b.moves[turned_at..]
+                        .iter()
+                        .any(|m| matches!(m, Move::Line3 { .. }));
+                    if deep_pass && !cut_any {
+                        // (what it left said all the same; its own warnings, of moves gone, not)
+                        b.moves.truncate(indexed_from);
+                        b.warnings.truncate(warned);
+                        b.warnings.extend(said);
+                        (b.x, b.r, b.a, b.p3) = before;
+                        if queue.is_empty() && !deep.is_empty() {
+                            queue.extend(deep.drain(..).map(|(a, cap)| (a, Some(cap))));
+                        }
+                        continue;
+                    }
+                    b.warnings.extend(said);
                     b.rapid3(None, None, Some(safe_r));
                     b.rapid3(None, Some(0.0), None);
                     b.x = b.p3.map(|p| p[0]);
                     b.r = Some(safe_r);
                     let tail = b.moves.split_off(indexed_from);
                     b.moves.extend(general_moves(tail, indexed_start, index));
+                    // (the first pass done at every angle: the deep one, angle by angle)
+                    if queue.is_empty() && !deep_pass {
+                        queue.extend(deep.drain(..).map(|(a, cap)| (a, Some(cap))));
+                    }
                 }
             }
             (Operation::Custom(o), _) => {
@@ -3600,6 +3667,26 @@ pub fn collision_check(
         }
     }
     Ok(out)
+}
+
+/// Indexed roughing's deep pass leaves a region taking less of the stock than this (mm3 a
+/// second, its cutting, links and way in counted) for the rest roughing after it: kept only
+/// where clearly quicker than that (a ball's rest roughing on the impellers took 2 to 3 mm3
+/// a second; at 3, the impeller-v4's deep regions made it 100 s slower in all).
+const DEEP_MIN_RATE: f64 = 5.0;
+
+thread_local! {
+    static DEEP_RATE: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Plan with indexed roughing's deep pass keeping regions from `rate` mm3 a second (tests: 0
+/// keeps every region the holder allows).
+#[doc(hidden)]
+pub fn with_deep_min_rate<T>(rate: f64, f: impl FnOnce() -> T) -> T {
+    DEEP_RATE.with(|r| r.set(Some(rate)));
+    let out = f();
+    DEEP_RATE.with(|r| r.set(None));
+    out
 }
 
 /// How much wider and lower the shank and the holder are made for [`confirm_in_3d`] (mm).

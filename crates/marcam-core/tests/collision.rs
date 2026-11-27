@@ -353,7 +353,7 @@ fn a_holder_just_clear_of_the_stock_is_a_near_miss() {
 /// and the holder clear the stock round the cut by 1 mm, the rest left and said (Mar's impeller
 /// on a 24 mm bar, roughed to Z 0 with a 3.175 x 12 tool: 6845 moves with the holder up to
 /// 6.7 mm in the bar). The finned hub on a 14 mm bar, roughed at 4 angles to Z 2 with a
-/// 2 x 8 mm tool: no collision and no near miss, down to the floor where it clears.
+/// 2 x 8 mm tool: no collision and no near miss, deeper than Z 7 where it clears and pays.
 #[test]
 fn indexed_roughing_goes_no_deeper_than_the_tool_reaches() {
     let text = r#"
@@ -426,25 +426,46 @@ operations = ["op1"]
         .remove(0)
         .1;
     let mesh = marcam::load_mesh(&job, &dir).unwrap();
-    let tps = plan_with_mesh(&job, mesh.as_ref()).unwrap();
     let m = builtin_machine("makera-z1-4axis").unwrap();
+    let low = |tps: &[marcam::Toolpath]| {
+        marcam::sim::segments(tps)
+            .iter()
+            .filter(|g| !g.rapid && g.index_a.is_some())
+            .map(|g| g.to[2])
+            .fold(f64::INFINITY, f64::min)
+    };
+    let said = |tps: &[marcam::Toolpath]| {
+        tps[0]
+            .notes
+            .iter()
+            .filter(|w| w.contains("below Z 7.00 only where the shank"))
+            .count()
+    };
+    // (each angle first as deep as the shank clears the highest stock anywhere, Z 7.00, as
+    // before; then deeper, region by region, where it clears the stock round it and takes the
+    // stock quicker than the rest roughing would, the rest left and said) as it is: no region
+    // here quicker, the deep pass nothing (no turn of A for it, nothing said of its moves)
+    let tps = plan_with_mesh(&job, mesh.as_ref()).unwrap();
     let rep = &collision_check(&job, &tps, &m.post).unwrap()[0];
     assert_eq!((rep.count, rep.near), (0, 0), "{rep:?}");
-    // (per region now: each angle as deep as the shank clears the stock round it, the floor
-    // where it can; it was capped at Z 7.00 at every angle, by the highest stock anywhere)
-    let said = tps[0]
-        .notes
-        .iter()
-        .filter(|w| w.contains("material left where the shank") && w.contains("cut down to Z 2.20"))
-        .count();
-    assert_eq!(said, 4, "{:?}", tps[0].notes);
+    assert_eq!(said(&tps), 4, "{:?}", tps[0].notes);
+    assert!((low(&tps) - 7.2).abs() < 1e-6, "lowest cut Z {}", low(&tps));
+    assert!(
+        !tps[0].notes.iter().any(|w| w.contains("plunge")),
+        "{:?}",
+        tps[0].notes
+    );
+    // every region the holder allows kept: deeper than Z 7, clear
+    let tps = marcam::with_deep_min_rate(0.0, || plan_with_mesh(&job, mesh.as_ref()).unwrap());
+    let rep = &collision_check(&job, &tps, &m.post).unwrap()[0];
+    assert_eq!((rep.count, rep.near), (0, 0), "{rep:?}");
+    assert_eq!(said(&tps), 4, "{:?}", tps[0].notes);
+    let lowest = low(&tps);
+    assert!(
+        lowest < 7.0 - 1e-6,
+        "lowest cut Z {lowest}: the deep pass cut"
+    );
     let segs = marcam::sim::segments(&tps);
-    let lowest = segs
-        .iter()
-        .filter(|g| !g.rapid && g.index_a.is_some())
-        .map(|g| g.to[2])
-        .fold(f64::INFINITY, f64::min);
-    assert!(lowest < 2.21, "lowest cut Z {lowest}");
     // and the 1 mm kept, seen in 3D (no radial map): every pose of every move, the shank and
     // the holder 0.9 mm wider and lower, none of the stock in them as the moves before left it
     let body = marcam::collision::ToolBody::of(job.tool(1).unwrap());
