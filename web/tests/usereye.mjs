@@ -136,8 +136,9 @@ async function start() {
 
 /** A part like an impeller (a hub along X, three blades out to radius 18), as binary STL
  *  (about 24,000 triangles). */
-/** A 5-blade star along X (10 long, points 8 out, notches 4), its axis at (dy, dz): its box's
- *  middle off that axis (five points: the box lopsided), as an impeller with an odd count. */
+/** A 5-blade star along X (30 long: longer than across, so it goes on the bar as it is; points 8
+ *  out, notches 4), its axis at (dy, dz): its box's middle off that axis (five points: the box
+ *  lopsided), as an impeller with an odd count. */
 function starStl(dy, dz) {
   const pts = [];
   for (let i = 0; i < 10; i++) {
@@ -149,13 +150,13 @@ function starStl(dy, dz) {
   const P = (x, q) => [x, q[0], q[1]];
   for (let i = 0; i < 10; i++) {
     const [a, b] = [pts[i], pts[(i + 1) % 10]];
-    tris.push([P(0, a), P(0, b), P(-10, b)], [P(0, a), P(-10, b), P(-10, a)]);
+    tris.push([P(0, a), P(0, b), P(-30, b)], [P(0, a), P(-30, b), P(-30, a)]);
   }
   // the ends: fans round each end's middle (the axis), outward
   const mid = [dy, dz];
   for (let i = 0; i < 10; i++) {
     const [a, b] = [pts[i], pts[(i + 1) % 10]];
-    tris.push([P(0, mid), P(0, b), P(0, a)], [P(-10, mid), P(-10, a), P(-10, b)]);
+    tris.push([P(0, mid), P(0, b), P(0, a)], [P(-30, mid), P(-30, a), P(-30, b)]);
   }
   const buf = Buffer.alloc(84 + 50 * tris.length);
   buf.write("marcam test: a five-blade star", 0);
