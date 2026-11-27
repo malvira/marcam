@@ -24,12 +24,14 @@ mkdirSync(out, { recursive: true });
 const T0 = Date.now();
 const say = (what) => process.stderr.write(`[${((Date.now() - T0) / 1000).toFixed(0)} s] ${what}
 `);
-const app = await startApp();
+// (--root: another checkout served, as an older build for the "before")
+const rootArg = arg("--root", null);
+const app = await startApp(rootArg ? { root: resolve(rootArg) } : {});
 say("app up");
 const { js, S } = app;
 const report = { project, tiles, views: {} };
 try {
-  if (tiles) await js("window.__marcam.noExact = true");
+  if (tiles) await js("window.__marcam.noExact = true").catch(() => {});
   if (existsSync(project)) {
     const doc = await S("DOM.getDocument");
     const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#projectOpenFile" });
@@ -86,18 +88,20 @@ try {
       Object.assign(ms, await js("(() => { const e = window.__marcam.state.machining.exact; return { settleMs: Math.round(e.settleMs), drawMs: Math.round(e.lastMs) }; })()"));
     } else await sleep(1500);
     // orbiting: frames drawn as the camera turns (each one waits for the GPU: a pixel read)
-    Object.assign(ms, await js(`(() => { const v = window.__marcam.state.three; const gl = v.renderer.getContext(); const px = new Uint8Array(4); const t = []; const T = v.controls.target.clone(); const p0 = v.camera.position.clone(); for (let i = 0; i < ${frames}; i++) { const a = performance.now(); const q = p0.clone().sub(T).applyAxisAngle(new v.THREE.Vector3(0, 0, 1), 0.01 * (i + 1)).add(T); v.camera.position.copy(q); v.camera.lookAt(T); window.__marcam.machining.exactStep(); v.renderer.render(v.scene, v.camera); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); t.push(performance.now() - a); } v.camera.position.copy(p0); v.camera.lookAt(T); v.controls.update(); t.sort((x, y) => x - y); return { orbitMedianMs: +t[t.length >> 1].toFixed(1), orbitMaxMs: +t[t.length - 1].toFixed(1) }; })()`));
+    Object.assign(ms, await js(`(() => { const v = window.__marcam.state.three; const gl = v.renderer.getContext(); const px = new Uint8Array(4); const t = []; const T = v.controls.target.clone(); const p0 = v.camera.position.clone(); for (let i = 0; i < ${frames}; i++) { const a = performance.now(); const q = p0.clone().sub(T).applyAxisAngle(new v.THREE.Vector3(0, 0, 1), 0.01 * (i + 1)).add(T); v.camera.position.copy(q); v.camera.lookAt(T); window.__marcam.machining.exactStep?.(); v.renderer.render(v.scene, v.camera); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); t.push(performance.now() - a); } v.camera.position.copy(p0); v.camera.lookAt(T); v.controls.update(); t.sort((x, y) => x - y); return { orbitMedianMs: +t[t.length >> 1].toFixed(1), orbitMaxMs: +t[t.length - 1].toFixed(1) }; })()`));
     if (!tiles) await waitFor(() => js("!!window.__marcam.state.machining.exact?.complete"), "the exact view drawn again", 120000);
     await sleep(300);
     const { data } = await S("Page.captureScreenshot", { format: "png" });
-    writeFileSync(join(out, `${name}_${vw}.png`), Buffer.from(data, "base64"));
+    // (--zoom-names: the files named by their zoom, 1x 4x 16x 64x)
+    const label = process.argv.includes("--zoom-names") ? { normal: "1x", close: "4x", far: "16x", extreme: "64x" }[vw] : vw;
+    writeFileSync(join(out, `${name}_${label}.png`), Buffer.from(data, "base64"));
     report.views[vw] = ms;
   }
   report.errors = app.pageErrors();
   report.gl = await js("(() => { const v = window.__marcam.state.three; const gl = v.renderer.getContext(); return { lost: gl.isContextLost(), size: [gl.drawingBufferWidth, gl.drawingBufferHeight], calls: v.renderer.info.render.calls, programs: v.renderer.info.programs?.length }; })()");
 } catch (e) {
   report.error = e.message;
-  report.status = await js("JSON.stringify({ state: document.body.dataset.state, title: document.title, status: document.getElementById('status')?.textContent, error: document.getElementById('error')?.textContent })").catch(() => "");
+  report.status = await js("JSON.stringify({ state: document.body.dataset.state, title: document.title, status: document.getElementById('status')?.textContent, error: document.getElementById('error')?.textContent, playback: (() => { const m = window.__marcam.state.machining; return { open: m.open, stock: m.stock, solid: m.solid, busy: m.busy, note: m.note, mesh: !!m.stockMesh, progress: document.getElementById('simProgress')?.textContent }; })() })").catch(() => "");
   await app.shot("exact_view_error").catch(() => {});
   report.errors = app.pageErrors();
 } finally {
