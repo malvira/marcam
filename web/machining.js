@@ -94,11 +94,12 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   // for them, except the stock, which shows the background simulation's result (and runs
   // it if there is none yet).
   const VIEW_KEY = "marcam.view";
-  const VIEW_DEFAULT = { part: true, stock: false, paths: "all", rapids: false, tool: true, only: false, chuck: false, tailstock: false, outline: true };
+  const VIEW_DEFAULT = { part: true, stock: false, left: false, paths: "all", rapids: false, tool: true, only: false, chuck: false, tailstock: false, outline: true };
   /** The stock shown: its toggle; (Mar's carry-through) or, in a setup with no model (a cut
    *  piece carried in), the part's toggle: the piece is the part there. */
   const stockOn = () => {
-    if (view.stock) return true;
+    // (Mar: the material left on the part, its own toggle: the stock shown, coloured by it)
+    if (view.stock || view.left) return true;
     if (!view.part) return false;
     const t = state.tree;
     const s = t?.doc?.setups?.find((x) => x.id === t.setup);
@@ -106,6 +107,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   };
   /** The part's own screen (its handles to move it): the part shown there, never the
    *  simulated stock over it (the stock of where the part was, hiding the one being moved). */
+  /** An object's own id for keys (made on first asking). */
+  const idOf = (o) => (o ? (o.__id ||= Math.random()) : 0);
   const partScreen = () => state.tree?.focus === "part" && !state.tree?.selected;
   const view = { ...VIEW_DEFAULT };
   try {
@@ -128,6 +131,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   const TOGGLES = [
     { k: "part", key: "p", title: "Part", svg: '<path d="M4 7l6-3 6 3v7l-6 3-6-3z M4 7l6 3 6-3 M10 10v7"/>' },
     { k: "stock", key: "s", title: "Simulated stock (the background simulation's result; while playing, simulated along)", svg: '<path d="M3 8h14v8H3z M3 8l2-3h10l2 3 M7 8v3h6V8"/>' },
+    // (Mar: "the material left view is useful. But there doesn't seem to be a way to trigger it")
+    { k: "left", key: "m", title: "Material left on the part (the stock coloured by how much is left over the part, 0 to 0.5 mm)", svg: '<path d="M3 15h14 M3 15c2-6 4-9 7-9s5 3 7 9" /><path d="M6 15v-3 M10 15v-6 M14 15v-3" stroke-dasharray="1 1.5"/>' },
     // (Mar) the stock the setup starts with (see-through, its edges; a carried piece solid): on or off
     { k: "outline", key: "b", title: "The stock as the setup starts with it (its outline)", svg: '<path d="M3 6h14v9H3z" stroke-dasharray="2 1.5"/>' },
     { k: "paths", key: "t", title: "Toolpaths: all, up to the playhead, or off", svg: '<path d="M3 15l3-9 3 9 3-9 3 9 2-6"/>' },
@@ -188,7 +193,9 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     remember(VIEW_KEY, JSON.stringify(view));
     syncInputs();
     renderToggles();
-    if (k === "stock") {
+    if (k === "stock" || k === "left") {
+      // (the background simulation's stock coloured again: by material left, or plain)
+      m.finalKey = null;
       applyLayers();
       window.__marcam.legacyLayers?.();
       return stockToggled();
@@ -417,10 +424,19 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
 
   /** The stock drawn exact (see gpu/exact.js) for a 3D playback's session: its pieces asked of
    *  the engine once, the tiles shown meanwhile (and wherever the GPU cannot: no WebGL2). */
+  /** The exact view's stock (see gpu/exact.js) for the plan the playback shows: its pieces
+   *  asked of the engine once a plan (straight from the plan: at rest the whole job's stock,
+   *  no simulation waited for; playing, cut to the playhead), the tiles or the background
+   *  simulation's stock shown meanwhile (and wherever the GPU cannot: no WebGL2). */
+  function exactKey() {
+    return m.exactArgs ? `${m.exactArgs.key}|${m.session?.segments}` : null;
+  }
   async function ensureExact(session) {
     // (window.__marcam.noExact: the tiles only, as before the exact stock; for comparisons)
-    if (!session?.solid || m.exactFor === session || window.__marcam?.noExact) return;
-    m.exactFor = session;
+    if (!session || m.xyz || window.__marcam?.noExact || !m.exactArgs) return;
+    const key = exactKey();
+    if (m.exactFor === key) return attachExact();
+    m.exactFor = key;
     const v = await getThree();
     if (!v || v.failed || !v.renderer.capabilities.isWebGL2) return;
     // (no GPU, the browser drawing in software: a frame of the exact stock would take it
@@ -433,19 +449,20 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // (built only once planning is idle: its seconds of work never compete with a plan's)
     while (window.__marcam?.planIdle?.() === false) {
       await new Promise((r) => setTimeout(r, 250));
-      if (m.session !== session) return;
+      if (exactKey() !== key) return;
     }
     let res;
     try {
-      ({ result: res } = await engine("simExact"));
+      const { job, opts } = m.exactArgs;
+      ({ result: res } = await engine("exactJob", job, opts, state.mesh));
     } catch (e) {
       console.warn("exact stock:", e.message);
       return;
     }
-    if (m.session !== session) return;
+    if (exactKey() !== key || res.segments !== m.session?.segments) return;
     dropExact();
     const ex = (m.exact = new ExactStock(v.THREE, res, colorOf));
-    ex.session = session;
+    ex.key0 = key;
     ex.ready = false;
     ex.mesh.visible = false;
     attachExact();
@@ -472,7 +489,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   function attachExact() {
     const v = state.three;
     if (!m.exact || !v || v.failed || !v.groups.machining) return;
-    if (m.exact.session !== m.session) return dropExact();
+    if (m.exact.key0 !== exactKey()) return dropExact();
     if (m.exact.quad.parent !== v.groups.machining) v.groups.machining.add(m.exact.quad);
     applyLayers();
     placeTool();
@@ -485,9 +502,21 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   /** Each frame, before the view is drawn: the exact stock drawn on, a share at a time, while
    *  the view rests; shown instead of the tiles once whole. Whether it is still at it (the view
    *  is then drawn again next frame). */
+  /** Whether the exact stock is the one to show: playing (the stock simulated along), or at
+   *  rest with the stock on (the whole job's, the part's own screen and editing aside). */
+  function exactWanted() {
+    if (!m.exact?.ready || !m.open || !m.session || !stockOn() || m.exact.key0 !== exactKey()) return false;
+    return m.expanded ? !!m.solid : !partScreen() && !m.editing;
+  }
   function exactStep() {
     const v = state.three, ex = m.exact;
-    if (!ex?.ready || !v || v.failed || !v.groups.work || !m.solid || !stockOn() || !m.open) return false;
+    if (!v || v.failed || !v.groups.work || !exactWanted()) {
+      if (ex?.quad.visible) applyLayers();
+      return false;
+    }
+    // (at rest the whole job, coloured by material left when that is on; playing, the playhead)
+    ex.setCut(m.expanded ? Math.max(0, Math.min(Math.floor(head()), m.session.segments)) : m.session.segments);
+    ex.setLeft(!m.expanded && view.left);
     const busy = ex.step(v.renderer, v.camera, v.scene, v.groups.work);
     if (ex.quad.visible !== !!ex.complete) applyLayers();
     return busy;
@@ -543,6 +572,8 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       m.stockMesh = null;
       m.ghost = null;
       swap();
+      // (at rest the exact stock of the whole job, as soon as the plan is there)
+      ensureExact(s);
       m.toolNumber = null;
       showMachining(true);
       placeTool();
@@ -687,15 +718,17 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     for (const o of m.paths?.rapid || []) o.visible = view.paths !== "off" && view.rapids;
     // the stock as the toggle says at once (while the playback is made again without it)
     // (the exact stock, once there, instead of the tri-dexel's tiles: see ensureExact)
-    // (the exact stock once drawn whole for the view as it is; the tiles meanwhile)
-    const exact = !!(m.exact?.ready && m.exact.complete && m.solid && stockOn());
+    // (the exact stock once drawn whole for the view as it is; the tiles meanwhile, or at rest
+    // the background simulation's stock)
+    const exact = exactWanted() && !!m.exact.complete;
     if (m.stockMesh) m.stockMesh.visible = stockOn() && !exact;
     if (m.exact) m.exact.quad.visible = exact;
+    if (v.groups.simFinal && exact && !m.expanded) v.groups.simFinal.visible = false;
     if (m.ghost) m.ghost.visible = stockOn() && $("simGhost").checked;
     // at rest with the stock on: the background simulation's stock instead of the part
     // (and only while it is in the scene, shown)
     const inView = (o) => { for (let x = o; x; x = x.parent) if (!x.visible) return false; let p = o; while (p?.parent) p = p.parent; return p === v.scene; };
-    const finalStock = !m.expanded && stockOn() && !!v.groups.simFinal?.children.length && !m.editing && inView(v.groups.machining);
+    const finalStock = !m.expanded && stockOn() && (!!v.groups.simFinal?.children.length || exact) && !m.editing && inView(v.groups.machining);
     for (const c of v.groups.work.children) if (c.userData.shared) c.visible = view.part && !finalStock;
   }
 
@@ -740,7 +773,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // it starts (the setup's stock, solid), never an empty view; the simulated one in its
     // place when it lands
     const bar = !m.expanded && stockOn() && !partScreen() && !state.sim ? v.groups.stock : null;
-    const key = want || (bar ? `bar|${v.modelKey}|${bar.children.length}` : null);
+    const key = want ? `${view.left}|${idOf(want)}` : bar ? `bar|${v.modelKey}|${bar.children.length}` : null;
     if (m.finalKey !== key || (want && !v.groups.simFinal.children.length)) {
       m.finalKey = key;
       for (const c of [...v.groups.simFinal.children]) {
@@ -748,7 +781,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
         disposeTree(c);
       }
       const last = want?.stocks?.[want.stocks.length - 1];
-      if (last && simMeshOf) v.groups.simFinal.add(simMeshOf(v.THREE, want, last));
+      if (last && simMeshOf) v.groups.simFinal.add(simMeshOf(v.THREE, want, last, { left: view.left }));
       else if (bar) {
         const mat = new v.THREE.MeshStandardMaterial({ color: new v.THREE.Color(...uncut()), roughness: 0.55, metalness: 0.15 });
         // (the stock group's solids, not its edge lines nor a carried piece's guide)
@@ -763,7 +796,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       }
       applyLayers();
     }
-    v.groups.simFinal.visible = (!!want || !!bar) && !m.editing;
+    v.groups.simFinal.visible = (!!want || !!bar) && !m.editing && !(m.exact?.quad.visible && !m.expanded);
   }
 
   /** Only the machining view while it is open. */
@@ -1303,6 +1336,11 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
       const machine = machineArg?.() ?? null;
       // (opened by itself after a plan: a newer plan makes it stale, and stops it)
       m.autoOpening = !!opts.auto;
+      // (the exact stock's pieces made from the same plan, keyed by it)
+      {
+        const eo = { ...(simOpts?.() || {}), libraries: libraries(), setup };
+        m.exactArgs = { job, opts: eo, key: JSON.stringify([eo.plan_key ?? null, setup ?? null, eo.hide ?? null, state.result?.programs?.length ?? 0]) + idOf(state.result) };
+      }
       let result;
       try {
         ({ result } = await engine("simOpen", job, { ...(simOpts?.() || {}), libraries: libraries(), setup, machine: typeof machine === "string" ? machine : null, path_only: !stock, solid: stock, snapshot_mb: snapshotMb() }, state.mesh));

@@ -1959,6 +1959,75 @@ pub mod api {
         })
     }
 
+    /// The exact view's stock for a rotary job straight from its plan (see [`sim_exact`]: the
+    /// same pieces, in the playback's segments' order), with no playback open and no
+    /// simulation: the stock shown at rest the moment the plan is there. With the part's
+    /// triangles and a hierarchy over them (`part_nodes`, `part_tris`, `part_x`: its X range),
+    /// for the material left on it. `opts`: as [`sim_open`]'s. An error for a job the exact view
+    /// does not draw (a vise's block, a carried piece).
+    pub fn exact_job(job_json: &str, opts: &str, mesh: &[u8]) -> Value {
+        let opts: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let libs = match libraries(&opts) {
+            Ok(l) => l,
+            Err(e) => return err(e),
+        };
+        let job = match with_setup(&opts, || job_any_mesh(job_json, &libs, mesh)) {
+            Ok(j) => j,
+            Err(e) => return err(e),
+        };
+        if job.stock_box.is_some() || job.carried.is_some() {
+            return err("the exact view draws a bar's stock only");
+        }
+        let mesh = match parse_mesh(&job, mesh) {
+            Ok(m) => m,
+            Err(e) => return err(e),
+        };
+        let tps = match plan_for_sim(&job, mesh.as_ref(), &opts) {
+            Ok(t) => t,
+            Err(e) => return err(e),
+        };
+        let segs = sim::segments(&tps);
+        let sc = marcam::exact::Scene::of(job.stock.radius, job.stock.length, &segs, &|t| {
+            marcam::left3d::solid(&job, t)
+        });
+        let (pieces, nodes, prims) = sc.packed();
+        let tools: Vec<[f64; 3]> = sc
+            .tools
+            .iter()
+            .map(|t| [t.radius, if t.ball { 1.0 } else { 0.0 }, t.cone])
+            .collect();
+        let (pn, pt, px, sign) = match mesh.as_ref().filter(|m| !m.triangles.is_empty()) {
+            Some(m) => {
+                let (pn, pt) = marcam::exact::part_bvh(&m.triangles);
+                let b = m.bounds().map(|(lo, hi)| [lo[0], hi[0]]);
+                // (its triangles' winding: outward normals, or inward)
+                let sign = if marcam::left3d::check_mesh(m).volume < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                (pn, pt, b, sign)
+            }
+            None => (Vec::new(), Vec::new(), None, 1.0),
+        };
+        json!({
+            "radius": sc.radius,
+            "length": sc.length,
+            "tools": tools,
+            "count": sc.pieces.len(),
+            "node_count": sc.nodes.len(),
+            "segments": segs.len(),
+            "pieces": f32s(&pieces),
+            "nodes": f32s(&nodes),
+            "prims": f32s(&prims),
+            "part_nodes": f32s(&pn),
+            "part_tris": f32s(&pt),
+            "part_x": px,
+            "part_sign": sign,
+        })
+    }
+
     /// The open 3D playback's stock for the exact view (see [`marcam::exact`]): the bar
     /// (`radius`, `length`), its tools (`[radius, ball, cone]` each), the tool's swept pieces
     /// (`pieces`: base64 f32, 16 a piece) and the hierarchy over them (`nodes`: base64 f32, 12
@@ -2685,6 +2754,7 @@ pub mod api {
             "sim_warm" => sim_warm(s(a).trim().parse().unwrap_or(0.0), &s(b)),
             "sim_close" => sim_close(),
             "sim_exact" => sim_exact(),
+            "exact_job" => exact_job(&d(a), &s(b), c),
             "import_profile" => import_profile(a, &s(b)),
             "mesh_triangles" => mesh_triangles(&d(a), &s(b), c),
             "gap_keys" => gap_keys(&s(a)),

@@ -1503,6 +1503,75 @@ pub fn span(pc: &Piece, t: &ToolSolid, o: [f64; 3], d: [f64; 3]) -> Option<Span>
     })
 }
 
+/// The part's triangles for the exact view's material left (web/gpu/exact.js: each pixel's
+/// distance to the part, as [`crate::left3d`] measures it at its vertices): a bounding volume
+/// hierarchy over them, its nodes 8 floats each (box low corner and first child or triangle;
+/// high corner and triangle count, 0 for two children at `first` and `first + 1`) and the
+/// triangles in its leaves' order, 12 floats each (its corners, each with a 0).
+pub fn part_bvh(tris: &[[[f64; 3]; 3]]) -> (Vec<f32>, Vec<f32>) {
+    let n = tris.len();
+    let mut idx: Vec<u32> = (0..n as u32).collect();
+    let cen: Vec<[f64; 3]> = tris
+        .iter()
+        .map(|t| [0, 1, 2].map(|k| (t[0][k] + t[1][k] + t[2][k]) / 3.0))
+        .collect();
+    let mut nodes: Vec<[f32; 8]> = vec![[0.0; 8]];
+    let mut stack = vec![(0usize, n, 0usize)];
+    while let Some((s, e, ni)) = stack.pop() {
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for &i in &idx[s..e] {
+            for p in &tris[i as usize] {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(p[k]);
+                    hi[k] = hi[k].max(p[k]);
+                }
+            }
+        }
+        let nd = &mut nodes[ni];
+        for k in 0..3 {
+            nd[k] = lo[k] as f32 - 1e-4;
+            nd[4 + k] = hi[k] as f32 + 1e-4;
+        }
+        if e - s <= 4 {
+            nd[3] = s as f32;
+            nd[7] = (e - s) as f32;
+            continue;
+        }
+        // split at the median of the widest spread of centroids
+        let mut clo = [f64::INFINITY; 3];
+        let mut chi = [f64::NEG_INFINITY; 3];
+        for &i in &idx[s..e] {
+            for k in 0..3 {
+                clo[k] = clo[k].min(cen[i as usize][k]);
+                chi[k] = chi[k].max(cen[i as usize][k]);
+            }
+        }
+        let ax = (0..3)
+            .max_by(|&a, &b| (chi[a] - clo[a]).total_cmp(&(chi[b] - clo[b])))
+            .unwrap();
+        let mid = s + (e - s) / 2;
+        idx[s..e].select_nth_unstable_by(mid - s, |&a, &b| {
+            cen[a as usize][ax].total_cmp(&cen[b as usize][ax])
+        });
+        let l = nodes.len();
+        nodes[ni][3] = l as f32;
+        nodes[ni][7] = 0.0;
+        nodes.push([0.0; 8]);
+        nodes.push([0.0; 8]);
+        stack.push((s, mid, l));
+        stack.push((mid, e, l + 1));
+    }
+    let flat: Vec<f32> = nodes.iter().flatten().copied().collect();
+    let mut t = Vec::with_capacity(n * 12);
+    for &i in &idx {
+        for p in &tris[i as usize] {
+            t.extend_from_slice(&[p[0] as f32, p[1] as f32, p[2] as f32, 0.0]);
+        }
+    }
+    (flat, t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

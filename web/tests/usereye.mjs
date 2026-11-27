@@ -3267,6 +3267,59 @@ try {
     check("playback: paused after all that, the stock drawn is the same as a fresh seek to that place draws", diff < n * 0.01, `${diff} of ${n} px differ at move ${here}`);
     await clean("the playback's speed and scrubber");
   }
+  // ---------------------------------------------------------------- the stock at rest, untouched
+  // (Mar: "what is this view when tool paths are first generated? also I have to click the
+  // screen to show the sim") the knob planned with the Simulated stock on, the view never
+  // clicked: the sim's stock (the exact one, the whole job's) on the screen by itself. Then
+  // (Mar: "the material left view is useful. But there doesn't seem to be a way to trigger
+  // it") its button found by its name: the stock coloured by the material left; again: back
+  // to the sim's colours
+  {
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    const stockBtn = await read("(() => { const b = [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title)); const r = b.getBoundingClientRect(); return b.getAttribute('aria-pressed') === 'true' ? null : [r.left + r.width / 2, r.top + r.height / 2]; })()");
+    if (stockBtn) await drag(stockBtn, stockBtn, 1);
+    await read("(() => { const s = document.getElementById('example'); s.value = 'knob'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    const soft = await read("window.__marcam.machining.state.exactSkipped || ''");
+    if (soft) console.log(`      (the stock at rest checked without the exact stock: ${soft})`);
+    else {
+      const t0 = Date.now();
+      const shown = await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !m.expanded && !!m.exact?.complete && !!m.exact.quad.visible; })()"), "the sim's stock at rest", 60000 * SLACK).catch(() => false);
+      const a = await shot("rest_sim_untouched");
+      check("planned, the view never clicked: the sim's stock (exact, the whole job's) on the screen by itself", !!shown, `${Date.now() - t0} ms; ${await read("JSON.stringify({ open: window.__marcam.machining.state.open, expanded: window.__marcam.machining.state.expanded, exact: !!window.__marcam.machining.state.exact })")}`);
+      const vr = await viewRect();
+      const differ = (p, q) => {
+        let d = 0, n = 0;
+        for (let y = vr[1]; y < vr[1] + vr[3]; y += 2)
+          for (let x = vr[0]; x < vr[0] + vr[2]; x += 2) {
+            const u = p.at(x, y), w = q.at(x, y);
+            n++;
+            if (Math.abs(u[0] - w[0]) + Math.abs(u[1] - w[1]) + Math.abs(u[2] - w[2]) > 60) d++;
+          }
+        return d / n;
+      };
+      const leftBtn = await where(".view-toggles button", "Material left");
+      check("the material left's button in the view's toolbar, found by its name", !!leftBtn);
+      if (leftBtn) {
+        const drawnAgain = (mode) => waitFor(() => read(`(() => { const m = window.__marcam.machining.state; return m.exact?.uniforms.exLeftMode.value === ${mode} && !!m.exact.complete && m.exact.quad.visible; })()`), "drawn again", 30000 * SLACK).catch(() => false);
+        await drag(leftBtn, leftBtn, 1);
+        const on = await drawnAgain(1);
+        await sleep(300);
+        const b = await shot("rest_material_left");
+        const pressed = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Material left/.test(b.title))?.getAttribute('aria-pressed')");
+        check("material left clicked: its button pressed, the stock coloured by what is left on the part (the picture changed)", !!on && pressed === "true" && differ(a, b) > 0.005, JSON.stringify({ on: !!on, pressed, differ: +differ(a, b).toFixed(4) }));
+        await drag(leftBtn, leftBtn, 1);
+        const off = await drawnAgain(0);
+        await sleep(300);
+        const c = await shot("rest_sim_again");
+        check("material left clicked again: the sim's stock in its operations' colours, as before", !!off && differ(a, c) < 0.01, JSON.stringify({ off: !!off, differ: +differ(a, c).toFixed(4) }));
+      }
+    }
+    await clean("the stock at rest and material left");
+  }
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);
   await shot("failure").catch(() => {});

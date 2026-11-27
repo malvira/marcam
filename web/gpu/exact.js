@@ -53,6 +53,13 @@ uniform vec4 exViewport;
 uniform int exMaxSteps;
 // (1: loop bounds the compiler cannot know, so it does not unroll them)
 uniform int exLoop;
+// (material left: the stock coloured by its distance to the part, as left3d measures it)
+uniform int exLeftMode;
+uniform highp sampler2D exPartNodes;
+uniform highp sampler2D exPartTris;
+uniform vec2 exPartX;
+uniform float exPartSign;
+uniform int exPartCount;
 
 vec3 exNormalView;
 vec3 exColor;
@@ -482,6 +489,74 @@ bool exExit(int pi, float f, vec3 o, vec3 d, out float t1, out vec3 n1) {
   return any;
 }
 
+// The closest point of triangle abc to p (Ericson's regions).
+vec3 exClosestTri(vec3 p, vec3 a, vec3 b, vec3 c) {
+  vec3 ab = b - a, ac = c - a, ap = p - a;
+  float d1 = dot(ab, ap), d2 = dot(ac, ap);
+  if (d1 <= 0.0 && d2 <= 0.0) return a;
+  vec3 bp = p - b;
+  float d3 = dot(ab, bp), d4 = dot(ac, bp);
+  if (d3 >= 0.0 && d4 <= d3) return b;
+  float vc = d1 * d4 - d3 * d2;
+  if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) return a + ab * (d1 / (d1 - d3));
+  vec3 cp = p - c;
+  float d5 = dot(ab, cp), d6 = dot(ac, cp);
+  if (d6 >= 0.0 && d5 <= d6) return c;
+  float vb = d5 * d2 - d1 * d6;
+  if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) return a + ac * (d2 / (d2 - d6));
+  float va = d3 * d6 - d5 * d4;
+  if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+  float den = 1.0 / (va + vb + vc);
+  return a + ab * (vb * den) + ac * (vc * den);
+}
+
+// The material left at p: its distance to the part (0 inside it), as left3d's; 2 beyond 0.6 mm.
+float exLeftAt(vec3 p) {
+  float best = 0.6;
+  bool inside = false, found = false;
+  int stack[48];
+  int sp = 0;
+  stack[sp++] = 0;
+  for (int guard = 0; guard < 20000 * exLoop; guard++) {
+    if (sp == 0) break;
+    int ni = stack[--sp];
+    vec4 N0 = exFetch(exPartNodes, 2 * ni);
+    vec4 N1 = exFetch(exPartNodes, 2 * ni + 1);
+    vec3 q = clamp(p, N0.xyz, N1.xyz);
+    if (length(q - p) > best) continue;
+    int first = int(N0.w), count = int(N1.w);
+    if (count == 0) {
+      if (sp < 46) { stack[sp++] = first; stack[sp++] = first + 1; }
+      continue;
+    }
+    for (int k = 0; k < 4; k++) {
+      if (k >= count) break;
+      int ti = first + k;
+      vec3 a = exFetch(exPartTris, 3 * ti).xyz, b = exFetch(exPartTris, 3 * ti + 1).xyz, c = exFetch(exPartTris, 3 * ti + 2).xyz;
+      vec3 cq = exClosestTri(p, a, b, c);
+      float dd = length(p - cq);
+      if (dd < best) {
+        best = dd;
+        found = true;
+        vec3 nn = cross(b - a, c - a) * exPartSign;
+        inside = dot(p - cq, nn) <= 0.0;
+      }
+    }
+  }
+  if (!found) return 2.0;
+  return inside ? 0.0 : best;
+}
+
+// The material-left ramp (app.js ramp: blue, cyan, yellow, red over 0 to 0.5 mm).
+vec3 exRamp(float t) {
+  t = clamp(t, 0.0, 1.0);
+  vec3 s0 = vec3(40.0, 60.0, 200.0) / 255.0, s1 = vec3(30.0, 190.0, 210.0) / 255.0, s2 = vec3(240.0, 210.0, 40.0) / 255.0, s3 = vec3(210.0, 40.0, 40.0) / 255.0;
+  float f = t * 3.0;
+  if (f < 1.0) return mix(s0, s1, f);
+  if (f < 2.0) return mix(s1, s2, f - 1.0);
+  return mix(s2, s3, f - 2.0);
+}
+
 // The visible point on the stock: sets exNormalView, exColor, exViewPos, exDepth (or discards).
 void exactCast() {
   vec2 ndc = ((gl_FragCoord.xy - exViewport.xy) / exViewport.zw) * 2.0 - 1.0;
@@ -603,6 +678,11 @@ void exactCast() {
   } else {
     exColor = texelFetch(exOps, ivec2(0, 0), 0).rgb;
   }
+  // (material left: past the part's ends, the uncut stock's colour, as left3d's)
+  if (exLeftMode == 1 && exPartCount > 0) {
+    if (hitObj.x >= exPartX.x - 0.25 && hitObj.x <= exPartX.y + 0.25) exColor = exRamp(exLeftAt(hitObj) / 0.5);
+    else exColor = texelFetch(exOps, ivec2(0, 0), 0).rgb;
+  }
   exNormalView = normalize(mat3(exMV) * n);
   exViewPos = -(exMV * vec4(hitObj, 1.0)).xyz;
   vec4 clip = exMVP * vec4(hitObj, 1.0);
@@ -627,7 +707,18 @@ export class ExactStock {
     const tools = new Array(16).fill(null).map(() => new THREE.Vector4());
     (data.tools || []).slice(0, 16).forEach((t, i) => tools[i].set(t[0], t[1], t[2], 0));
     this.opsTex = null;
+    // (the part, for material left: its triangles and the hierarchy over them)
+    const pn = data.part_nodes ? floats(data.part_nodes) : new Float32Array(8);
+    const pt = data.part_tris ? floats(data.part_tris) : new Float32Array(12);
+    this.partTextures = [dataTexture(THREE, pn), dataTexture(THREE, pt)];
+    const partCount = pt.length / 12;
     const u = (this.uniforms = {
+      exLeftMode: { value: 0 },
+      exPartNodes: { value: this.partTextures[0] },
+      exPartTris: { value: this.partTextures[1] },
+      exPartX: { value: new THREE.Vector2(...(data.part_x || [0, 0])) },
+      exPartSign: { value: data.part_sign ?? 1 },
+      exPartCount: { value: data.part_x ? partCount : 0 },
       exPieces: { value: this.textures[0] },
       exNodes: { value: this.textures[1] },
       exPrims: { value: this.textures[2] },
@@ -834,6 +925,15 @@ void main() {
     return ExactStock.warm;
   }
 
+  /** Coloured by the material left on the part (true) or by the operations. */
+  setLeft(on) {
+    const v = on ? 1 : 0;
+    if (this.uniforms.exLeftMode.value !== v) {
+      this.uniforms.exLeftMode.value = v;
+      this.colorGen = (this.colorGen || 0) + 1;
+    }
+  }
+
   /** Show the stock cut by the segments before `n`. */
   setCut(n) {
     this.uniforms.exCut.value = n;
@@ -865,6 +965,7 @@ void main() {
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();
     for (const t of this.textures) t.dispose();
+    for (const t of this.partTextures) t.dispose();
     this.opsTex?.dispose();
   }
 }

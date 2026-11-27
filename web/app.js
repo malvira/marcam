@@ -29,7 +29,7 @@ const $ = (id) => document.getElementById(id);
 // Two workers, each with the engine: one plans and answers the editor (forms, picks, the
 // part), the other simulates (the batch simulation, the playback), so a simulation running
 // in the background never holds up an edit. A cancel ends the simulating one only.
-const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simWarm", "simClose", "gpuOpen", "gpuStats", "simSurface", "simHeavy", "simExact"]);
+const SIM_WORKER = new Set(["simulate", "simOpen", "simSeek", "simWarm", "simClose", "gpuOpen", "gpuStats", "simSurface", "simHeavy", "simExact", "exactJob"]);
 const workers = { main: null, sim: null };
 const TEST_SIM_DELAY = Math.max(0, +new URLSearchParams(location.search).get("testSimDelayMs") || 0);
 let nextId = 1;
@@ -177,7 +177,7 @@ function showSimRing() {
 }
 /** Engine calls by command, since the page loaded (window.__marcam.calls). */
 const calls = {};
-const WITH_LIBRARIES = new Set(["gapDepths", "opDefaults", "setMaterial", "simulate", "simSurface", "simHeavy", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
+const WITH_LIBRARIES = new Set(["exactJob", "gapDepths", "opDefaults", "setMaterial", "simulate", "simSurface", "simHeavy", "meshTriangles", "carriedMesh", "simGrid", "simOpen", "gpuOpen"]);
 function engine(cmd, ...args) {
   return engineOn(SIM_WORKER.has(cmd) ? "sim" : "main", cmd, ...args);
 }
@@ -192,7 +192,7 @@ const planKey = (job, setup, libs) => JSON.stringify([state.meshesGen, setup ?? 
 const SIMULATING = new Set(["sim", "stats"]);
 
 /** The engine calls that plan the project they are given. */
-const PLANS = new Set(["simulate", "simSurface", "simHeavy", "simOpen", "simGrid", "gpuOpen", "carriedMesh", "planAndPost"]);
+const PLANS = new Set(["exactJob", "simulate", "simSurface", "simHeavy", "simOpen", "simGrid", "gpuOpen", "carriedMesh", "planAndPost"]);
 /** An engine call on worker `which` ("main", "sim", or one of the pool's, see [`pool`]). */
 function engineOn(which, cmd, ...args) {
   calls[cmd] = (calls[cmd] || 0) + 1;
@@ -2371,7 +2371,9 @@ function toGeometry(THREE, m) {
 
 /** Simulated stock -> closed solid (a bar around X, or a 3-axis block), coloured by material
  * left over the part (grey where there is no part). */
-function simMesh(THREE, sim, s) {
+function simMesh(THREE, sim, s, opts = {}) {
+  // (coloured by material left only when that is asked for: View's toggle; else the stock plain)
+  const leftOn = opts.left !== false;
   // (the bar's stock in 3D, when it has come: smooth, its overhangs and hollows as they are)
   if (sim.surface && s === sim.stocks[sim.stocks.length - 1]) {
     const f = sim.surface;
@@ -2381,7 +2383,7 @@ function simMesh(THREE, sim, s) {
     const uncut = colorRgb("uncut");
     const col = new Float32Array(pos.length);
     for (let k = 0; k < left.length; k++) {
-      const c = Number.isFinite(left[k]) ? ramp(left[k] / 0.5) : uncut;
+      const c = Number.isFinite(left[k]) && leftOn ? ramp(left[k] / 0.5) : uncut;
       col[3 * k] = c[0];
       col[3 * k + 1] = c[1];
       col[3 * k + 2] = c[2];
@@ -2399,7 +2401,7 @@ function simMesh(THREE, sim, s) {
   const has = (k) => (sim.kind === "xyz" ? sim.part[k] != null : sim.part[k] > 0);
   // where there is no part: remaining stock, tinted (not the part's grey)
   const uncut = colorRgb("uncut");
-  const color = (k) => (has(k) ? ramp((r[k] - sim.part[k]) / 0.5) : uncut);
+  const color = (k) => (has(k) && leftOn ? ramp((r[k] - sim.part[k]) / 0.5) : uncut);
   const m = sim.kind === "xyz" ? blockSolid(sim.grid, r, sim.stock_box.min[2], color, uncut) : heightmapSolid(sim.grid, r, color, uncut);
   return new THREE.Mesh(toGeometry(THREE, m), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }));
 }
@@ -2966,7 +2968,7 @@ window.__marcam.project = setupProject({
 });
 
 // ---------------------------------------------------------------- machining simulation
-window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock, machineArg, simMeshOf: (THREE, sim, s) => simMesh(THREE, sim, s) });
+window.__marcam.machining = setupMachining({ engine, getThree, $, state, readJob, setStatus, showError, libraries, simOpts, confirmSimRes, simGpu, showBackend, simLock, machineArg, simMeshOf: (THREE, sim, s, o) => simMesh(THREE, sim, s, o) });
 window.__marcam.updateSimResInfo = updateSimResInfo;
 window.__marcam.simLock = simLock;
 
