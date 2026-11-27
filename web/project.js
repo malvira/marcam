@@ -210,16 +210,19 @@ function turnsAbout(tris, axis) {
   return 0;
 }
 
-/** The model axis to put along the bar on the 4th axis: the one the part turns about most (round
- *  most of all; a flat star turns half a turn about an axis across it too, five times about its
- *  own), X on a tie (a model made along X stays so), else X. (Mar's impeller from OpenSCAD, made
- *  along Z: put on across the bar, turned by hand.) */
+/** The model axis to put along the bar on the 4th axis: X, unless the part clearly turns about
+ *  another (the same every k-th of a turn, k 3 or more, or round, and more than about X) and not
+ *  about X (not round about it, half a turn at most: a flat star turns half a turn about an axis
+ *  across it too). A part made along X stays so; one made along Z, as Mar's impeller from
+ *  OpenSCAD (put on across the bar, turned by hand), goes on along Z. */
 export function barAxisOf(tris) {
   if (!tris?.length) return "x";
-  let best = "x", order = 0;
-  for (const ax of ["x", "z", "y"]) {
+  const kx = turnsAbout(tris, "x");
+  if (kx === Infinity || kx > 2) return "x";
+  let best = "x", order = kx;
+  for (const ax of ["z", "y"]) {
     const k = turnsAbout(tris, ax);
-    if (k > order) (best = ax), (order = k);
+    if (k >= 3 && k > order) (best = ax), (order = k);
   }
   return best;
 }
