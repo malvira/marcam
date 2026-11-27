@@ -2305,31 +2305,67 @@ fn emit_adaptive(
             // holder (the cut's footprint round the checked centres): over it, where they need
             // the tool higher, the link is made at that height, the tool down again after it)
             Step::Link(pts) if body.is_some() && pts.len() >= 2 => {
+                // (as low as they let it along the way: down at the level where they clear,
+                // up only where they need it, as much as they need)
                 let need = body.expect("matched");
-                let mut hi = f64::NEG_INFINITY;
+                let mut path: Vec<[f64; 3]> = Vec::new();
                 for w in pts.windows(2) {
                     let len = (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]);
                     let n = (len / 0.1).ceil().max(1.0) as usize;
-                    for k in 0..=n {
+                    for k in 1..=n {
                         let t = k as f64 / n as f64;
-                        hi = hi.max(need(
+                        let (x, y) = (
                             w[0][0] + (w[1][0] - w[0][0]) * t,
                             w[0][1] + (w[1][1] - w[0][1]) * t,
-                        ));
+                        );
+                        path.push([x, y, need(x, y).max(z)]);
                     }
                 }
-                if hi <= z + 1e-9 {
-                    for q in pts.iter().skip(1) {
-                        b.line3(q[0], q[1], z, UP, feed);
+                // (each rise begun before it: the height ahead within the tool's radius)
+                let r_ahead = 2.0;
+                let mut lifted = path.clone();
+                for (k, q) in lifted.iter_mut().enumerate() {
+                    for o in &path[k..] {
+                        if (o[0] - q[0]).dhypot(o[1] - q[1]) > r_ahead {
+                            break;
+                        }
+                        q[2] = q[2].max(o[2]);
                     }
-                } else {
-                    let (a, e) = (pts[0], pts[pts.len() - 1]);
-                    let up = hi + 0.5;
-                    b.line3(a[0], a[1], up, UP, feed);
-                    for q in pts.iter().skip(1) {
-                        b.line3(q[0], q[1], up, UP, feed);
+                    for o in path[..k].iter().rev() {
+                        if (o[0] - q[0]).dhypot(o[1] - q[1]) > r_ahead {
+                            break;
+                        }
+                        q[2] = q[2].max(o[2]);
                     }
-                    b.line3(e[0], e[1], z, UP, plunge);
+                }
+                // (only the corners of the profile: a point dropped where the line past it
+                // keeps its height and its heading)
+                let mut out: Vec<[f64; 3]> = Vec::new();
+                for q in lifted {
+                    if out.len() >= 2 {
+                        let (a, m) = (out[out.len() - 2], out[out.len() - 1]);
+                        let same_z = (a[2] - m[2]).abs() < 1e-6 && (m[2] - q[2]).abs() < 1e-6;
+                        let cross = (m[0] - a[0]) * (q[1] - a[1]) - (m[1] - a[1]) * (q[0] - a[0]);
+                        if same_z && cross.abs() < 1e-6 {
+                            out.pop();
+                        }
+                    }
+                    out.push(q);
+                }
+                // (a rise straight up where it starts: never into the wall ahead)
+                let mut last_z = z;
+                for q in out {
+                    if q[2] > last_z + 1e-9 {
+                        let at = b.p3.unwrap_or([q[0], q[1], z]);
+                        b.line3(at[0], at[1], q[2], UP, feed);
+                        b.line3(q[0], q[1], q[2], UP, feed);
+                    } else if q[2] < last_z - 1e-9 {
+                        b.line3(q[0], q[1], last_z, UP, feed);
+                        b.line3(q[0], q[1], q[2], UP, plunge);
+                    } else {
+                        b.line3(q[0], q[1], q[2], UP, feed);
+                    }
+                    last_z = q[2];
                 }
             }
             Step::Cut(pts) | Step::Link(pts) => {
@@ -2680,19 +2716,16 @@ pub fn adaptive_rough(
                 (((y + rr - g.y0) / g.h).ceil().max(0.0) as usize).min(g.ny - 1),
             );
             let mut hi = f64::NEG_INFINITY;
-            // (and high enough for the shank and the holder over it: see `need`)
-            let mut body = f64::NEG_INFINITY;
             for j in j0..=j1 {
                 for i in i0..=i1 {
                     let c = j * g.nx + i;
                     let p = g.point(c);
                     if (p[0] - x).dhypot(p[1] - y) <= rr {
                         hi = hi.max(mat_top[c]);
-                        body = body.max(need[c]);
                     }
                 }
             }
-            (hi + 0.5).max(body)
+            hi + 0.5
         };
         // (the lowest the tip may go at a point for the shank and the holder: the cells round it)
         let body_at = |x: f64, y: f64| -> f64 {
