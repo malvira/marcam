@@ -185,12 +185,14 @@ impl SolidPlayback {
         let total = self.total_cost();
         let fit = (self.cap / size).saturating_sub(1).clamp(2, MAX_SNAPSHOTS);
         // (no closer than the least spacing, but always as many as were kept before there was
-        // one, SNAPSHOTS: those a playback takes as it plays on, cheap)
-        let mut k = fit;
-        if self.min_spacing > 0.0 {
-            let spaced = ((total / self.min_spacing).floor() as usize).saturating_sub(1);
-            k = spaced.max(SNAPSHOTS).min(fit);
-        }
+        // one, SNAPSHOTS: those a playback takes as it plays on, cheap; and no more than those
+        // until the spacing is known: a job too quick to time wants no more)
+        let spaced = if self.min_spacing > 0.0 {
+            ((total / self.min_spacing).floor() as usize).saturating_sub(1)
+        } else {
+            0
+        };
+        let k = spaced.max(SNAPSHOTS).min(fit);
         let n = self.segments.len();
         let mut t: Vec<usize> = (1..=k)
             .map(|i| {
@@ -486,6 +488,9 @@ mod tests {
         // then a jump on from one, and back to one: the same stock
         let mut warm = SolidPlayback::new(&job, std::slice::from_ref(&tp), 0.3, &solid);
         warm.take_dirty();
+        // (the eight kept before until the page says how far apart: then as many as that wants)
+        assert_eq!(warm.snapshots_wanted(), SNAPSHOTS);
+        warm.set_min_spacing(warm.total_cost() / 16.5);
         let mut calls = 0;
         while warm.warm(warm.total_cost() / 50.0) {
             calls += 1;
