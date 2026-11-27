@@ -136,6 +136,59 @@ async function start() {
 
 /** A part like an impeller (a hub along X, three blades out to radius 18), as binary STL
  *  (about 24,000 triangles). */
+/** A 5-blade star along X (10 long, points 8 out, notches 4), its axis at (dy, dz): its box's
+ *  middle off that axis (five points: the box lopsided), as an impeller with an odd count. */
+function starStl(dy, dz) {
+  const pts = [];
+  for (let i = 0; i < 10; i++) {
+    const a = (2 * Math.PI * i) / 10;
+    const r = i % 2 === 0 ? 8 : 4;
+    pts.push([r * Math.cos(a) + dy, r * Math.sin(a) + dz]);
+  }
+  const tris = [];
+  const P = (x, q) => [x, q[0], q[1]];
+  for (let i = 0; i < 10; i++) {
+    const [a, b] = [pts[i], pts[(i + 1) % 10]];
+    tris.push([P(0, a), P(0, b), P(-10, b)], [P(0, a), P(-10, b), P(-10, a)]);
+  }
+  // the ends: fans round each end's middle (the axis), outward
+  const mid = [dy, dz];
+  for (let i = 0; i < 10; i++) {
+    const [a, b] = [pts[i], pts[(i + 1) % 10]];
+    tris.push([P(0, mid), P(0, b), P(0, a)], [P(-10, mid), P(-10, a), P(-10, b)]);
+  }
+  const buf = Buffer.alloc(84 + 50 * tris.length);
+  buf.write("marcam test: a five-blade star", 0);
+  buf.writeUInt32LE(tris.length, 80);
+  tris.forEach((tr, k) => tr.forEach((v, j) => v.forEach((x, i) => buf.writeFloatLE(x, 84 + 50 * k + 12 + 12 * j + 4 * i))));
+  return buf;
+}
+
+/** A binary STL's triangles each cut in four `times` times over (the same shape, 4^times as
+ *  many triangles: a model as finely made as one from OpenSCAD). */
+function denserStl(bytes, times) {
+  let tris = [];
+  const n = bytes.readUInt32LE(80);
+  for (let k = 0; k < n; k++) {
+    const o = 84 + 50 * k + 12;
+    tris.push([0, 1, 2].map((v) => [0, 1, 2].map((i) => bytes.readFloatLE(o + 12 * v + 4 * i))));
+  }
+  const mid = (a, b) => [0, 1, 2].map((i) => (a[i] + b[i]) / 2);
+  for (let t = 0; t < times; t++) {
+    const out = [];
+    for (const [a, b, c] of tris) {
+      const [ab, bc, ca] = [mid(a, b), mid(b, c), mid(c, a)];
+      out.push([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]);
+    }
+    tris = out;
+  }
+  const buf = Buffer.alloc(84 + 50 * tris.length);
+  buf.write("marcam test: a dense model", 0);
+  buf.writeUInt32LE(tris.length, 80);
+  tris.forEach((tr, k) => tr.forEach((v, j) => v.forEach((x, i) => buf.writeFloatLE(x, 84 + 50 * k + 12 + 12 * j + 4 * i))));
+  return buf;
+}
+
 function bladesStl() {
   const tris = [];
   const quad = (a, b, c, d) => tris.push([a, b, c], [a, c, d]);
@@ -2802,6 +2855,154 @@ try {
         after && /check: clear/.test(after.text),
       JSON.stringify({ before, near, after }));
     await clean("the holder check's near miss");
+  }
+  // ---------------------------------------------------------------- a dense model, typed in
+  // (Mar's impeller from OpenSCAD, 355,710 triangles: its indexed roughing refused, "set too fine
+  // to plan", the work counted as if every triangle near each point were looked at) the finned
+  // hub cut into 446,464 triangles on the 4th axis, Indexed roughing added, its X range typed a
+  // key at a time as a person types it: never "too fine", nothing in red while it is typed,
+  // planned, its cuts on the screen
+  {
+    const dense = join(mkdtempSync(join(tmpdir(), "marcam-dense-")), "dense_hub.stl");
+    writeFileSync(dense, denserStl(readFileSync(join(root, "tests", "fixtures", "finned_hub.stl")), 4));
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; return true; })()");
+    await click("#menuFile");
+    await click("#menuFile button, #menuFile [role=menuitem], #menuFile li, #menuFile a", "^New");
+    await settled();
+    {
+      const doc = await S("DOM.getDocument");
+      const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#importStlFile" });
+      await S("DOM.setFileInputFiles", { files: [dense], nodeId });
+    }
+    await waitFor(() => read("/dense_hub/.test(document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || '')"), "the dense model", 120000 * SLACK).catch(() => {});
+    await settled();
+    await click("#tree .tree-setup.active [data-act=setup]");
+    await settled();
+    if (await where("#treeDetails [data-setkind=rotary]")) {
+      await click("#treeDetails [data-setkind=rotary]");
+      await settled();
+    }
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    if (await where("button", "^Fit to part$")) {
+      await click("button", "^Fit to part$");
+      await settled();
+    }
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'rough3d:indexed'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    const lib = await waitFor(() => where("dialog[open] .tp-row", "Spiral O Metal 3\\.175 x 12"), "the library", 15000).catch(() => null);
+    if (lib) await click("dialog[open] .tp-row", "Spiral O Metal 3\\.175 x 12");
+    await waitFor(() => read("!!document.querySelector('#opForm [name=x_range]')"), "the roughing's form", 60000);
+    await waitFor(() => read("document.body.dataset.state !== 'busy' && window.__marcam.planIdle()"), "planned", 300000 * SLACK).catch(() => {});
+    await settled();
+    // what the screen says while the range is typed, as it changes
+    await read("(() => { window.__denseSeen = []; const grab = () => { const t = [document.getElementById('error')?.textContent || '', document.getElementById('opErrors')?.textContent || '', [...document.querySelectorAll('#tree .op-error')].map((e) => e.title).join(' ')].map((x) => x.trim()).filter(Boolean).join(' | '); if (t && window.__denseSeen.at(-1) !== t) window.__denseSeen.push(t); }; window.__denseWatch = setInterval(grab, 100); return true; })()");
+    // (the X range under the form's "Advanced: coordinates typed by hand": opened as a person
+    // opens it)
+    if (!(await where("#opForm [name=x_range]")) && (await where("#opAdvanced > summary"))) {
+      await click("#opAdvanced > summary");
+      await sleep(300);
+    }
+    await read("document.querySelector('#opForm [name=x_range]').scrollIntoView({ block: 'center' }), true");
+    await click("#opForm [name=x_range]");
+    await key("a", 2);
+    await key("Backspace");
+    await sleep(700);
+    for (const ch of "-12 0") {
+      await type(ch);
+      await sleep(700);
+    }
+    await S("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await S("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 });
+    await sleep(1200);
+    await waitFor(() => read("document.body.dataset.state !== 'busy' && window.__marcam.planIdle()"), "planned again", 300000 * SLACK).catch(() => {});
+    await settled();
+    const seen = await read("(clearInterval(window.__denseWatch), window.__denseSeen)");
+    const end = await read(`(() => { const vis = ${VISIBLE}; const t = [...document.querySelectorAll('#tabs button')].find((b) => vis(b)); return { x: document.querySelector('#opForm [name=x_range]')?.value, tab: t?.textContent || '', status: document.getElementById('status').textContent.slice(0, 120), badge: document.querySelector('#tree .tree-op .op-state')?.className || '' }; })()`);
+    const vr = await viewRect();
+    const img = await shot("dense_model_typed");
+    let px = 0;
+    for (let y = vr[1]; y < vr[1] + vr[3]; y += 2)
+      for (let x = vr[0]; x < vr[0] + vr[2]; x += 2) {
+        const q = img.at(x, y);
+        if (q[2] > 150 && q[2] > q[0] + 60 && q[2] > q[1] + 20) px++;
+      }
+    check("a dense model (446,464 triangles), Indexed roughing's X range typed a key at a time: never \"too fine to plan\", nothing in red while typed, planned with its cuts on the screen",
+      !seen.some((m) => /too fine/i.test(m)) && seen.length === 0 && /-12/.test(end.x) && /OK|issue/.test(end.tab) && /planned/.test(end.badge) && px > 400,
+      JSON.stringify({ seen, end, px }));
+    await clean("a dense model typed in");
+  }
+  // ---------------------------------------------------------------- an odd count centred
+  // (Mar's 5-blade impeller: Center on axis by its box's middle, the hub 0.58 mm off the axis;
+  // and its part handles drawn over the playback's stock after) a five-blade star made off its
+  // axis on the 4th axis: Center on axis puts where it turns on the axis (not its box's
+  // middle); then a roughing, the Part selected (its handles there) and Play: no handles drawn
+  // over the stock while it plays
+  {
+    const star = join(mkdtempSync(join(tmpdir(), "marcam-star-")), "star5.stl");
+    writeFileSync(star, starStl(0.7, -0.45));
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; return true; })()");
+    await click("#menuFile");
+    await click("#menuFile button, #menuFile [role=menuitem], #menuFile li, #menuFile a", "^New");
+    await settled();
+    {
+      const doc = await S("DOM.getDocument");
+      const { nodeId } = await S("DOM.querySelector", { nodeId: doc.root.nodeId, selector: "#importStlFile" });
+      await S("DOM.setFileInputFiles", { files: [star], nodeId });
+    }
+    await waitFor(() => read("/star5/.test(document.querySelector('#tree .tree-setup.active [data-act=part]')?.textContent || '')"), "the star", 60000).catch(() => {});
+    await settled();
+    await click("#tree .tree-setup.active [data-act=setup]");
+    await settled();
+    if (await where("#treeDetails [data-setkind=rotary]")) {
+      await click("#treeDetails [data-setkind=rotary]");
+      await settled();
+    }
+    await click("#tree .tree-setup.active [data-act=part]");
+    await settled();
+    await click("button[data-preset=axis]", "Center on axis");
+    await settled();
+    // where it turns, and its box's middle, as the engine reads the part now
+    const placed = await read("(async () => { const m = window.__marcam; const t = m.tree.state; const r = (await m.engine('meshTriangles', t.doc, { setup: t.setup }, m.state.mesh)).result; return { axis: r.axis, mid: [(r.bounds[0][1] + r.bounds[1][1]) / 2, (r.bounds[0][2] + r.bounds[1][2]) / 2] }; })()");
+    check("a five-blade part, Center on axis: where it turns on the axis (within 0.01 mm), not its box's middle",
+      !!placed.axis && Math.hypot(placed.axis[0], placed.axis[1]) < 0.01 && Math.hypot(placed.mid[0], placed.mid[1]) > 0.3, JSON.stringify(placed));
+    await click("#tree .tree-setup.active [data-act=stock]");
+    await settled();
+    if (await where("button", "^Fit to part$")) {
+      await click("button", "^Fit to part$");
+      await settled();
+    }
+    await read("(() => { const s = document.getElementById('treeAddType'); s.value = 'rotary_rough'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#treeAdd");
+    const lib = await waitFor(() => where("dialog[open] .tp-row", "Ball nose 3\\.175 x 22"), "the library", 15000).catch(() => null);
+    if (lib) await click("dialog[open] .tp-row", "Ball nose 3\\.175 x 22");
+    await waitFor(() => read("!!document.getElementById('opForm')"), "the roughing's form", 60000).catch(() => {});
+    await waitFor(() => read("document.body.dataset.state !== 'busy' && window.__marcam.planIdle()"), "planned", 240000 * SLACK).catch(() => {});
+    await settled();
+    // the Part selected: its handles
+    await click("#tree .tree-setup.active [data-act=part]");
+    await settled();
+    await sleep(800);
+    const vr = await viewRect();
+    const before = handleColours(await shot("star_part_handles"), vr);
+    const shownBefore = await handlesVisible();
+    // Play, the stock on: no handles over it while it plays
+    await waitFor(() => read("!document.getElementById('vtPlay').disabled"), "the play button enabled", 60000 * SLACK).catch(() => {});
+    await click(".view-toggles button[title^='Play']");
+    await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !!m.session && m.expanded; })()"), "the playback", 120000 * SLACK).catch(() => {});
+    await sleep(2000);
+    const during = handleColours(await shot("star_playing"), vr);
+    const shownDuring = await handlesVisible();
+    if (await read("window.__marcam.machining.state.playing")) await click("#simPlay");
+    check("the Part selected, its handles; then Play: no part handles drawn over the stock as it plays",
+      handlesOn(before) && shownBefore && !handlesOn(during) && !shownDuring, JSON.stringify({ before: before.n, during: during.n, shownBefore, shownDuring }));
+    await clean("an odd count centred");
   }
   // ---------------------------------------------------------------- tree rows: the whole row
   // (Mar: "the setup line is hard to click on. you have to click on the bold word only. this

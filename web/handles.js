@@ -155,6 +155,9 @@ export function setupHandles({ state, edit }) {
     // (Mar: "the part modification gizmo should only be visible in the part modification
     // screen"): the Part selected, nothing else (a carried piece's too: its part goes with it)
     if (!t?.doc || !v || v.failed || t.selected || t.picking || t.focus !== "part") return null;
+    // (Mar's impeller-small: Center on axis, then the playback with its stock, the handles drawn
+    // over the stock as it was cut) none while the playback is open
+    if (state.machining?.expanded || document.body.dataset.playback === "open") return null;
     const s = t.doc.setups?.find((x) => x.id === t.setup);
     if (!s) return null;
     const rotary = kindOf(s) !== "vise";

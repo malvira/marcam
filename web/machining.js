@@ -233,6 +233,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     showFinalStock();
     applyLayers();
     document.body.dataset.playback = "open";
+    window.__marcam.handles?.refresh?.();
     renderToggles();
     if (stockOn() && m.session && !m.stock) {
       m.keepAt = 0;
@@ -253,6 +254,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     showFinalStock();
     applyLayers();
     document.body.dataset.playback = "";
+    window.__marcam.handles?.refresh?.();
     $("simControls").classList.add("hidden");
     renderToggles();
     showRange();
@@ -1347,6 +1349,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
     // button back to open it again
     m.expanded = false;
     document.body.dataset.playback = "";
+    window.__marcam.handles?.refresh?.();
     m.gpu?.destroy();
     m.gpu = null;
     $("simControls").classList.add("hidden");
@@ -1464,6 +1467,7 @@ export function setupMachining({ engine, getThree, $, state, readJob, setStatus,
   $("simOpen").addEventListener("click", () => {
     m.expanded = true;
     document.body.dataset.playback = "open";
+    window.__marcam.handles?.refresh?.();
     if (m.open) {
       m.keepAt = m.busy && m.wanted != null ? m.wanted : m.pos;
       m.open = false;

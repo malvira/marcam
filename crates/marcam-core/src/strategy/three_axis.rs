@@ -1254,9 +1254,13 @@ impl DropCutter3 {
         let mut best = floor;
         let r = self.cutter.radius();
         let bin = &self.bins[j as usize * self.nx + i as usize];
-        // the work: the triangles looked at (at most the bin)
-        crate::budget::spend(crate::budget::PER_QUERY + bin.len() as u64);
+        // the work: the triangles looked at, up to the first no higher than the best (sorted by
+        // top, none after it can be). (The whole bin was counted: Mar's 355,710-triangle
+        // impeller, its bins thousands deep and each query stopping after a few, was refused as
+        // "too fine to plan" at a tenth of the limit's real work.)
+        let mut looked = 0u64;
         for &k in bin {
+            looked += 1;
             let bb = &self.boxes[k as usize];
             if bb[0] > x + r || bb[2] < x - r || bb[1] > y + r || bb[3] < y - r {
                 continue;
@@ -1273,6 +1277,7 @@ impl DropCutter3 {
             }
             best = best.max(drop_triangle(&self.cutter, &lt));
         }
+        crate::budget::spend(crate::budget::PER_QUERY + looked);
         best
     }
 }
@@ -2219,6 +2224,41 @@ pub const ADAPTIVE_MAX_CELLS: usize = 1_500_000;
 /// links at depth. It ends at the safe height.
 use crate::strategy::adaptive::SLOT_FEED;
 
+/// The cells within `rad` of the tool's centre anywhere along a level's moves (its ways in, its
+/// helices' circles, its cuts and links sampled half a cell apart).
+fn stamp_steps(
+    steps: &[crate::strategy::adaptive::Step],
+    g: &crate::strategy::adaptive::Grid,
+    rad: f64,
+) -> Vec<bool> {
+    use crate::strategy::adaptive::Step;
+    let mut out = vec![false; g.len()];
+    let mut mark = |q: [f64; 2], rad: f64| g.disc(q, rad, |c| out[c] = true);
+    for st in steps {
+        match st {
+            Step::Down(q) | Step::Plunge(q) => mark(*q, rad),
+            Step::Helix { centre, radius, .. } => mark(*centre, radius + rad),
+            Step::Cut(pts) | Step::Link(pts) => {
+                for w in pts.windows(2) {
+                    let len = (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]);
+                    let k = (len / (0.5 * g.h)).ceil().max(1.0) as usize;
+                    for i in 0..=k {
+                        let t = i as f64 / k as f64;
+                        mark(
+                            [
+                                w[0][0] + (w[1][0] - w[0][0]) * t,
+                                w[0][1] + (w[1][1] - w[0][1]) * t,
+                            ],
+                            rad,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// [`adaptive_rough`]'s deep pass: the level's regions (a way in, and the cuts and links after
 /// it) that take the stock left in the level's layer slower than `min_rate` (mm3 a second:
 /// their cutting and links at the feed, a helix's turns, the way in and out about 1.5 s)
@@ -2489,6 +2529,13 @@ fn emit_adaptive(
                     }
                     last_z = q[2];
                 }
+                // (a link ending lifted, the rise begun ahead held past its end too: straight
+                // down at the plunge feed to the level before the cut after it. The cut came
+                // down from it at the feed, 298 mm/min: the verifier's "Z descends" nine times)
+                if last_z > z + 1e-9 {
+                    let e = pts[pts.len() - 1];
+                    b.line3(e[0], e[1], z, UP, plunge);
+                }
             }
             Step::Cut(pts) | Step::Link(pts) => {
                 // (a slot, full-width: slower, its load a minute as a step's at the stepover)
@@ -2716,6 +2763,8 @@ pub fn adaptive_rough(
     // the levels cut it: a way in comes down by rapid only to just above what stands under
     // the tool there
     let mut mat_top: Vec<f64> = top_at.clone();
+    // (the stock left as the real tool leaves it: what a way in comes down to just above)
+    let mut entry_top: Vec<f64> = top_at.clone();
     // (Mar's impeller, indexed: each angle no deeper than the shank cleared the highest stock
     // anywhere, deep pockets between low walls left uncut) the tool's body above the flutes
     // kept clear of the stock round it as it stands at each level: the range's cells as the
@@ -2860,7 +2909,7 @@ pub fn adaptive_rough(
                     let c = j * g.nx + i;
                     let p = g.point(c);
                     if (p[0] - x).dhypot(p[1] - y) <= rr {
-                        hi = hi.max(mat_top[c]);
+                        hi = hi.max(entry_top[c]);
                     }
                 }
             }
@@ -2899,38 +2948,30 @@ pub fn adaptive_rough(
                 mat_top[c] = mat_top[c].min(z);
             }
         }
+        // (and as the real tool leaves it, for the ways in: with stock left on the walls the tool
+        // is planned grown by it, its footprint marking as cut a ring that wide it does not cut.
+        // Mar's impeller-small (0.25 mm on the walls): a way in came down by rapid, "just above
+        // what stands there", into that ring, twice. The planning keeps the grown footprint: the
+        // walls' stock stands all the way down, the grown tool beside it by design)
+        if op.leave_xy > 0.0 {
+            for (c, cut) in stamp_steps(&cl.steps, &g, (r - op.leave_xy).max(0.0))
+                .into_iter()
+                .enumerate()
+            {
+                if cut {
+                    entry_top[c] = entry_top[c].min(z);
+                }
+            }
+        } else {
+            entry_top.copy_from_slice(&mat_top);
+        }
         if reach.is_some() {
             // (cut, for the reach, only where the real tool surely went: discs round its
             // centres along the level's moves, as wide as the real tool (the planned one less
             // the walls' stock) less a cell and a half. A cell counted cut from two passes
             // that only just met left a fin a level high between them, and the holder grazed
-            // it; the planned footprint marks the walls' stock as cut too)
-            use crate::strategy::adaptive::Step;
-            let rr = (r - op.leave_xy.max(0.0) - 1.5 * h).max(0.0);
-            let mut surely = vec![false; n];
-            let mut mark = |q: [f64; 2], rad: f64| g.disc(q, rad, |c| surely[c] = true);
-            for st in &cl.steps {
-                match st {
-                    Step::Down(q) | Step::Plunge(q) => mark(*q, rr),
-                    Step::Helix { centre, radius, .. } => mark(*centre, radius + rr),
-                    Step::Cut(pts) | Step::Link(pts) => {
-                        for w in pts.windows(2) {
-                            let len = (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]);
-                            let k = (len / (0.5 * h)).ceil().max(1.0) as usize;
-                            for i in 0..=k {
-                                let t = i as f64 / k as f64;
-                                mark(
-                                    [
-                                        w[0][0] + (w[1][0] - w[0][0]) * t,
-                                        w[0][1] + (w[1][1] - w[0][1]) * t,
-                                    ],
-                                    rr,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
+            // it)
+            let surely = stamp_steps(&cl.steps, &g, (r - op.leave_xy.max(0.0) - 1.5 * h).max(0.0));
             for c in 0..n {
                 if surely[c] {
                     real_top[c] = real_top[c].min(z);

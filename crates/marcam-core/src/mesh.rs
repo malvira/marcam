@@ -172,6 +172,96 @@ impl Mesh {
         }))
     }
 
+    /// Where the part turns about, across X (its Y and Z): for a part round about an axis
+    /// along X or the same every 1/k of a turn about it (k from 2 to 24: an impeller's blades),
+    /// that axis, through its volume's centroid; else `None` (the box's middle is all there
+    /// is). (Mar's 5-blade impeller: centred by its box, its hub 0.5 mm off the axis.) Round
+    /// or repeating: its outermost radius round the centroid, a degree at a time, within 3 % of
+    /// its largest (round), or the same within that a k-th of a turn on.
+    pub fn turning_axis(&self) -> Option<[f64; 2]> {
+        // the volume's centroid (a closed mesh: each triangle's tetrahedron with the origin)
+        let (mut v, mut cy, mut cz) = (0.0, 0.0, 0.0);
+        for t in &self.triangles {
+            let [a, b, c] = *t;
+            let d = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0]);
+            v += d;
+            cy += d * (a[1] + b[1] + c[1]);
+            cz += d * (a[2] + b[2] + c[2]);
+        }
+        let (lo, hi) = self.bounds()?;
+        let size = (hi[1] - lo[1]).max(hi[2] - lo[2]).max(1e-9);
+        if v.abs() < 1e-9 * size.powi(3) {
+            return None;
+        }
+        let (cy, cz) = (cy / (4.0 * v), cz / (4.0 * v));
+        if !(cy.is_finite() && cz.is_finite()) {
+            return None;
+        }
+        // its outermost radius round it, a degree at a time
+        const BINS: usize = 360;
+        let mut outer = vec![f64::NAN; BINS];
+        for p in self.triangles.iter().flatten() {
+            let (y, z) = (p[1] - cy, p[2] - cz);
+            let r = y.hypot(z);
+            let k = (((z.atan2(y).to_degrees() + 360.0) % 360.0) as usize).min(BINS - 1);
+            if outer[k].is_nan() || outer[k] < r {
+                outer[k] = r;
+            }
+        }
+        // (a bin no vertex fell in: its neighbours')
+        if outer.iter().all(|r| r.is_nan()) {
+            return None;
+        }
+        for _ in 0..BINS {
+            let mut changed = false;
+            for k in 0..BINS {
+                if outer[k].is_nan() {
+                    let (l, r) = (outer[(k + BINS - 1) % BINS], outer[(k + 1) % BINS]);
+                    let fill = if l.is_nan() {
+                        r
+                    } else if r.is_nan() {
+                        l
+                    } else {
+                        l.max(r)
+                    };
+                    if !fill.is_nan() {
+                        outer[k] = fill;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let big = outer.iter().copied().fold(0.0, f64::max);
+        let tol = 0.03 * big;
+        let small = outer.iter().copied().fold(f64::INFINITY, f64::min);
+        if big - small <= tol {
+            return Some([cy, cz]);
+        }
+        for k in 2..=24usize {
+            let shift = BINS as f64 / k as f64;
+            // (a k-th of a turn on, to the nearest degree, the same within 3 %: on average and
+            // nearly everywhere)
+            let s = shift.round() as usize;
+            let diffs: Vec<f64> = (0..BINS)
+                .map(|i| (outer[i] - outer[(i + s) % BINS]).abs())
+                .collect();
+            let mean = diffs.iter().sum::<f64>() / BINS as f64;
+            let worst = {
+                let mut d = diffs.clone();
+                d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                d[(0.95 * BINS as f64) as usize]
+            };
+            if mean <= 0.5 * tol && worst <= tol && (shift - shift.round()).abs() < 0.5 {
+                return Some([cy, cz]);
+            }
+        }
+        None
+    }
+
     /// Largest distance of any vertex from the X axis.
     pub fn max_radius(&self) -> f64 {
         self.triangles
@@ -677,6 +767,73 @@ pub(crate) fn parse_3mf_model(xml: &str) -> Result<Mesh, MeshError> {
 
 #[cfg(test)]
 mod tests {
+    /// A 5-blade impeller's turning axis: through its middle, not its box's (5 blades: the box
+    /// lopsided); a round bar's: its own; a lopsided block's: none.
+    #[test]
+    fn the_axis_a_part_turns_about() {
+        use super::Mesh;
+        // a prism along X over a 2D outline (closed: its two ends fans from the outline's first
+        // point)
+        let prism = |pts: &[[f64; 2]], dy: f64, dz: f64| -> Mesh {
+            let mut tris = Vec::new();
+            let n = pts.len();
+            for i in 0..n {
+                let (a, b) = (pts[i], pts[(i + 1) % n]);
+                let p = |x: f64, q: [f64; 2]| [x, q[0] + dy, q[1] + dz];
+                tris.push([p(0.0, a), p(0.0, b), p(-10.0, b)]);
+                tris.push([p(0.0, a), p(-10.0, b), p(-10.0, a)]);
+            }
+            for i in 1..n - 1 {
+                let p = |x: f64, q: [f64; 2]| [x, q[0] + dy, q[1] + dz];
+                tris.push([p(0.0, pts[0]), p(0.0, pts[i + 1]), p(0.0, pts[i])]);
+                tris.push([p(-10.0, pts[0]), p(-10.0, pts[i]), p(-10.0, pts[i + 1])]);
+            }
+            Mesh {
+                triangles: tris,
+                faces: Vec::new(),
+            }
+        };
+        // five blades round a hub: a star, its points 8 out, its notches 4
+        let star: Vec<[f64; 2]> = (0..10)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 10.0;
+                let r = if i % 2 == 0 { 8.0 } else { 4.0 };
+                [r * a.cos(), r * a.sin()]
+            })
+            .collect();
+        let m = prism(&star, 1.5, -0.7);
+        let (lo, hi) = m.bounds().unwrap();
+        let boxed = [(lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
+        let c = m.turning_axis().expect("five-fold");
+        assert!(
+            (c[0] - 1.5).abs() < 1e-6 && (c[1] + 0.7).abs() < 1e-6,
+            "{c:?}"
+        );
+        assert!((boxed[0] - 1.5).abs() > 0.3, "the box lopsided: {boxed:?}");
+        // a round bar: its own axis
+        let round: Vec<[f64; 2]> = (0..72)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 72.0;
+                [6.0 * a.cos(), 6.0 * a.sin()]
+            })
+            .collect();
+        let c = prism(&round, -2.0, 3.0).turning_axis().expect("round");
+        assert!(
+            (c[0] + 2.0).abs() < 1e-6 && (c[1] - 3.0).abs() < 1e-6,
+            "{c:?}"
+        );
+        // a lopsided L: none (its box's middle stays)
+        let ell = [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 2.0],
+            [2.0, 2.0],
+            [2.0, 8.0],
+            [0.0, 8.0],
+        ];
+        assert_eq!(prism(&ell, 0.0, 0.0).turning_axis(), None);
+    }
+
     use super::*;
     #[allow(unused_imports)]
     use crate::det::Det;

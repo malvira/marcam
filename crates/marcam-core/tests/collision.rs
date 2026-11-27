@@ -441,13 +441,25 @@ operations = ["op1"]
             .filter(|w| w.contains("below Z 7.00 only where the shank"))
             .count()
     };
+    // (and the verifier's: the deep pass's links, lifted for the holder, came down into the cut
+    // after them at the feed, "Z descends at 298 mm/min" nine times)
+    let verified = |tps: &[marcam::Toolpath]| {
+        tps.iter()
+            .flat_map(|tp| {
+                marcam::verify_gcode(&marcam::post(tp, &m.post), &marcam::limits_for(tp, &m.post))
+            })
+            .map(|i| format!("{i:?}"))
+            .collect::<Vec<_>>()
+    };
     // (each angle first as deep as the shank clears the highest stock anywhere, Z 7.00, as
-    // before; then deeper, region by region, where it clears the stock round it and takes the
-    // stock quicker than the rest roughing would, the rest left and said) as it is: no region
-    // here quicker, the deep pass nothing (no turn of A for it, nothing said of its moves)
+    // before; then deeper, region by region, where it clears the stock round it, and, with a
+    // roughing after it, takes the stock quicker than that would; the rest left and said) as it
+    // is: no region here quicker, the deep pass nothing (no turn of A for it, nothing said of
+    // its moves)
     let tps = plan_with_mesh(&job, mesh.as_ref()).unwrap();
     let rep = &collision_check(&job, &tps, &m.post).unwrap()[0];
     assert_eq!((rep.count, rep.near), (0, 0), "{rep:?}");
+    assert_eq!(verified(&tps), Vec::<String>::new());
     assert_eq!(said(&tps), 4, "{:?}", tps[0].notes);
     assert!((low(&tps) - 7.2).abs() < 1e-6, "lowest cut Z {}", low(&tps));
     assert!(
@@ -455,10 +467,11 @@ operations = ["op1"]
         "{:?}",
         tps[0].notes
     );
-    // every region the holder allows kept: deeper than Z 7, clear
+    // every region the holder allows kept (no threshold): deeper than Z 7, clear
     let tps = marcam::with_deep_min_rate(0.0, || plan_with_mesh(&job, mesh.as_ref()).unwrap());
     let rep = &collision_check(&job, &tps, &m.post).unwrap()[0];
     assert_eq!((rep.count, rep.near), (0, 0), "{rep:?}");
+    assert_eq!(verified(&tps), Vec::<String>::new());
     assert_eq!(said(&tps), 4, "{:?}", tps[0].notes);
     let lowest = low(&tps);
     assert!(

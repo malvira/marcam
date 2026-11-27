@@ -922,7 +922,9 @@ pub mod api {
             .iter()
             .flat_map(|t| t.iter().flat_map(|p| p.iter().map(|&c| c as f32)))
             .collect();
-        json!({ "triangles": tri, "total": m.triangles.len(), "thinned": thinned.is_some(), "bounds": m.bounds() })
+        // (where it turns about, for Center on axis: a part round, or the same every k-th of a
+        // turn (an impeller's blades), its centroid; else none, its box's middle)
+        json!({ "triangles": tri, "total": m.triangles.len(), "thinned": thinned.is_some(), "bounds": m.bounds(), "axis": m.turning_axis() })
     }
 
     /// A mesh of more than `max` triangles made coarser for display: its vertices merged

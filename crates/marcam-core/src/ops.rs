@@ -1324,6 +1324,10 @@ pub fn defaults(kind: &str, cx: &DefaultsContext) -> Result<Value, String> {
         "rotary_flowline" => {
             v.insert("x_range".into(), json!(x_range));
             v.insert("stepover_mm".into(), json!(fine));
+            // (Mar's impeller-small: a new flowline followed the channels' floors only, the
+            // blades left in the roughing's steps) a new one climbs the walls too, wall top to
+            // wall top along their twist; one written as "floor" stays so
+            v.insert("span".into(), json!("sector"));
             v.insert("feed".into(), json!(nice(1.25 * feed, 5.0).min(0.75 * cap)));
             v.insert("plunge_feed".into(), json!(plunge));
         }

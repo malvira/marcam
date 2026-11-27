@@ -386,9 +386,11 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   async function placePreset(which, label, data = {}) {
     const s = setup();
     if (!s) return;
-    let lo, hi, len, box;
+    let lo, hi, len, box, turns;
     try {
-      [lo, hi] = (await engine("meshTriangles", t.doc, { setup: s.id }, state.mesh)).result.bounds;
+      const mt = (await engine("meshTriangles", t.doc, { setup: s.id }, state.mesh)).result;
+      [lo, hi] = mt.bounds;
+      turns = mt.axis;
       const fr = (await engine("setupFrame", t.doc, { setup: s.id })).result;
       len = fr.stock?.length;
       box = fr.stock_box;
@@ -438,7 +440,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       if (which === "top") d[2] = box.max[2] - hi[2];
       if (which === "bottom") d[2] = box.min[2] - lo[2];
     }
-    if (which === "axis") (d[1] = -(lo[1] + hi[1]) / 2), (d[2] = -(lo[2] + hi[2]) / 2);
+    // (Mar's 5-blade impeller: its box's middle 0.58 mm off where it turns) a part round, or
+    // the same every k-th of a turn, by where it turns about (on it within 0.01 mm: left); else
+    // by its box's middle
+    if (which === "axis") {
+      if (turns) {
+        if (Math.hypot(turns[0], turns[1]) >= 0.01) (d[1] = -turns[0]), (d[2] = -turns[1]);
+      } else (d[1] = -(lo[1] + hi[1]) / 2), (d[2] = -(lo[2] + hi[2]) / 2);
+    }
     if (which === "along") d[0] = -len / 2 - (lo[0] + hi[0]) / 2;
     if (which === "front") d[0] = -hi[0];
     if (which === "back") d[0] = -len - lo[0];
@@ -1031,6 +1040,10 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const out = { ...op };
     out.name = f.elements.__name.value.trim();
     if (!out.name) delete out.name;
+    // (Mar typing an X range "-12 0": "-", "-1", "-12 " on the way, each planned or refused in
+    // red as it came) the fields not a whole value yet: the form waits for them
+    const halfTyped = [];
+    const whole = { vec2: 2, rect: 4 };
     for (const p of ty.params) {
       const el = f.elements[p.name];
       if (!el) continue;
@@ -1059,8 +1072,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         out[p.name] = el.value.split(";").map((q) => q.split(/[,\s]+/).filter(Boolean).map(Number)).filter((q) => q.length === 3);
       } else if (["vec2", "rect", "numbers", "integers"].includes(p.kind)) {
         const nums = el.value.split(/[,\s]+/).filter(Boolean).map(Number);
+        if (nums.some((v) => !Number.isFinite(v)) || (whole[p.kind] && nums.length && nums.length !== whole[p.kind])) halfTyped.push(p.name);
         out[p.name] = nums.length ? nums : undefined;
-      } else out[p.name] = el.value === "" ? undefined : Number(el.value);
+      } else {
+        out[p.name] = el.value === "" ? undefined : Number(el.value);
+        if (out[p.name] !== undefined && !Number.isFinite(out[p.name])) halfTyped.push(p.name);
+      }
       if (out[p.name] === undefined) delete out[p.name];
     }
     const axial = f.elements.__axial;
@@ -1069,6 +1086,12 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       const v = axial.value.split(/[,\s]+/).filter(Boolean).map(Number);
       if (v.length === 2) out.geometry.push({ kind: "axial_range", x: v });
       if (!out.geometry.length) delete out.geometry;
+    }
+    if (halfTyped.length) {
+      const need = (n) => (whole[ty.params.find((p) => p.name === n)?.kind] ? `${whole[ty.params.find((p) => p.name === n).kind]} numbers` : "a number");
+      const e = new Error(halfTyped.map((n) => `${n}: ${need(n)}`).join("; "));
+      e.halfTyped = true;
+      throw e;
     }
     return out;
   }
@@ -2273,7 +2296,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     }
     if (el.closest("#opForm") && el.name && !el.dataset?.svg && el.type !== "file") {
       clearTimeout(opTimer);
-      return applyForm({ typing: el.tagName === "INPUT" && el.type !== "checkbox" && el.type !== "radio" });
+      return applyForm({ typing: el.tagName === "INPUT" && el.type !== "checkbox" && el.type !== "radio", left: true });
     }
     if (el.id === "treeSetup") {
       // another setup: what was being edited here is dropped
@@ -2375,6 +2398,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     try {
       op = readForm();
     } catch (e) {
+      // (still being typed: nothing planned, nothing said, the last plan kept; said when the
+      // field is left so)
+      if (e.halfTyped && opts.typing && !opts.left) return showFormError(null);
       return showFormError(e.message, opts);
     }
     const doc = structuredClone(t.doc);
