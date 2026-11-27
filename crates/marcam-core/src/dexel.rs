@@ -1042,7 +1042,11 @@ impl Dexel {
             out.positions.extend(p.map(|x| x as f32));
             if ends_kept {
                 let l = dot(nsum, nsum).sqrt();
-                let nv = if normal.is_some() && l > 1e-6 { nsum.map(|v| v / l) } else { [0.0; 3] };
+                let nv = if normal.is_some() && l > 1e-6 {
+                    nsum.map(|v| v / l)
+                } else {
+                    [0.0; 3]
+                };
                 out.normals.extend(nv.map(|x| x as f32));
             }
             // (its colour: the operation that cut most of its crossings, when the ray ends keep
@@ -1511,7 +1515,12 @@ mod tests {
     /// points and not others (its edge sawn). The normals round trip through their 32 bits.
     #[test]
     fn a_pocket_is_drawn_from_the_tool_s_surface() {
-        for n in [[0.3, -0.5, 0.81], [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.6, 0.0, -0.8]] {
+        for n in [
+            [0.3, -0.5, 0.81],
+            [0.0, 0.0, -1.0],
+            [-1.0, 0.0, 0.0],
+            [0.6, 0.0, -0.8],
+        ] {
             let l = dot(n, n).sqrt();
             let n = n.map(|v| v / l);
             let m = unpack_normal(pack_normal(n));

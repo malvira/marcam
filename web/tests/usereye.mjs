@@ -2784,6 +2784,37 @@ try {
     })()`).then(JSON.parse);
     check("the playback's stock is the one in 3D, and the turned knob's finished body is round at the end (no fins: the outer surface within 0.5 mm all round in each slice)",
       st.solid && st.tiles > 0 && st.slices > 10 && st.worst < 0.5, JSON.stringify(st));
+    // (Mar: the simulation's jagged edges) the turned body shaded from the tool's own surface,
+    // not the grid's facets: on its outer surface the drawn normals point out from the axis
+    // at least as well as the facets' would, and they are not the facets'
+    {
+      const sh = await read(`(() => {
+        const m = window.__marcam.machining.state;
+        let n = 0, own = 0, facet = 0, differ = 0;
+        for (const t of m.tiles.values()) {
+          const g = t.geometry, a = g.attributes.position.array, nv = g.attributes.normal.array;
+          const f = g.clone();
+          f.computeVertexNormals();
+          const fv = f.attributes.normal.array;
+          for (let k = 0; k < a.length; k += 3) {
+            const x = a[k], r = Math.hypot(a[k + 1], a[k + 2]);
+            if (x < -26 || x > -14 || r < 2) continue;
+            const ry = a[k + 1] / r, rz = a[k + 2] / r;
+            const d1 = nv[k + 1] * ry + nv[k + 2] * rz, d2 = fv[k + 1] * ry + fv[k + 2] * rz;
+            // (the outer surface: facing out)
+            if (d2 < 0.5) continue;
+            n++;
+            if (d1 > 0.97) own++;
+            if (d2 > 0.97) facet++;
+            if (Math.hypot(nv[k] - fv[k], nv[k + 1] - fv[k + 1], nv[k + 2] - fv[k + 2]) > 1e-3) differ++;
+          }
+          f.dispose();
+        }
+        return JSON.stringify({ n, own: +(own / n).toFixed(3), facet: +(facet / n).toFixed(3), differ: +(differ / n).toFixed(3) });
+      })()`).then(JSON.parse);
+      check("the playback's stock shaded from the tool's own surface: on the turned body its normals point out from the axis (as well as the grid's facets' at least) and are not the facets'",
+        sh.n > 500 && sh.own >= sh.facet - 0.01 && sh.own > 0.6 && sh.differ > 0.5, JSON.stringify(sh));
+    }
     // (Mar: a 10 s scrub to the middle of the impeller) its snapshots built in the background
     // while it sits; then the bar clicked near the start and at three quarters, as a person
     // jumps: each there in a couple of seconds at most, and back at the end the same stock
