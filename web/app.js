@@ -1417,6 +1417,8 @@ function selectTab(i) {
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
   // (the same results drawn again: the page's entries left as they are, not replaced under a
   // click on one)
+  // (the stock's numbers' line held for them, dashed, until they land: the view under it not
+  // pushed down a line beneath the pointer, a press on its toolbar landing where it was aimed)
   const summaryHtml = `
     ${state.stale && document.body.classList.contains("stale") ? '<div class="stale-banner" id="staleBanner">Out of date: the project changed since these results were made. <button type="button" id="staleRegen">Generate again</button></div>' : ""}
     <div><strong>${esc(p.title)}</strong> &middot; <span id="lineCount">${p.lines.toLocaleString("en")}</span> lines
@@ -1442,6 +1444,7 @@ function selectTab(i) {
     ${sim && sim.heavy?.length ? foldHtml(`${p.name}|heavy`, "limits", "heavyBites", `Overloaded: ${sim.heavy.map((h) => `${esc(opNameOf(p, h.op))} takes more than 2&times; T${h.tool}'s normal bite on ${h.moves.toLocaleString("en")} move(s) (worst ${h.worst.toFixed(1)}&times;)`).join("; ")}: add rest roughing before it, or rough deeper`, sim.heavy.map((h) => jumpLi(i, h.worst_move, `${esc(opNameOf(p, h.op))}: its worst, ${h.worst.toFixed(1)}&times; the normal bite`)).concat(sim.heavy.map((h) => jumpLi(i, h.first_move, `${esc(opNameOf(p, h.op))}: the first over 2&times;`)))) : ""}
     ${sim && sim.rapid_grazes ? foldHtml(`${p.name}|grazes`, "limits small", "rapidGrazes", `Warning: ${sim.rapid_grazes} rapid(s) graze the stock (under 0.05 mm of it): look at where the rapids pass close to the stock`, (sim.graze_moves || []).map((mv) => jumpLi(i, mv, `rapid, move ${mv + 1}`))) : ""}
     ${sim && sim.rapid_hits && sim.rapid_moves?.length ? foldHtml(`${p.name}|rapids`, "issues bad small", "rapidHits", `${sim.rapid_hits} rapid(s) through the stock`, sim.rapid_moves.map((mv) => jumpLi(i, mv, `rapid, move ${mv + 1}`))) : ""}
+    ${!sim && p.lines ? `<div class="small muted" id="simPendingLine">Simulated stock: material left max &ndash; mm, mean &ndash; mm; deepest gouge &ndash; mm; &ndash; rapid(s) through stock (not simulated yet)</div>` : ""}
     ${sim && noPart() ? `<div class="small">Simulated stock: no model in this setup to compare it with; ${sim.rapid_hits} rapid(s) through stock</div>` : ""}
     ${sim && !noPart() ? `<div class="small">Simulated stock: material left max ${sim.max_left.toFixed(3)} mm, mean ${sim.mean_left.toFixed(3)} mm; deepest gouge ${sim.max_gouge.toFixed(3)} mm; ${sim.rapid_hits} rapid(s) through stock${sim.feature_cells ? `; ${sim.feature_cells.toLocaleString("en")} cells cut below the part on purpose (engraving, knurl, indexed features) not counted` : ""}</div>` : ""}`;
   const sumEl = $("summary");

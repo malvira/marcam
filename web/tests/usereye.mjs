@@ -1671,13 +1671,10 @@ try {
     check("carry-through: the knurl on the OD picked on the part (radius 10, clear of the chuck, behind the turned-down part), planned",
       /Cylinder 20\.00/.test(odBand) && back && front && Math.abs(back[1] - 10) < 0.3 && Math.abs(front[1] - 10) < 0.3 && back[0] > -frame.length + 1.9 && front[0] <= -15 && /OK/.test(k.tab) && !k.error, `${odBand}; ${JSON.stringify(body)} ${JSON.stringify(k)}`);
     // its playback starts from the piece setup 1 left: the boss end narrower than the bar
-    // (the stock on for it, as the knurl's simulation above left it: said if not)
-    const stockOnNow = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed')");
-    if (stockOnNow !== "true") {
-      console.log(`      (the Simulated stock toggle was ${stockOnNow} before setup 2's playback: pressed again)`);
-      await click(".view-toggles button[title^='Simulated stock']");
-      await settled();
-    }
+    // (the stock on for it, as the knurl's simulation above left it: not pressed again here, a
+    // toggle found off is the app's to answer for)
+    const stockOnNow = await read("JSON.stringify({ pressed: [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed'), stock: window.__marcam.state.machining?.view?.stock, left: window.__marcam.state.machining?.view?.left })");
+    check("carry-through: the Simulated stock toggle still on before setup 2's playback, as left", JSON.parse(stockOnNow).pressed === "true", stockOnNow);
     await click("#vtPlay");
     // (its own playback: a stock grid of its own, not the one before's arrays)
     await waitFor(() => read("(() => { const m = window.__marcam.state.machining; return !!m?.r && m.open && !!m.session?.grid && !m.busy; })()"), "the playback", 120000).catch(() => {});
@@ -3324,11 +3321,16 @@ try {
         const b = await shot("rest_material_left");
         const pressed = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Material left/.test(b.title))?.getAttribute('aria-pressed')");
         check("material left clicked: its button pressed, the stock coloured by what is left on the part (the picture changed)", !!on && pressed === "true" && differ(a, b) > 0.005, JSON.stringify({ on: !!on, pressed, differ: +differ(a, b).toFixed(4) }));
-        await drag(leftBtn, leftBtn, 1);
+        // (the button looked for again where it is now, as a person's eye would: and said if it
+        // moved, the view's toolbar shifting under the pointer being the app's fault)
+        const leftBtn2 = (await where(".view-toggles button", "Material left")) || leftBtn;
+        await drag(leftBtn2, leftBtn2, 1);
         const off = await drawnAgain(0);
         await sleep(300);
         const c = await shot("rest_sim_again");
-        check("material left clicked again: the sim's stock in its operations' colours, as before", !!off && differ(a, c) < 0.01, JSON.stringify({ off: !!off, differ: +differ(a, c).toFixed(4) }));
+        const pressed2 = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Material left/.test(b.title))?.getAttribute('aria-pressed')");
+        check("material left clicked again: the sim's stock in its operations' colours, as before", !!off && pressed2 === "false" && differ(a, c) < 0.01, JSON.stringify({ off: !!off, pressed: pressed2, differ: +differ(a, c).toFixed(4), at: leftBtn, now: leftBtn2, leftMode: await read("window.__marcam.machining.state.exact?.uniforms.exLeftMode.value") }));
+        check("the view's toolbar where it was between the two presses (nothing above it grew a line)", Math.abs(leftBtn2[1] - leftBtn[1]) < 1, JSON.stringify({ at: leftBtn, now: leftBtn2 }));
       }
     }
     await clean("the stock at rest and material left");
