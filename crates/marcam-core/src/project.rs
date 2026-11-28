@@ -345,6 +345,22 @@ pub struct Output {
     pub operations: Vec<String>,
 }
 
+/// A named NC export: some of a setup's operations (in planning order, whatever order they
+/// are listed in) posted to `<name>.nc`. `posted` is the fingerprint of the G-code last
+/// written ([`crate::export::fingerprint`]): the file is out of sync with the toolpaths when
+/// what they post now differs from it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Export {
+    pub name: String,
+    /// Operation ids (of its setup).
+    pub operations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posted: Option<String>,
+    /// When it was last written (ISO 8601, as the page wrote it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posted_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Setup {
     pub id: String,
@@ -371,6 +387,10 @@ pub struct Setup {
     pub spindle_rpm: u32,
     pub operations: Vec<ProjectOp>,
     pub outputs: Vec<Output>,
+    /// Named NC exports (as Fusion's NC programs): a chosen set of its operations written to
+    /// a G-code file of its own, besides the outputs (see [`crate::export`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<Export>,
     /// Its G-code options: work offset, header and footer lines, line numbers, comments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post: Option<job::PostOptions>,
@@ -471,6 +491,7 @@ impl Project {
                 spindle_rpm: job.spindle_rpm,
                 operations,
                 outputs,
+                exports: Vec::new(),
                 post: None,
                 tools: Vec::new(),
             }],

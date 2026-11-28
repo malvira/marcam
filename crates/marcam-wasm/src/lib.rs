@@ -389,6 +389,17 @@ pub mod api {
         Some((ids, colors))
     }
 
+    /// The named exports of the setup planned (0.2 documents).
+    fn setup_exports(doc: &str) -> Option<Vec<marcam::project::Export>> {
+        let (p, _) = marcam::project::Project::from_json_any(doc).ok()?;
+        let want = SETUP.with(|s| s.borrow().clone());
+        let setup = match want {
+            Some(id) => p.setup(&id)?,
+            None => p.setups.first()?,
+        };
+        Some(setup.exports.clone())
+    }
+
     /// Built-in libraries plus `opts.libraries` (marcam tool library objects).
     fn libraries(opts: &Value) -> Result<Vec<ToolLibrary>, String> {
         let mut libs = profiles::builtin_libraries();
@@ -628,6 +639,29 @@ pub mod api {
                 })
             })
             .collect();
+        // the setup's named exports: its picked operations' toolpaths posted to a file of
+        // their own, with the fingerprint that says whether the file written is in sync
+        let exports: Vec<Value> = with_setup(&opts_v, || setup_exports(job_json))
+            .unwrap_or_default()
+            .iter()
+            .map(|e| {
+                let planned = op_ids.clone().unwrap_or_default();
+                let (nums, missing) = marcam::export::numbers_of(&planned, &e.operations);
+                let tp = marcam::export::splice(&tps, &|k| nums.contains(&k), &e.name);
+                let gcode = tp
+                    .as_ref()
+                    .map(|tp| marcam::post::post_lines(tp, &machine).0)
+                    .unwrap_or_default();
+                json!({
+                    "name": e.name,
+                    "operations": nums.len(),
+                    "missing": missing,
+                    "lines": gcode.lines().count(),
+                    "fingerprint": tp.is_some().then(|| marcam::export::fingerprint(&gcode)),
+                    "gcode": gcode,
+                })
+            })
+            .collect();
         json!({
             "machine": machine.name,
             "machine_id": profile.id,
@@ -639,6 +673,7 @@ pub mod api {
             "profile": job.part.profile,
             "mesh_bounds": mesh.as_ref().and_then(|m| m.bounds()),
             "programs": programs,
+            "exports": exports,
             "time_total_s": total_s,
             "plan_cache": { "reused": reused, "planned": planned },
             // (`export_toolpaths`: the toolpaths too, for the page to hand to its simulating
