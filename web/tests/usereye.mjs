@@ -3458,7 +3458,8 @@ try {
     const fp0 = await exportFp(name1);
     await record();
     await click("#expOps input[type=checkbox]");
-    await waitFor(() => read("[...document.querySelectorAll('#tree [data-exp-gen]')].every((e) => e.classList.contains('ready'))"), "ready again", 60000).catch(() => {});
+    // (its G-code made again: the export's own, the rows ready again)
+    await waitFor(async () => (await exportFp(name1)) !== fp0 && (await read("[...document.querySelectorAll('#tree [data-exp-gen]')].every((e) => e.classList.contains('ready'))")), "its G-code made again", 10000).catch(() => {});
     const fp1 = await exportFp(name1);
     const tickRec = await recorded();
     check("NC exports: an operation unticked in an export: nothing planned, no operation marked changed, its G-code made again", tickRec.sameResult && !tickRec.busy && !tickRec.pending && tickRec.badges.every((b) => b === "planned") && !!fp1 && fp1 !== fp0 && tickRec.gen.some((x) => /:generating$/.test(x)), JSON.stringify({ tickRec, fp0, fp1 }));
