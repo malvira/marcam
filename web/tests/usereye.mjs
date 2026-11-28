@@ -1943,11 +1943,11 @@ try {
       await settled();
     }
     await drag(simToggle, simToggle, 1);
-    await waitFor(() => read("/Simulated stock/.test(document.getElementById('summary').textContent)"), "the simulation", 180000 * SLACK).catch(() => {});
+    await waitFor(() => read("/Simulated stock:/.test(document.getElementById('summary').textContent)"), "the simulation", 180000 * SLACK).catch(() => {});
     await settled();
     const sim = await read(`(() => { const vis = ${VISIBLE}; return { status: document.getElementById('status').textContent.slice(0, 80), summary: [...document.querySelectorAll('#summary *')].filter((e) => vis(e)).map((e) => e.textContent).find((t) => /Simulated stock/.test(t))?.slice(0, 120) || '' }; })()`);
     await shot("custom_toolpath_simulated");
-    check("a custom toolpath: simulated, the stock it leaves on the screen", /Simulated stock/.test(sim.summary), JSON.stringify(sim));
+    check("a custom toolpath: simulated, the stock it leaves on the screen", /Simulated stock:/.test(sim.summary), JSON.stringify(sim));
     // (Mar: "this operation colored the wrong thing on the stock": a cut at a column's top
     // tinted its whole side down to the vise) the block's front face near its bottom, never
     // cut there: the stock's own colour, not an operation's
