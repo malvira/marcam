@@ -3442,13 +3442,16 @@ try {
     const rows0 = await read("document.querySelectorAll('#treeExports .tree-exp').length");
     await click("#treeExports button", "New");
     // (looked at as it is once it has come, before anything else is clicked or scrolled)
-    await waitFor(() => read(`document.querySelectorAll('#treeExports .tree-exp').length === ${rows0 + 1}`), "the new export's line", 30000).catch(() => {});
-    await sleep(200);
+    // (within a second, nothing else done meanwhile: Mar's new export showed only after the list
+    // was clicked)
+    const t1 = Date.now();
+    const came = await waitFor(() => read(`document.querySelectorAll('#treeExports .tree-exp').length === ${rows0 + 1}`), "the new export's line", 1000).then(() => true, () => false);
+    const cameMs = Date.now() - t1;
     const seen = await read(`(() => { const r = [...document.querySelectorAll('#treeExports .tree-exp')].pop(); if (!r) return 'none'; const b = r.querySelector('.tree-label').getBoundingClientRect(); const h = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return h && r.contains(h) ? r.dataset.export : 'hidden ' + r.dataset.export + ' at ' + Math.round(b.top); })()`);
     await waitFor(() => read("[...document.querySelectorAll('#tree [data-exp-gen]')].every((e) => e.classList.contains('ready'))"), "the export's G-code ready", 60000).catch(() => {});
     const addRec = await recorded();
     const name1 = seen.replace(/^hidden /, "").split(" ")[0];
-    check("NC exports: + New: the new export on the screen at once, nothing else clicked or scrolled", seen !== "none" && !/^hidden/.test(seen), seen);
+    check("NC exports: + New: the new export on the screen within a second, nothing else clicked or scrolled", came && seen !== "none" && !/^hidden/.test(seen), `${seen}; ${came ? `came in ${cameMs} ms` : "not there after 1 s"}`);
     check("NC exports: + New planned nothing: no Generate (the same results, the page never busy), no operation marked changed", addRec.sameResult && !addRec.busy && !addRec.pending && addRec.pc === addRec.pcNow && addRec.badges.every((b) => b === "planned"), JSON.stringify(addRec));
     check("NC exports: + New: its G-code seen generating, then ready", addRec.gen.some((x) => x === name1 + ":generating") && addRec.gen.filter((x) => x.startsWith(name1 + ":")).pop() === name1 + ":ready", JSON.stringify(addRec.gen));
     // one of its operations unticked in its details, and ticked again: its G-code alone made again
