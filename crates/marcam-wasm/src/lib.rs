@@ -1997,7 +1997,13 @@ pub mod api {
             .iter()
             .map(|t| [t.radius, if t.ball { 1.0 } else { 0.0 }, t.cone])
             .collect();
-        let (pn, pt, px, sign) = match mesh.as_ref().filter(|m| !m.triangles.is_empty()) {
+        // (a revolved profile's part, no mesh sent: revolved here, as the planner does, for the
+        // material left measured on it)
+        let revolved = match (&mesh, job.part.profile.as_ref()) {
+            (None, Some(p)) => Some(Mesh::revolve(p, 360)),
+            _ => None,
+        };
+        let (pn, pt, px, sign) = match mesh.as_ref().or(revolved.as_ref()).filter(|m| !m.triangles.is_empty()) {
             Some(m) => {
                 let (pn, pt) = marcam::exact::part_bvh(&m.triangles);
                 let b = m.bounds().map(|(lo, hi)| [lo[0], hi[0]]);

@@ -1922,7 +1922,16 @@ try {
     const prog = await read(`(() => { const vis = ${VISIBLE}; const d = JSON.parse(document.getElementById('job').value); const op = d.setups[0].operations.find((o) => o.type === 'custom'); return { op: !!op, lines: (op?.gcode || '').split('\\n').length, tabs: [...document.querySelectorAll('#tabs button')].filter((b) => vis(b)).map((b) => b.textContent), error: vis(document.getElementById('error')) ? document.getElementById('error').textContent : '' }; })()`);
     check("a custom toolpath: the .nc from a Python script chosen in its form: read (its feed moves counted, nothing it couldn't read), in the project, planned",
       /\d+ feed moves read/.test(lines) && /0 errors/.test(lines) && prog.op && prog.lines > 20 && prog.tabs.some((t) => /OK|issue/.test(t)) && !prog.error, `${lines.slice(0, 160)} | ${JSON.stringify(prog)} | before ${tabs0}`);
-    // its path on the screen: the blue of its cuts where the slot and the pocket are
+    // its path on the screen: the blue of its cuts where the slot and the pocket are, seen in
+    // the stock they cut (its Simulated stock toggle on, as a person turns it on to look: the
+    // toggles are remembered from section to section, and under the bare stock's see-through
+    // box a cut 0.5 mm down is drawn pale, not blue)
+    const simOn0 = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed') === 'true'");
+    if (!simOn0) {
+      await click(".view-toggles button[title^='Simulated stock']");
+      await waitFor(() => read("/Simulated stock:/.test(document.getElementById('summary').textContent)"), "the simulation", 180000 * SLACK).catch(() => {});
+      await settled();
+    }
     await read("window.__marcam.setView('top', {})");
     await sleep(1200);
     const vr = await viewRect();
@@ -3308,7 +3317,7 @@ try {
     else {
       const t0 = Date.now();
       const shown = await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !m.expanded && !!m.exact?.complete && !!m.exact.quad.visible; })()"), "the sim's stock at rest", 60000 * SLACK).catch(() => false);
-      const a = await shot("rest_sim_untouched");
+      await shot("rest_sim_untouched");
       check("planned, the view never clicked: the sim's stock (exact, the whole job's) on the screen by itself", !!shown, `${Date.now() - t0} ms; ${await read(`(() => { const m = window.__marcam.machining.state, t = window.__marcam.state.tree, e = m.exact; return JSON.stringify({ open: m.open, expanded: m.expanded, segs: m.session?.segments, exact: !!e, ready: e?.ready, complete: e?.complete, showing: e?.showing, quad: e?.quad.visible, keyOk: e?.key0 === m.exactFor, focus: t?.focus, selected: t?.selected, editing: m.editing, stock: m.view.stock, left: m.view.left, inFlight: window.__marcam.inFlight() }); })()`)}`);
       const vr = await viewRect();
       const differ = (p, q) => {
@@ -3321,6 +3330,18 @@ try {
           }
         return d / n;
       };
+      // (the stock looked at with the toolpaths off, as a person turns them off to see it: the
+      // knob's paths cover its part's end; pressed on the toolbar, all, to the playhead, off)
+      const pathsMode = () => read("window.__marcam.machining.state.view.paths");
+      for (let i = 0; i < 3 && (await pathsMode()) !== "off"; i++) {
+        const pb = await where(".view-toggles button", "Toolpaths");
+        if (pb) await drag(pb, pb, 1);
+        await sleep(300);
+      }
+      check("the toolpaths turned off on the view's toolbar", (await pathsMode()) === "off", await pathsMode());
+      await waitFor(() => read("(() => { const m = window.__marcam.machining.state; return !!m.exact?.complete && !!m.exact.quad.visible; })()"), "drawn again", 30000 * SLACK).catch(() => {});
+      await sleep(300);
+      const a = await shot("rest_sim_paths_off");
       const leftBtn = await where(".view-toggles button", "Material left");
       check("the material left's button in the view's toolbar, found by its name", !!leftBtn);
       if (leftBtn) {
@@ -3341,6 +3362,12 @@ try {
         const pressed2 = await read("[...document.querySelectorAll('.view-toggles button')].find((b) => /Material left/.test(b.title))?.getAttribute('aria-pressed')");
         check("material left clicked again: the sim's stock in its operations' colours, as before", !!off && pressed2 === "false" && differ(a, c) < 0.01, JSON.stringify({ off: !!off, pressed: pressed2, differ: +differ(a, c).toFixed(4), at: leftBtn, now: leftBtn2, leftMode: await read("window.__marcam.machining.state.exact?.uniforms.exLeftMode.value") }));
         check("the view's toolbar where it was between the two presses (nothing above it grew a line)", Math.abs(leftBtn2[1] - leftBtn[1]) < 1, JSON.stringify({ at: leftBtn, now: leftBtn2 }));
+      }
+      // (the toolpaths back on, all, for the sections after: the toggles are remembered)
+      for (let i = 0; i < 3 && (await pathsMode()) !== "all"; i++) {
+        const pb = await where(".view-toggles button", "Toolpaths");
+        if (pb) await drag(pb, pb, 1);
+        await sleep(300);
       }
     }
     await clean("the stock at rest and material left");
