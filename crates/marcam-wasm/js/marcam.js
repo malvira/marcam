@@ -70,6 +70,9 @@ export async function load(source, opts = {}) {
     // call, under its own name so a host can tell previews from plans
     planPreview: (job, machine, meshBytes, opts = {}) =>
       call("plan_and_post_opts", job, { ...opts, machine: machine ?? null }, meshBytes),
+    // the project's NC exports for opts.setup, posted from the last plan's toolpaths (nothing
+    // planned): { exports: [{ name, operations, missing, lines, fingerprint, gcode }] }
+    postExports: (job, opts) => call("post_exports", job, opts || {}),
     simulate: (job, opts, meshBytes) => call("simulate", job, opts || {}, meshBytes),
     simSurface: (job, opts, meshBytes) => call("sim_surface", job, opts || {}, meshBytes),
     simHeavy: (job, opts, meshBytes) => call("sim_heavy", job, opts || {}, meshBytes),

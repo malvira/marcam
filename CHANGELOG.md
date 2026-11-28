@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### NC exports plan nothing (2026-11-28)
+
+Adding, deleting, renaming an NC export or ticking its operations no longer generates the
+toolpaths again: its G-code is made from the toolpaths already planned (a new engine call,
+`postExports`), and no operation is marked changed (the exports, and a file written, were part
+of what the tree compared). Each export's line shows its G-code's state live beside whether the
+file is in sync: waiting on its toolpaths, generating, ready, or an error and why (in its
+tooltip). A new export's line is brought into the list's view at once.
+
 ### NC exports: named sets of operations, each to its own .nc file (2026-11-28)
 
 As Fusion's NC programs: under a setup's files in the project tree, **NC exports** lists named

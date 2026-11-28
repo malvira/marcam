@@ -187,7 +187,10 @@ function engine(cmd, ...args) {
 const gapCache = new Map();
 /** The key a project's toolpaths are handed over under (see planAndPost's toolpaths_json and
  *  seedPlan): the meshes as they are, the setup, the project exactly as planned. */
-const planKey = (job, setup, libs) => JSON.stringify([state.meshesGen, setup ?? null, libs ?? null, job]);
+// (a project's NC exports left out: they change no toolpath, and the simulating worker's
+// plan, seeded under this key, stays its own after one is edited)
+const withoutExports = (job) => (job?.setups?.some((x) => x.exports) ? { ...job, setups: job.setups.map(({ exports, ...x }) => x) } : job);
+const planKey = (job, setup, libs) => JSON.stringify([state.meshesGen, setup ?? null, libs ?? null, withoutExports(job)]);
 /** The simulating workers, handed the toolpaths the planner made (they plan nothing again). */
 const SIMULATING = new Set(["sim", "stats"]);
 
@@ -256,7 +259,21 @@ function writeJob(job, opts = {}) {
   $("job").value = JSON.stringify(job, null, 2);
   // (an opened project: the undo history starts here)
   if (opts.load) window.__marcam.project?.resetHistory?.();
-  else window.__marcam.project?.changed({ stale: !opts.display, typing: !!opts.typing });
+  // (a change that plans nothing, as an NC export's, is planned after all when what is planned
+  // differs from the results anyway, as a 0.1 project's first edit writing it as 0.2 does: an
+  // operation is never left marked "changed" with nothing planned)
+  else window.__marcam.project?.changed({ stale: !opts.display || differsFromPlanned(job), typing: !!opts.typing });
+}
+/** Whether the current setup of `doc`, as planned, differs from the results' (its settings or
+ *  any of its operations): what opState calls "pending". */
+function differsFromPlanned(doc) {
+  if (!state.result || !state.job || doc?.schema_version !== "0.2") return false;
+  const id = state.tree?.setup ?? state.result.setupId;
+  const s = doc.setups?.find((x) => x.id === id);
+  const ps = state.job.setups?.find((x) => x.id === id);
+  if (!s || !ps) return !!s !== !!ps;
+  if (setupKey(doc, s) !== setupKey(state.job, ps)) return true;
+  return s.operations.length !== ps.operations.length || s.operations.some((o) => opKey(o) !== opKey(ps.operations.find((x) => x.id === o.id)));
 }
 
 /** The Generate button asks for attention when the results are out of date or missing. */
@@ -335,7 +352,9 @@ function checkSettled() {
 /** What of a setup decides its operations' toolpaths besides the operations themselves. */
 function setupKey(doc, s) {
   if (!doc || !s) return "";
-  const { operations, outputs, name, ...rest } = s;
+  // (its NC exports left out: an export added, ticked, renamed or written plans nothing; with
+  // them in, every operation showed "changed" after one, and stayed so, nothing being planned)
+  const { operations, outputs, name, exports, ...rest } = s;
   return JSON.stringify([rest, doc.tools, doc.models, doc.unindexed || [], outputs.map((o) => [o.name, o.operations, o.reset_a])]);
 }
 /** An operation as planned (display-only fields left out: a colour or a name plans nothing). */

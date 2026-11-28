@@ -363,3 +363,52 @@ fn an_operation_added_with_a_new_tool_plans_it_alone() {
         }
     }
 }
+
+/// (Mar: "adding an nc export regenerates all the toolpaths (when it shouldn't regen
+/// anything)") An NC export added to a project, or its operations changed, plans nothing: every
+/// operation is the cache's, and the files' toolpaths are the same as before.
+#[test]
+fn an_nc_export_added_or_changed_plans_nothing() {
+    let libs = marcam::profiles::builtin_libraries();
+    let dir = root().join("examples/knob");
+    let text = std::fs::read_to_string(dir.join("knob.marcam.toml")).unwrap();
+    let json = marcam::project_file::to_json_text(&text).unwrap().into_owned();
+    let (project, _) = marcam::project::Project::from_json_any(&json).unwrap();
+    let plan_all = |p: &marcam::project::Project, cache: &mut PlanCache| {
+        let doc = serde_json::to_string(p).unwrap();
+        let jobs = marcam::project::jobs_from_any_with(&doc, &libs, &|src| src.load(&dir).ok()).unwrap();
+        jobs.iter()
+            .map(|(_, job)| {
+                let mesh = marcam::load_mesh(job, &dir).unwrap();
+                (ops(job), plan_with_mesh_cached(job, mesh.as_ref(), cache).unwrap())
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut cache = PlanCache::new();
+    let before = plan_all(&project, &mut cache);
+    let n: usize = before.iter().map(|(n, _)| n).sum();
+    assert!(n >= 2, "{n} operations");
+    assert_eq!(cache.take_counts().0, 0, "the first plan plans everything");
+    // an export of the first setup's operations but the first
+    let mut added = project.clone();
+    let s = &mut added.setups[0];
+    let ids: Vec<String> = s.operations.iter().skip(1).map(|o| o.id.clone()).collect();
+    s.exports.push(marcam::project::Export { name: "finish_only".into(), operations: ids, posted: None, posted_at: None });
+    let after = plan_all(&added, &mut cache);
+    assert_eq!(cache.take_counts(), (n, 0), "an export added: every operation reused, none planned");
+    assert_eq!(
+        before.iter().map(|(_, t)| t).collect::<Vec<_>>(),
+        after.iter().map(|(_, t)| t).collect::<Vec<_>>(),
+        "the files' toolpaths the same"
+    );
+    // its operations changed (one taken out), then renamed
+    let mut changed = added.clone();
+    changed.setups[0].exports[0].operations.pop();
+    changed.setups[0].exports[0].name = "renamed".into();
+    let again = plan_all(&changed, &mut cache);
+    assert_eq!(cache.take_counts(), (n, 0), "an export changed: none planned");
+    assert_eq!(
+        before.iter().map(|(_, t)| t).collect::<Vec<_>>(),
+        again.iter().map(|(_, t)| t).collect::<Vec<_>>(),
+    );
+}

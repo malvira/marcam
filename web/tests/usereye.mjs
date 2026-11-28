@@ -3419,6 +3419,14 @@ try {
     await sleep(300);
     const picked = await read("[...document.querySelectorAll('#tree .tree-op.sel .tree-label')].map((e) => e.textContent.trim().split(/\\s+op\\d/)[0])");
     check("NC exports: two operations of two files Ctrl-clicked, both shown picked", picked.length === 2, JSON.stringify(picked));
+    // (Mar: "adding an nc export regenerates all the toolpaths"; the ops all showed "changed";
+    // the new export not on the screen until the list was clicked) what the page shows meanwhile,
+    // every change of it recorded: the exports' NC states, any operation's badge, the page busy
+    const record = () => read(`(() => { const R = window.__expRec = { gen: [], pending: false, busy: false, result: window.__marcam.state.result, pc: JSON.stringify(window.__marcam.state.result?.plan_cache) };
+      const look = () => { for (const e of document.querySelectorAll('#tree [data-exp-gen]')) { const k = e.className.replace('exp-gen', '').trim(); const last = R.gen[R.gen.length - 1]; if (last !== e.dataset.expGen + ':' + k) R.gen.push(e.dataset.expGen + ':' + k); } if ([...document.querySelectorAll('#tree .op-state')].some((e) => e.dataset.state === 'pending' || e.dataset.state === 'planning')) R.pending = true; if (document.body.dataset.state === 'busy') R.busy = true; };
+      look(); window.__expObs?.disconnect(); window.__expObs = new MutationObserver(look); window.__expObs.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true }); return true; })()`);
+    const recorded = () => read("(() => { window.__expObs?.disconnect(); const R = window.__expRec; return JSON.stringify({ gen: R.gen, pending: R.pending, busy: R.busy, sameResult: R.result === window.__marcam.state.result, pc: R.pc, pcNow: JSON.stringify(window.__marcam.state.result?.plan_cache), badges: [...document.querySelectorAll('#tree .op-state')].map((e) => e.dataset.state) }); })()").then(JSON.parse);
+    const exportFp = (name) => read(`window.__marcam.state.result?.exports?.find((e) => e.name === ${JSON.stringify(name)})?.fingerprint || ''`);
     await click("#treeExports button", "New");
     await settled();
     const row = () => read(`(() => { const vis = ${VISIBLE}; const r = document.querySelector('#treeExports .tree-exp'); if (!r) return ''; r.scrollIntoView({ block: 'nearest' }); return vis(r) ? r.textContent.replace(/\\s+/g, ' ').trim() : ''; })()`);
@@ -3426,6 +3434,42 @@ try {
     const r1 = await row();
     const p1 = await pane();
     check("NC exports: + New makes an export of the two, its line under the files (not written), its details beside", /\b2 ops\b/.test(r1) && /not written/.test(r1) && /Not written yet/.test(p1) && /Rotary turning/.test(p1), JSON.stringify({ r1, p1: p1.slice(0, 200) }));
+    // (a second export, of every operation: the project is the one planned now, as a person's
+    // own project is; the first edit above wrote the example, a 0.1 job, as 0.2)
+    await click("#tree .tree-setuphead .tree-label");
+    await settled();
+    await record();
+    await click("#treeExports button", "New");
+    // (looked at as it is, before anything else is clicked or scrolled)
+    const seen = await read(`(() => { const r = [...document.querySelectorAll('#treeExports .tree-exp')].pop(); if (!r) return 'none'; const b = r.querySelector('.tree-label').getBoundingClientRect(); const h = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return h && r.contains(h) ? r.dataset.export : 'hidden ' + r.dataset.export + ' at ' + Math.round(b.top); })()`);
+    await waitFor(() => read("[...document.querySelectorAll('#tree [data-exp-gen]')].every((e) => e.classList.contains('ready'))"), "the export's G-code ready", 60000).catch(() => {});
+    const addRec = await recorded();
+    const name1 = seen.replace(/^hidden /, "").split(" ")[0];
+    check("NC exports: + New: the new export on the screen at once, nothing else clicked or scrolled", seen !== "none" && !/^hidden/.test(seen), seen);
+    check("NC exports: + New planned nothing: no Generate (the same results, the page never busy), no operation marked changed", addRec.sameResult && !addRec.busy && !addRec.pending && addRec.pc === addRec.pcNow && addRec.badges.every((b) => b === "planned"), JSON.stringify(addRec));
+    check("NC exports: + New: its G-code seen generating, then ready", addRec.gen.some((x) => x === name1 + ":generating") && addRec.gen.filter((x) => x.startsWith(name1 + ":")).pop() === name1 + ":ready", JSON.stringify(addRec.gen));
+    // one of its operations unticked in its details, and ticked again: its G-code alone made again
+    const fp0 = await exportFp(name1);
+    await record();
+    await click("#expOps input[type=checkbox]");
+    await waitFor(() => read("[...document.querySelectorAll('#tree [data-exp-gen]')].every((e) => e.classList.contains('ready'))"), "ready again", 60000).catch(() => {});
+    const fp1 = await exportFp(name1);
+    const tickRec = await recorded();
+    check("NC exports: an operation unticked in an export: nothing planned, no operation marked changed, its G-code made again", tickRec.sameResult && !tickRec.busy && !tickRec.pending && tickRec.badges.every((b) => b === "planned") && !!fp1 && fp1 !== fp0 && tickRec.gen.some((x) => /:generating$/.test(x)), JSON.stringify({ tickRec, fp0, fp1 }));
+    await click("#expOps input[type=checkbox]");
+    await waitFor(async () => (await exportFp(name1)) === fp0, "ticked again", 60000).catch(() => {});
+    check("NC exports: ticked again: its G-code as before", (await exportFp(name1)) === fp0, fp0);
+    // the second export deleted: nothing planned either
+    await record();
+    await click("#expDelete");
+    await sleep(800);
+    const delRec = await recorded();
+    check("NC exports: an export deleted: nothing planned, no operation marked changed", delRec.sameResult && !delRec.busy && !delRec.pending && delRec.badges.every((b) => b === "planned"), JSON.stringify(delRec));
+    // (the first one's details again, for what follows)
+    await click("#treeExports .tree-exp .tree-label");
+    await settled();
+    const p1b = await pane();
+    check("NC exports: the first export's details shown again", /Rotary turning/.test(p1b), p1b.slice(0, 120));
     // its name typed, as a person renames it
     await click("#expName");
     await key("a", 2);
@@ -3444,11 +3488,15 @@ try {
     // the chamfer's feed changed: planned again by itself, the export's file is now out of date
     await click("#tree .tree-op .tree-label", "V-bit flank chamfer");
     await sleep(500);
+    await record();
     await click("#opForm input[name=feed]");
     await key("a", 2);
     for (const ch of "260") await type(ch);
     await key("Tab");
     await settled();
+    await waitFor(() => read("[...document.querySelectorAll('#tree .op-state')].every((e) => e.dataset.state === 'planned') && document.querySelector('#tree [data-exp-gen]')?.classList.contains('ready')"), "planned again", 120000).catch(() => {});
+    const editRec = await recorded();
+    check("NC exports: an operation's feed changed: its badge went changed, then planned (✓) by itself; the export's G-code waited, then ready", editRec.pending && editRec.badges.every((b) => b === "planned") && editRec.gen.some((x) => /:(waiting|generating)$/.test(x)) && /:ready$/.test(editRec.gen[editRec.gen.length - 1] || ""), JSON.stringify(editRec));
     await waitFor(async () => /out of sync/.test(await row()), "out of sync", 60000).catch(() => {});
     const r4 = await row();
     check("NC exports: the chamfer's feed changed, the toolpaths updated by themselves: its line says out of sync", /out of sync/.test(r4), r4);

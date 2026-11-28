@@ -94,6 +94,12 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; }
 .tree-exp .tree-label { flex: 1; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-exp button { padding: 0 5px; font-size: 11px; }
 .exp-state { font-size: 11px; white-space: nowrap; border-radius: 3px; padding: 0 4px; }
+/* (each export's NC generation: waiting, generating, ready, error; its word in the tooltip) */
+.exp-gen { font-size: 11px; width: 1.1em; text-align: center; cursor: default; }
+.exp-gen.waiting { color: var(--muted, #888); }
+.exp-gen.generating { color: var(--accent, #4a9eff); }
+.exp-gen.ready { color: var(--ok); }
+.exp-gen.error { color: var(--warn); }
 .exp-state.ok, .exp-status.ok { color: var(--ok); }
 .exp-state.stale { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
 .exp-status.stale { background: var(--warn-bg); color: var(--warn); padding: 3px 6px; border-radius: 4px; }

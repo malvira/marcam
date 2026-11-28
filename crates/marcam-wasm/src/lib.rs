@@ -297,6 +297,53 @@ pub mod api {
     thread_local! {
         /// Operations planned before (see marcam::PlanCache).
         static PLAN_CACHE: std::cell::RefCell<marcam::PlanCache> = std::cell::RefCell::new(marcam::PlanCache::new());
+        /// The last plan_and_post's toolpaths, operation ids and post: an NC export added,
+        /// changed or renamed is posted from them (post_exports), nothing planned again.
+        static LAST_POST: std::cell::RefCell<Option<(Vec<Toolpath>, Option<Vec<String>>, marcam::machine::Machine)>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// The setup's named exports posted from toolpaths: each its operations' moves spliced
+    /// into one program, its G-code, lines and fingerprint (see marcam::export).
+    fn exports_json(
+        exports: &[marcam::project::Export],
+        tps: &[Toolpath],
+        op_ids: &Option<Vec<String>>,
+        machine: &marcam::machine::Machine,
+    ) -> Vec<Value> {
+        exports
+            .iter()
+            .map(|e| {
+                let planned = op_ids.clone().unwrap_or_default();
+                let (nums, missing) = marcam::export::numbers_of(&planned, &e.operations);
+                let tp = marcam::export::splice(tps, &|k| nums.contains(&k), &e.name);
+                let gcode = tp
+                    .as_ref()
+                    .map(|tp| marcam::post::post_lines(tp, machine).0)
+                    .unwrap_or_default();
+                json!({
+                    "name": e.name,
+                    "operations": nums.len(),
+                    "missing": missing,
+                    "lines": gcode.lines().count(),
+                    "fingerprint": tp.is_some().then(|| marcam::export::fingerprint(&gcode)),
+                    "gcode": gcode,
+                })
+            })
+            .collect()
+    }
+
+    /// (Mar: "adding an nc export regenerates all the toolpaths (when it shouldn't regen
+    /// anything)") The project's NC exports for the setup `opts.setup` posted from the last
+    /// plan's toolpaths: an export added, renamed or its operations ticked changes no
+    /// toolpath, so nothing is planned. An error when there is no plan yet.
+    pub fn post_exports(job_json: &str, opts: &str) -> Value {
+        let opts_v: Value = serde_json::from_str(if opts.trim().is_empty() { "{}" } else { opts })
+            .unwrap_or(Value::Null);
+        let exports = with_setup(&opts_v, || setup_exports(job_json)).unwrap_or_default();
+        LAST_POST.with(|l| match &*l.borrow() {
+            Some((tps, op_ids, machine)) => json!({ "exports": exports_json(&exports, tps, op_ids, machine) }),
+            None => err("nothing planned yet"),
+        })
     }
 
     /// The project's operations (ids, colours) the simulation plays: those not hidden
@@ -641,27 +688,14 @@ pub mod api {
             .collect();
         // the setup's named exports: its picked operations' toolpaths posted to a file of
         // their own, with the fingerprint that says whether the file written is in sync
-        let exports: Vec<Value> = with_setup(&opts_v, || setup_exports(job_json))
-            .unwrap_or_default()
-            .iter()
-            .map(|e| {
-                let planned = op_ids.clone().unwrap_or_default();
-                let (nums, missing) = marcam::export::numbers_of(&planned, &e.operations);
-                let tp = marcam::export::splice(&tps, &|k| nums.contains(&k), &e.name);
-                let gcode = tp
-                    .as_ref()
-                    .map(|tp| marcam::post::post_lines(tp, &machine).0)
-                    .unwrap_or_default();
-                json!({
-                    "name": e.name,
-                    "operations": nums.len(),
-                    "missing": missing,
-                    "lines": gcode.lines().count(),
-                    "fingerprint": tp.is_some().then(|| marcam::export::fingerprint(&gcode)),
-                    "gcode": gcode,
-                })
-            })
-            .collect();
+        let exports = exports_json(
+            &with_setup(&opts_v, || setup_exports(job_json)).unwrap_or_default(),
+            &tps,
+            &op_ids,
+            &machine,
+        );
+        // (kept: an export changed later is posted from them, see post_exports)
+        LAST_POST.with(|l| *l.borrow_mut() = Some((tps.clone(), op_ids.clone(), machine.clone())));
         json!({
             "machine": machine.name,
             "machine_id": profile.id,
@@ -2764,6 +2798,7 @@ pub mod api {
                 };
                 plan_and_post(&d(a), &m, c, &s(b))
             }
+            "post_exports" => post_exports(&d(a), &s(b)),
             "simulate" => simulate(&d(a), &s(b), c),
             "sim_surface" => sim_surface(&d(a), &s(b), c),
             "sim_heavy" => sim_heavy(&d(a), &s(b), c),

@@ -573,6 +573,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         const n = e.operations.length;
         return `<div class="tree-exp ${t.focus === "export" && !t.selected && t.export === e.name ? "sel" : ""}" data-export="${esc(e.name)}">
           <span class="tree-label" data-act="export" title="This export's operations and file">${esc(e.name)}.nc <span class="muted">${n} op${n === 1 ? "" : "s"}</span></span>
+          ${(() => { const [k, mark, title] = exportGen(s, e); return `<span class="exp-gen ${k}" data-exp-gen="${esc(e.name)}" title="${esc(title)}" aria-label="${esc(title)}">${mark}</span>`; })()}
           <span class="exp-state ${st.kind}" data-exp-state="${esc(e.name)}" title="${esc(st.long)}">${esc(st.text)}</span>
           <button type="button" data-act="writeexp" class="exp-write" aria-label="Write ${esc(e.name)}.nc" title="Write ${esc(e.name)}.nc${canPickFile() ? " (to the file chosen for it)" : ""}">⤓</button></div>`;
       })
@@ -600,6 +601,80 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       <button type="button" id="expDelete" title="Delete this export (its operations stay; a file written stays)">Delete</button></div></div>`;
   }
   const expKey = (s, name) => exportKey(t.doc?.name || "untitled", s.id, name);
+  // (Mar: each export's NC generation, live: waiting on its toolpaths, generating, ready, or
+  // an error and why; beside whether the file written is in sync)
+  t.expBusy ||= new Set();
+  t.expErr ||= new Map();
+  /** An export's G-code: [kind, mark, tooltip]. */
+  function exportGen(s, e) {
+    const of = window.__marcam?.opState;
+    const states = e.operations.map((id) => of?.(s.id, id));
+    const k = expKey(s, e.name);
+    if (t.expErr.has(k)) return ["error", "⚠", `Its G-code could not be made: ${t.expErr.get(k)}`];
+    if (t.expBusy.has(k) || states.includes("planning")) return ["generating", "⟳", "Generating: its G-code is being made from its operations' toolpaths"];
+    const res = exportResult(s, e.name);
+    if (!res || states.includes("pending")) return ["waiting", "◌", "Waiting on its operations' toolpaths"];
+    if (!res.fingerprint) return ["error", "⚠", "Nothing to write: none of its operations is planned (tick some, or enable them)"];
+    if (states.includes("error")) return ["error", "⚠", `Ready without ${res.missing?.length || "some"} of its operations: they are not planned (see their messages)`];
+    return ["ready", "●", `Ready: its G-code made from the toolpaths (${res.lines.toLocaleString("en")} lines)`];
+  }
+  /** The exports' rows' states as they are now (no redraw: called as plans go). */
+  function renderExportStates() {
+    const s = setup();
+    if (!s) return;
+    for (const el of document.querySelectorAll("#tree [data-exp-gen]")) {
+      const e = s.exports?.find((x) => x.name === el.dataset.expGen);
+      if (!e) continue;
+      const [k, mark, title] = exportGen(s, e);
+      if (el.textContent !== mark) el.textContent = mark;
+      if (!el.classList.contains(k)) el.className = `exp-gen ${k}`;
+      if (el.title !== title) { el.title = title; el.setAttribute("aria-label", title); }
+    }
+    for (const el of document.querySelectorAll("#tree [data-exp-state]")) {
+      const e = s.exports?.find((x) => x.name === el.dataset.expState);
+      if (!e) continue;
+      const st = exportStatus(e, exportResult(s, e.name));
+      if (el.textContent !== st.text) el.textContent = st.text;
+      if (!el.classList.contains(st.kind)) el.className = `exp-state ${st.kind}`;
+      if (el.title !== st.long) el.title = st.long;
+    }
+    const pane = $("expStatus");
+    const e = t.focus === "export" && s.exports?.find((x) => x.name === t.export);
+    if (pane && e) {
+      const st = exportStatus(e, exportResult(s, e.name));
+      if (pane.textContent !== st.long) pane.textContent = st.long;
+      pane.className = `small exp-status ${st.kind}`;
+    }
+  }
+  /** (Mar: "adding an nc export regenerates all the toolpaths (when it shouldn't regen
+   *  anything)") An export added, renamed, deleted or its operations ticked changes no
+   *  toolpath: nothing is planned, its G-code is made from the toolpaths planned (the engine's
+   *  last plan), the rows' states live meanwhile. */
+  async function postExportsNow() {
+    const s = setup();
+    const r = state.result;
+    if (!s || !r || (r.setupId ?? null) !== s.id) return renderExportStates();
+    const keys = (s.exports || []).map((e) => expKey(s, e.name));
+    for (const k of keys) {
+      t.expBusy.add(k);
+      t.expErr.delete(k);
+    }
+    renderExportStates();
+    try {
+      const { result } = await engine("postExports", t.doc, { setup: s.id });
+      if (state.result === r) r.exports = result.exports;
+    } catch (err) {
+      for (const k of keys) t.expErr.set(k, err.message);
+    }
+    for (const k of keys) t.expBusy.delete(k);
+    renderExportStates();
+  }
+  /** An export's row brought into the list's view (the list keeps its scroll when drawn
+   *  again: a new one at its end was below it until the list was clicked). */
+  function showExportRow(name) {
+    const row = [...document.querySelectorAll("#treeExports .tree-exp")].find((x) => x.dataset.export === name);
+    row?.scrollIntoView({ block: "nearest" });
+  }
   const chosenText = (f) => (f ? `Writes to ${f} (the file chosen for it).` : canPickFile() ? "The first write asks where to save it; later writes go to that file." : "Each write downloads it.");
   /** Say which file an export writes to (looked up, kept for the next drawing). */
   async function showChosen(s, e) {
@@ -625,7 +700,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     t.focus = "export";
     t.export = name;
     t.selected = null;
-    await commit({ label: `Added the NC export ${name}.` });
+    await commit({ label: `Added the NC export ${name}.`, display: true });
+    showExportRow(name);
+    await postExportsNow();
   }
   async function doWriteExport(name, pick) {
     const s = setup();
@@ -1862,7 +1939,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       s.exports = s.exports.filter((e) => e.name !== name);
       t.focus = "setup";
       moveChosen(expKey(s, name), null);
-      return commit({ label: `Deleted the NC export ${name}.` });
+      await commit({ label: `Deleted the NC export ${name}.`, display: true });
+      return postExportsNow();
     }
     const head = el.closest?.(".tree-setup");
     if (el.dataset?.act === "delsetup" && head) return deleteSetup(head.dataset.setup);
@@ -2339,7 +2417,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         if (el.checked) on.add(el.dataset.expOp);
         else on.delete(el.dataset.expOp);
         e.operations = opsInOrder(s).map((o) => o.id).filter((id) => on.has(id));
-        return commit({ label: `${el.checked ? "Added" : "Took"} ${el.dataset.expOp} ${el.checked ? "to" : "out of"} ${e.name}.nc.` });
+        await commit({ label: `${el.checked ? "Added" : "Took"} ${el.dataset.expOp} ${el.checked ? "to" : "out of"} ${e.name}.nc.`, display: true });
+        return postExportsNow();
       }
       const name = el.value.trim().replace(/[.]nc$/i, "").replace(/[\\/:*?"<>|]/g, "_");
       if (!name || name === e.name) return render();
@@ -2351,7 +2430,9 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       moveChosen(expKey(s, e.name), expKey(s, name));
       e.name = name;
       t.export = name;
-      return commit({ label: `Renamed the NC export to ${name}.` });
+      await commit({ label: `Renamed the NC export to ${name}.`, display: true });
+      showExportRow(name);
+      return postExportsNow();
     }
     // the operation type picked, kept for this setup (see setTree)
     if (el.id === "treeAddType") {
@@ -2749,6 +2830,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
   };
   function renderStates() {
     if (!t.doc) return;
+    renderExportStates();
     const s = setup();
     const of = window.__marcam?.opState;
     if (!s || !of) return;
