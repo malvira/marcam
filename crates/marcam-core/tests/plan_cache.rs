@@ -372,15 +372,21 @@ fn an_nc_export_added_or_changed_plans_nothing() {
     let libs = marcam::profiles::builtin_libraries();
     let dir = root().join("examples/knob");
     let text = std::fs::read_to_string(dir.join("knob.marcam.toml")).unwrap();
-    let json = marcam::project_file::to_json_text(&text).unwrap().into_owned();
+    let json = marcam::project_file::to_json_text(&text)
+        .unwrap()
+        .into_owned();
     let (project, _) = marcam::project::Project::from_json_any(&json).unwrap();
     let plan_all = |p: &marcam::project::Project, cache: &mut PlanCache| {
         let doc = serde_json::to_string(p).unwrap();
-        let jobs = marcam::project::jobs_from_any_with(&doc, &libs, &|src| src.load(&dir).ok()).unwrap();
+        let jobs =
+            marcam::project::jobs_from_any_with(&doc, &libs, &|src| src.load(&dir).ok()).unwrap();
         jobs.iter()
             .map(|(_, job)| {
                 let mesh = marcam::load_mesh(job, &dir).unwrap();
-                (ops(job), plan_with_mesh_cached(job, mesh.as_ref(), cache).unwrap())
+                (
+                    ops(job),
+                    plan_with_mesh_cached(job, mesh.as_ref(), cache).unwrap(),
+                )
             })
             .collect::<Vec<_>>()
     };
@@ -393,9 +399,18 @@ fn an_nc_export_added_or_changed_plans_nothing() {
     let mut added = project.clone();
     let s = &mut added.setups[0];
     let ids: Vec<String> = s.operations.iter().skip(1).map(|o| o.id.clone()).collect();
-    s.exports.push(marcam::project::Export { name: "finish_only".into(), operations: ids, posted: None, posted_at: None });
+    s.exports.push(marcam::project::Export {
+        name: "finish_only".into(),
+        operations: ids,
+        posted: None,
+        posted_at: None,
+    });
     let after = plan_all(&added, &mut cache);
-    assert_eq!(cache.take_counts(), (n, 0), "an export added: every operation reused, none planned");
+    assert_eq!(
+        cache.take_counts(),
+        (n, 0),
+        "an export added: every operation reused, none planned"
+    );
     assert_eq!(
         before.iter().map(|(_, t)| t).collect::<Vec<_>>(),
         after.iter().map(|(_, t)| t).collect::<Vec<_>>(),
@@ -406,7 +421,11 @@ fn an_nc_export_added_or_changed_plans_nothing() {
     changed.setups[0].exports[0].operations.pop();
     changed.setups[0].exports[0].name = "renamed".into();
     let again = plan_all(&changed, &mut cache);
-    assert_eq!(cache.take_counts(), (n, 0), "an export changed: none planned");
+    assert_eq!(
+        cache.take_counts(),
+        (n, 0),
+        "an export changed: none planned"
+    );
     assert_eq!(
         before.iter().map(|(_, t)| t).collect::<Vec<_>>(),
         again.iter().map(|(_, t)| t).collect::<Vec<_>>(),

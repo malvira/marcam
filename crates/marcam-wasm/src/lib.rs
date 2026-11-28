@@ -341,7 +341,9 @@ pub mod api {
             .unwrap_or(Value::Null);
         let exports = with_setup(&opts_v, || setup_exports(job_json)).unwrap_or_default();
         LAST_POST.with(|l| match &*l.borrow() {
-            Some((tps, op_ids, machine)) => json!({ "exports": exports_json(&exports, tps, op_ids, machine) }),
+            Some((tps, op_ids, machine)) => {
+                json!({ "exports": exports_json(&exports, tps, op_ids, machine) })
+            }
             None => err("nothing planned yet"),
         })
     }
