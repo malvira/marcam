@@ -2003,7 +2003,11 @@ pub mod api {
             (None, Some(p)) => Some(Mesh::revolve(p, 360)),
             _ => None,
         };
-        let (pn, pt, px, sign) = match mesh.as_ref().or(revolved.as_ref()).filter(|m| !m.triangles.is_empty()) {
+        let (pn, pt, px, sign) = match mesh
+            .as_ref()
+            .or(revolved.as_ref())
+            .filter(|m| !m.triangles.is_empty())
+        {
             Some(m) => {
                 let (pn, pt) = marcam::exact::part_bvh(&m.triangles);
                 let b = m.bounds().map(|(lo, hi)| [lo[0], hi[0]]);
