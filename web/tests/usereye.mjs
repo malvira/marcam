@@ -1687,6 +1687,13 @@ try {
     check("carry-through: setup 2's playback starts from what setup 1 left (the ring round the boss, the turned-down OD), not a fresh bar",
       ends.od < ends.bar - 0.5 && ends.bar > 9.5 && ends.bar < 10.5, JSON.stringify(ends));
     await click("#vtPlay").catch(() => {});
+    // (the stock turned off again, as this section found it before the knurl: the view's toggles
+    // are remembered, and the sections after it start with the stock off)
+    await settled();
+    await click(".view-toggles button[title^='Simulated stock']");
+    await sleep(300);
+    const stockAfter = await read("JSON.stringify({ pressed: [...document.querySelectorAll('.view-toggles button')].find((b) => /Simulated stock/.test(b.title))?.getAttribute('aria-pressed'), stock: window.__marcam.state.machining?.view?.stock })");
+    check("carry-through: the Simulated stock toggle pressed off at the end, off", JSON.parse(stockAfter).pressed === "false", stockAfter);
     await clean("the cut piece carried on");
   }
   // ---------------------------------------------------------------- the view's paths and setups
