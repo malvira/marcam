@@ -3334,7 +3334,7 @@ try {
       // knob's paths cover its part's end; pressed on the toolbar, all, to the playhead, off)
       const pathsMode = () => read("window.__marcam.machining.state.view.paths");
       for (let i = 0; i < 3 && (await pathsMode()) !== "off"; i++) {
-        const pb = await where(".view-toggles button", "Toolpaths");
+        const pb = await where(".view-toggles button[data-v=paths]");
         if (pb) await drag(pb, pb, 1);
         await sleep(300);
       }
@@ -3365,7 +3365,7 @@ try {
       }
       // (the toolpaths back on, all, for the sections after: the toggles are remembered)
       for (let i = 0; i < 3 && (await pathsMode()) !== "all"; i++) {
-        const pb = await where(".view-toggles button", "Toolpaths");
+        const pb = await where(".view-toggles button[data-v=paths]");
         if (pb) await drag(pb, pb, 1);
         await sleep(300);
       }
