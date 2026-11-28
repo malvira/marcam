@@ -56,7 +56,12 @@ fn an_operation_alone_gets_its_tool_and_its_way_in() {
     let issues = verify_gcode(&g, &limits_for(&ex, &machine));
     assert!(issues.is_empty(), "{issues:?}");
     // its cuts are the planned ones, all of them
-    let cuts = |moves: &[Move]| moves.iter().filter(|m| matches!(m, Move::Cut { .. })).count();
+    let cuts = |moves: &[Move]| {
+        moves
+            .iter()
+            .filter(|m| matches!(m, Move::Cut { .. }))
+            .count()
+    };
     let tp = tps.last().unwrap();
     let start = tp
         .moves
@@ -102,7 +107,6 @@ fn fingerprints_and_numbers() {
     assert_eq!(missing, vec!["x".to_string()]);
 }
 
-
 /// On a vise (3-axis): the whole flat program exports as itself; the holes and the dome
 /// (another program, another tool) together post clean G-code, up to the safe Z between them.
 #[test]
@@ -120,7 +124,10 @@ fn three_axis_exports() {
     let ids = ops_of(&tps[0]);
     let ex = splice(&tps, &|k| ids.contains(&k), "flat").unwrap();
     let skip_title = |s: &str| s.lines().skip(1).collect::<Vec<_>>().join("\n");
-    assert_eq!(skip_title(&post(&tps[0], &machine)), skip_title(&post(&ex, &machine)));
+    assert_eq!(
+        skip_title(&post(&tps[0], &machine)),
+        skip_title(&post(&ex, &machine))
+    );
     let holes = ids[2];
     let dome = ops_of(&tps[1])[0];
     let ex = splice(&tps, &|k| k == holes || k == dome, "holes+dome").unwrap();
@@ -135,9 +142,9 @@ fn three_axis_exports() {
         .position(|m| matches!(m, Move::Operation { id, .. } if *id == dome))
         .unwrap();
     let safe = ex.safe_r;
-    let up = ex.moves[k..]
-        .iter()
-        .position(|m| matches!(m, Move::Rapid3 { x: None, y: None, z: Some(z) } if *z >= safe - 1e-9));
+    let up = ex.moves[k..].iter().position(
+        |m| matches!(m, Move::Rapid3 { x: None, y: None, z: Some(z) } if *z >= safe - 1e-9),
+    );
     let over = ex.moves[k..]
         .iter()
         .position(|m| matches!(m, Move::Rapid3 { x: Some(_), .. } | Move::Line3 { .. }));

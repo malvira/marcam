@@ -18,7 +18,7 @@
 // Screenshots go to web/tests/screenshots/usereye/ (kept on a failure for CI).
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,7 +91,9 @@ async function start() {
   }
   const profile = mkdtempSync(join(tmpdir(), "marcam-eye-"));
   const dport = await freePort();
-  children.push(spawn(findBrowser(), ["--headless=new", `--remote-debugging-port=${dport}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows", ...(process.env.MARCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []), "about:blank"], { stdio: "ignore" }));
+  // (the File System Access API off: a page can't drive the file chooser it opens, Chrome
+  // headless cancels it at once; NC exports then download their files, as in Firefox)
+  children.push(spawn(findBrowser(), ["--headless=new", "--disable-blink-features=FileSystemAccessLocal", `--remote-debugging-port=${dport}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows", ...(process.env.MARCAM_E2E_SOFTWARE_GL ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : []), "about:blank"], { stdio: "ignore" }));
   const version = await waitFor(async () => { try { return (await httpGet(`http://127.0.0.1:${dport}/json/version`)).json(); } catch { return null; } }, "the browser", 20000);
   const ws = new WebSocket(version.webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener("open", r, { once: true }));
@@ -131,7 +133,7 @@ async function start() {
     return r.result.value;
   };
   await S("Page.navigate", { url });
-  return { S, read, events, url };
+  return { S, B: send, read, events, url };
 }
 
 /** A part like an impeller (a hub along X, three blades out to radius 18), as binary STL
@@ -219,7 +221,7 @@ function bladesStl() {
   return buf;
 }
 
-const { S, read, events, url } = await start();
+const { S, B, read, events, url } = await start();
 const fails = [];
 let step = 0;
 const shot = async (name) => {
@@ -3388,6 +3390,77 @@ try {
     const same = before.gcode.every(([name, len, head]) => after.gcode.some(([n2, l2, h2]) => n2 === name && h2 === head && (l2 === len || l2 > len)));
     check(`an operation added (${kind}): it alone planned, the ${before.ops} before it replayed, their G-code the same`, !!added && after.pc?.planned === 1 && after.pc?.reused === before.ops && same, JSON.stringify({ ms: Date.now() - t0, pc: after.pc, same, ops: before.ops }));
     await clean("an operation added");
+  }
+  // ---------------------------------------------------------------- NC exports
+  // (Mar: "as Fusion") the knob's turning and its chamfer (two files) Ctrl-clicked in the tree,
+  // + New under NC exports: one export of the two, named, written to its own file (this
+  // browser has no file chooser for pages: downloaded); its line says in sync. The chamfer's
+  // feed changed: the toolpaths update by themselves and the export's line says out of sync;
+  // written again (its line's button): in sync.
+  {
+    const dl = mkdtempSync(join(tmpdir(), "marcam-eye-dl-"));
+    await B("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dl });
+    await S("Page.navigate", { url });
+    await waitFor(() => read("!!document.getElementById('status') && !/Loading engine/i.test(document.getElementById('status').textContent) && document.body.dataset.state !== 'busy'"), "the app", 120000);
+    await sleep(1000);
+    await read("(() => { window.confirm = () => true; const s = document.getElementById('example'); s.value = 'knob'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()");
+    await click("#loadExample");
+    await settled();
+    const ctrlClick = async (css, text) => {
+      const p = await where(css, text);
+      if (!p) throw new Error(`nothing visible to Ctrl-click: ${css} ${text ?? ""}`);
+      await S("Input.dispatchMouseEvent", { type: "mouseMoved", x: p[0], y: p[1], modifiers: 2 });
+      await S("Input.dispatchMouseEvent", { type: "mousePressed", x: p[0], y: p[1], button: "left", clickCount: 1, modifiers: 2 });
+      await S("Input.dispatchMouseEvent", { type: "mouseReleased", x: p[0], y: p[1], button: "left", clickCount: 1, modifiers: 2 });
+    };
+    await ctrlClick("#tree .tree-op .tree-label", "Rotary turning");
+    await sleep(300);
+    await ctrlClick("#tree .tree-op .tree-label", "V-bit flank chamfer");
+    await sleep(300);
+    const picked = await read("[...document.querySelectorAll('#tree .tree-op.sel .tree-label')].map((e) => e.textContent.trim().split(/\\s+op\\d/)[0])");
+    check("NC exports: two operations of two files Ctrl-clicked, both shown picked", picked.length === 2, JSON.stringify(picked));
+    await click("#treeExports button", "New");
+    await settled();
+    const row = () => read(`(() => { const vis = ${VISIBLE}; const r = document.querySelector('#treeExports .tree-exp'); if (!r) return ''; r.scrollIntoView({ block: 'nearest' }); return vis(r) ? r.textContent.replace(/\\s+/g, ' ').trim() : ''; })()`);
+    const pane = () => read(`(() => { const vis = ${VISIBLE}; const p = document.getElementById('exportPane'); if (!p) return ''; p.scrollIntoView({ block: 'nearest' }); return vis(document.getElementById('expStatus')) ? p.textContent.replace(/\\s+/g, ' ').trim() : ''; })()`);
+    const r1 = await row();
+    const p1 = await pane();
+    check("NC exports: + New makes an export of the two, its line under the files (not written), its details beside", /\b2 ops\b/.test(r1) && /not written/.test(r1) && /Not written yet/.test(p1) && /Rotary turning/.test(p1), JSON.stringify({ r1, p1: p1.slice(0, 200) }));
+    // its name typed, as a person renames it
+    await click("#expName");
+    await key("a", 2);
+    for (const ch of "knob_turn_chamfer") await type(ch);
+    await key("Tab");
+    await settled();
+    const r2 = await row();
+    check("NC exports: renamed by typing its name", /knob_turn_chamfer\.nc/.test(r2), r2);
+    await click("#expWrite");
+    const file = await waitFor(() => readdirSync(dl).find((f) => /^knob_turn_chamfer.*\.nc$/.test(f) && !f.endsWith(".crdownload")), "the export's file", 60000).catch(() => null);
+    const text = file ? readFileSync(join(dl, file), "utf8") : "";
+    await settled();
+    const r3 = await row();
+    check("NC exports: Write saves knob_turn_chamfer.nc, the turning (T1) then the chamfer (T2) in it", file === "knob_turn_chamfer.nc" && text.startsWith("(knob_turn_chamfer)") && /M6 T1/.test(text) && /M6 T2/.test(text) && text.indexOf("M6 T1") < text.indexOf("M6 T2") && !/knurl/i.test(text), JSON.stringify({ file, lines: text.split("\n").length }));
+    check("NC exports: once written its line says in sync", /in sync/.test(r3) && !/out of sync/.test(r3), r3);
+    // the chamfer's feed changed: planned again by itself, the export's file is now out of date
+    await click("#tree .tree-op .tree-label", "V-bit flank chamfer");
+    await sleep(500);
+    await click("#opForm input[name=feed]");
+    await key("a", 2);
+    for (const ch of "260") await type(ch);
+    await key("Tab");
+    await settled();
+    await waitFor(async () => /out of sync/.test(await row()), "out of sync", 60000).catch(() => {});
+    const r4 = await row();
+    check("NC exports: the chamfer's feed changed, the toolpaths updated by themselves: its line says out of sync", /out of sync/.test(r4), r4);
+    await click("#treeExports .tree-exp button[data-act=writeexp]");
+    // (a download of the same name: Chrome writes it over the file, or beside it numbered)
+    const newer = () => readdirSync(dl).filter((f) => /^knob_turn_chamfer.*\.nc$/.test(f)).map((f) => [f, readFileSync(join(dl, f), "utf8")]).find(([, t]) => t && t !== text);
+    const [file2, text2] = (await waitFor(newer, "the file written again", 60000).catch(() => null)) || [null, ""];
+    await settled();
+    const r5 = await row();
+    check("NC exports: written again from its line: the file changed, in sync again", !!text2 && text2 !== text && /in sync/.test(r5) && !/out of sync/.test(r5), JSON.stringify({ file2, r5 }));
+    await shot("nc_exports");
+    await clean("NC exports");
   }
 } catch (e) {
   check(`the path could be followed (${e.message})`, false);

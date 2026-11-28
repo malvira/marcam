@@ -111,6 +111,24 @@ title = "turned"
 operations = ["op1"]
 ```
 
+A setup may also list named NC exports (as Fusion's NC programs): some of its operations, from
+any of its outputs, posted together to `<name>.nc` in planning order. Their toolpaths are the
+planned ones (not planned again); where an operation does not follow straight on from the one
+before it in the export, the post retracts, loads its tool and comes over to where it was
+planned from. `posted` is the fingerprint of the G-code last written: the web app compares it
+with what the operations post now and marks the export out of sync when they differ.
+
+```toml
+[[setups.exports]]
+name = "turn_and_chamfer"
+operations = ["op1", "op3"]
+posted = "9f0c3a1b2d4e5f60"          # written by the app; optional
+posted_at = "2026-11-28T05:10:00Z"
+```
+
+`plan_and_post` (WebAssembly) returns `exports: [{name, operations, missing, lines,
+fingerprint, gcode}]` for the setup planned; Rust: `marcam::export::{splice, fingerprint}`.
+
 Every function below that takes a document takes it as TOML text, JSON text or a parsed
 object. Rust: `marcam::project_file` (`to_json_text`, `project_to_toml`, `write_bundle`,
 `read_bundle`); WebAssembly: `toToml(doc)`, `bundleWrite(doc, files)`, `bundleRead(bytes)`;

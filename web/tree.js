@@ -10,6 +10,7 @@ import { describeStock, stockRadius } from "./project.js";
 import { applyFixtureField, applyPartField, applyStockField, carriedFrom, carryQuick, FIXTURES, fixtureOf, fixturePane, fitStock, meshModelOf, partPane, rangesFollow, stockPane } from "./stockpane.js";
 import { calcFeeds, feedsSummary } from "./feeds.js";
 import { moveSetup } from "./handles.js";
+import { canPickFile, chosenFile, exportKey, exportStatus, moveChosen, writeExport } from "./exports.js";
 
 export function setupTree({ engine, $, state, readJob, writeJob, showError, onChange, getThree, machineArg }) {
   // gen: bumped when the project is replaced, so editor work still awaiting the engine then
@@ -203,11 +204,14 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     // (the Stock and Part panes: the field being typed in kept as typed, focus and caret; Mar
     // typed a stock length and the pane drawn again after the first digit kept only it)
     let paneFocus = null;
-    if ((fa?.closest?.("#stockPane") || fa?.closest?.("#partPane")) && fa.id && fa.tagName === "INPUT") {
+    if ((fa?.closest?.("#stockPane") || fa?.closest?.("#partPane") || fa?.closest?.("#exportPane")) && fa.id && fa.tagName === "INPUT") {
       paneFocus = { id: fa.id, v: fa.value, s: fa.selectionStart, e: fa.selectionEnd };
     }
     const scrolls = [];
     for (let e = box; e; e = e.parentElement) if (e.scrollTop) scrolls.push([e, e.scrollTop]);
+    // (the tree's own list scrolls too: drawn again, as each plan landing does, it stays where
+    // it was; it went back to the top, hiding the NC exports under the files)
+    const listTop = $("treeList")?.scrollTop || 0;
     if (!t.doc) return;
     const s = setup();
     if (!s) {
@@ -268,7 +272,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
         const i = s.operations.indexOf(op);
         const ot = opTime(id);
         const geo = op.geometry?.length ? ` · ${op.geometry.map((g) => (g.kind === "faces" ? `${g.ids.length} face${g.ids.length > 1 ? "s" : ""}` : g.kind.replace("_", " "))).join(", ")}` : "";
-        html += `<div class="tree-op ${t.selected === id ? "sel" : ""} ${op.enabled === false ? "off" : ""}" data-op="${esc(id)}" draggable="true" title="Drag to reorder (or Alt+Up / Alt+Down)">
+        html += `<div class="tree-op ${t.selected === id || t.multi?.has(id) ? "sel" : ""} ${op.enabled === false ? "off" : ""}" data-op="${esc(id)}" draggable="true" title="Drag to reorder (or Alt+Up / Alt+Down; Ctrl-click to pick several, for an NC export)">
           <input type="checkbox" data-act="enable" ${op.enabled === false ? "" : "checked"} aria-label="Enable ${esc(id)}">
           <input type="color" data-act="color" value="${colorOf(op, i)}" aria-label="Colour of ${esc(id)}">
           <button type="button" data-act="eye" class="eye ${isHidden(id) ? "off" : ""}" aria-pressed="${!isHidden(id)}" aria-label="Show the toolpath of ${esc(id)}" title="Show or hide this toolpath (view only; Alt-click: show only this)">${isHidden(id) ? "◌" : "◉"}</button>
@@ -280,6 +284,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       });
       html += `</div>`;
     }
+    html += exportsList(s);
     let opts = t.types.filter((x) => fits(x, s)).map((x) => `<option value="${x.kind}">${esc(x.title)}</option>`).join("");
     // (Mar: "not seeing the new indexed roughing for 4 axis") on a 4th-axis setup, 3D
     // roughing at several angles in turn, by its name
@@ -301,6 +306,8 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       html += `<div class="tree-outname">Tool library</div><div id="libHost"></div>`;
     } else if (tool) {
       html += toolDetails(tool, s);
+    } else if (t.focus === "export" && !t.selected && s.exports?.some((e) => e.name === t.export)) {
+      html += exportPane(s, s.exports.find((e) => e.name === t.export));
     } else if (t.focus === "stock" && !t.selected) {
       const m = meshModelOf(t.doc, s);
       html += stockPane(t.doc, s, esc, { canFit: !!(m && window.__marcam.meshFor?.(m.file)), margin: t.stMargin, moreOpen: t.stMore, length: carryLength(s) });
@@ -331,6 +338,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     window.__marcam.project?.hostSetup?.($("setupHost"), t.setup, sdFocus);
     window.__marcam.tools?.host?.($("libHost"));
     for (const [e, y] of scrolls) e.scrollTop = y;
+    if (listTop && $("treeList")) $("treeList").scrollTop = listTop;
     detectFeatures();
     if (paneFocus) {
       const el = document.getElementById(paneFocus.id);
@@ -546,6 +554,103 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     ].filter(([, v]) => v);
     return `<div class="tree-outname">T${i.number} <span class="muted">tool</span></div><table class="small tool-details">${rows.map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>
       <div class="muted small">Its sizes and cutting data are edited in the Tool library.</div>`;
+  }
+
+  // ------------------------------------------------------------ NC exports (see exports.js)
+  /** The plan's entry for export `name` of setup `s`, when the results are this setup's. */
+  function exportResult(s, name) {
+    const r = state.result;
+    if (!r || (r.setupId ?? null) !== s.id) return null;
+    return r.exports?.find((e) => e.name === name) || null;
+  }
+  /** The setup's operations in the order they are machined (the files' in turn). */
+  const opsInOrder = (s) => s.outputs.flatMap((o) => o.operations).map((id) => s.operations.find((o) => o.id === id)).filter(Boolean);
+  /** The setup's NC exports, under its files: each with whether its file is in sync. */
+  function exportsList(s) {
+    const rows = (s.exports || [])
+      .map((e) => {
+        const st = exportStatus(e, exportResult(s, e.name));
+        const n = e.operations.length;
+        return `<div class="tree-exp ${t.focus === "export" && !t.selected && t.export === e.name ? "sel" : ""}" data-export="${esc(e.name)}">
+          <span class="tree-label" data-act="export" title="This export's operations and file">${esc(e.name)}.nc <span class="muted">${n} op${n === 1 ? "" : "s"}</span></span>
+          <span class="exp-state ${st.kind}" data-exp-state="${esc(e.name)}" title="${esc(st.long)}">${esc(st.text)}</span>
+          <button type="button" data-act="writeexp" class="exp-write" aria-label="Write ${esc(e.name)}.nc" title="Write ${esc(e.name)}.nc${canPickFile() ? " (to the file chosen for it)" : ""}">⤓</button></div>`;
+      })
+      .join("");
+    const picked = t.multi?.size ? ` (the ${t.multi.size} picked)` : t.selected ? " (the selected operation)" : " (every operation; Ctrl-click operations to pick some)";
+    return `<div class="tree-exports" id="treeExports"><div class="tree-exphead"><span class="muted">NC exports</span>
+      <button type="button" id="treeAddExport" title="A named set of operations written to a .nc file of its own${esc(picked)}">+ New</button></div>${rows}</div>`;
+  }
+  /** An export's details: its name, its operations (ticked), its state, Write. */
+  function exportPane(s, e) {
+    const st = exportStatus(e, exportResult(s, e.name));
+    const on = new Set(e.operations);
+    const ops = opsInOrder(s)
+      .map((op) => `<label class="exp-op ${op.enabled === false ? "off" : ""}"><input type="checkbox" data-exp-op="${esc(op.id)}" ${on.has(op.id) ? "checked" : ""}> ${esc(op.name || typeOf(op.type)?.title || op.type)} <span class="muted">${esc(op.id)} · T${op.tool}</span></label>`)
+      .join("");
+    setTimeout(() => showChosen(s, e), 0);
+    return `<div id="exportPane"><div class="tree-outname">${esc(e.name)}.nc <span class="muted">NC export</span></div>
+      <div class="row small"><label for="expName">Name</label> <input id="expName" name="expName" value="${esc(e.name)}" spellcheck="false" autocomplete="off"><span class="muted">.nc</span></div>
+      <div class="small exp-status ${st.kind}" id="expStatus">${esc(st.long)}</div>
+      <div class="small muted" id="expFile">${esc(chosenText(t.chosen?.get(expKey(s, e.name))))}</div>
+      <div class="small muted">Its operations, in the order they are machined:</div>
+      <div class="exp-ops" id="expOps">${ops}</div>
+      <div class="row small"><button type="button" id="expWrite" class="primary">Write ${esc(e.name)}.nc</button>
+      ${canPickFile() ? '<button type="button" id="expWriteAs" title="Write it to another file (later writes go there)">Save as...</button>' : ""}
+      <button type="button" id="expDelete" title="Delete this export (its operations stay; a file written stays)">Delete</button></div></div>`;
+  }
+  const expKey = (s, name) => exportKey(t.doc?.name || "untitled", s.id, name);
+  const chosenText = (f) => (f ? `Writes to ${f} (the file chosen for it).` : canPickFile() ? "The first write asks where to save it; later writes go to that file." : "Each write downloads it.");
+  /** Say which file an export writes to (looked up, kept for the next drawing). */
+  async function showChosen(s, e) {
+    const key = expKey(s, e.name);
+    const f = await chosenFile(key);
+    (t.chosen ||= new Map()).set(key, f);
+    const el = document.getElementById("expFile");
+    const text = chosenText(f);
+    if (el && t.export === e.name && el.textContent !== text) el.textContent = text;
+  }
+  async function newExport() {
+    const s = setup();
+    if (!s) return;
+    const order = opsInOrder(s).map((o) => o.id);
+    const want = t.multi?.size ? [...t.multi] : t.selected && order.includes(t.selected) ? [t.selected] : opsInOrder(s).filter((o) => o.enabled !== false).map((o) => o.id);
+    s.exports ||= [];
+    const used = new Set(s.exports.map((e) => e.name));
+    let k = s.exports.length + 1;
+    while (used.has(`${s.id}_export${k}`)) k++;
+    const name = `${s.id}_export${k}`;
+    s.exports.push({ name, operations: order.filter((id) => want.includes(id)) });
+    t.multi = null;
+    t.focus = "export";
+    t.export = name;
+    t.selected = null;
+    await commit({ label: `Added the NC export ${name}.` });
+  }
+  async function doWriteExport(name, pick) {
+    const s = setup();
+    const e = s?.exports?.find((x) => x.name === name);
+    if (!s || !e) return;
+    const sid = s.id;
+    try {
+      const done = await writeExport({
+        name,
+        key: expKey(s, name),
+        pick,
+        whenSettled: () => window.__marcam.whenSettled(),
+        current: () => exportResult(t.doc.setups.find((x) => x.id === sid) || s, name),
+      });
+      if (!done) return;
+      // the fingerprint written: in sync until the toolpaths change
+      const x = t.doc.setups.find((y) => y.id === sid)?.exports?.find((y) => y.name === name);
+      if (!x) return;
+      x.posted = done.fingerprint;
+      x.posted_at = new Date().toISOString();
+      await commit({ label: `Wrote ${name}.nc.`, display: true });
+      window.__marcam.setStatus?.(`Wrote ${done.file} (${done.lines.toLocaleString("en")} lines)`, "done");
+    } catch (err) {
+      showError(`Could not write ${name}.nc: ${err.message}`);
+    }
   }
 
   /** A setup's line in the tree (its `<div class="tree-setup">` left open): a fold button,
@@ -1736,6 +1841,29 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       t.selected = null;
       return commit({ label: `Added T${n} to ${s.name || s.id}.` });
     }
+    if (el.id === "treeAddExport") return newExport();
+    const expRow = el.closest?.(".tree-exp");
+    if (expRow && el.dataset?.act === "writeexp") return doWriteExport(expRow.dataset.export, false);
+    if (expRow && el.dataset?.act === "export") {
+      if (t.picking) endPicking(false);
+      t.focus = "export";
+      t.export = expRow.dataset.export;
+      t.selected = null;
+      t.draft = null;
+      t.retype = null;
+      t.multi = null;
+      return render();
+    }
+    if (el.id === "expWrite" || el.id === "expWriteAs") return doWriteExport(t.export, el.id === "expWriteAs");
+    if (el.id === "expDelete") {
+      const s = setup();
+      const name = t.export;
+      if (!s?.exports) return;
+      s.exports = s.exports.filter((e) => e.name !== name);
+      t.focus = "setup";
+      moveChosen(expKey(s, name), null);
+      return commit({ label: `Deleted the NC export ${name}.` });
+    }
     const head = el.closest?.(".tree-setup");
     if (el.dataset?.act === "delsetup" && head) return deleteSetup(head.dataset.setup);
     if (el.dataset?.act === "fold" && head) {
@@ -1873,7 +2001,17 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
     const s = setup();
     const out = s.outputs.find((o) => o.operations.includes(id));
     const act = el.dataset.act;
+    if (act === "select" && (ev.ctrlKey || ev.metaKey)) {
+      // (NC exports) Ctrl-click: several operations picked (+ New in NC exports takes them)
+      t.multi ||= new Set(t.selected ? [t.selected] : []);
+      if (t.multi.has(id)) t.multi.delete(id);
+      else t.multi.add(id);
+      t.selected = null;
+      t.focus = null;
+      return render();
+    }
     if (act === "select") {
+      t.multi = null;
       t.focus = null;
       if (t.picking) stopPicking();
       // another operation: an unsaved new one or a pending type change is dropped
@@ -1894,6 +2032,7 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
       s.operations = s.operations.filter((o) => o.id !== id);
       for (const o of s.outputs) o.operations = o.operations.filter((x) => x !== id);
       s.outputs = s.outputs.filter((o) => o.operations.length);
+      for (const e of s.exports || []) e.operations = e.operations.filter((x) => x !== id);
       if (t.selected === id) t.selected = null;
       await commit({ label: `Deleted ${id}.` });
     }
@@ -2190,6 +2329,30 @@ export function setupTree({ engine, $, state, readJob, writeJob, showError, onCh
 
   $("tree").addEventListener("change", async (ev) => {
     const el = ev.target;
+    // (NC exports) an operation ticked or not, the name
+    if (el.dataset?.expOp || el.id === "expName") {
+      const s = setup();
+      const e = s?.exports?.find((x) => x.name === t.export);
+      if (!e) return;
+      if (el.dataset.expOp) {
+        const on = new Set(e.operations);
+        if (el.checked) on.add(el.dataset.expOp);
+        else on.delete(el.dataset.expOp);
+        e.operations = opsInOrder(s).map((o) => o.id).filter((id) => on.has(id));
+        return commit({ label: `${el.checked ? "Added" : "Took"} ${el.dataset.expOp} ${el.checked ? "to" : "out of"} ${e.name}.nc.` });
+      }
+      const name = el.value.trim().replace(/[.]nc$/i, "").replace(/[\\/:*?"<>|]/g, "_");
+      if (!name || name === e.name) return render();
+      if (s.exports.some((x) => x.name === name)) {
+        showError(`There is already an NC export named ${name} in this setup.`);
+        return render();
+      }
+      showError("");
+      moveChosen(expKey(s, e.name), expKey(s, name));
+      e.name = name;
+      t.export = name;
+      return commit({ label: `Renamed the NC export to ${name}.` });
+    }
     // the operation type picked, kept for this setup (see setTree)
     if (el.id === "treeAddType") {
       (t.addTypes ||= {})[t.setup] = el.value;

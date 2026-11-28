@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### NC exports: named sets of operations, each to its own .nc file (2026-11-28)
+
+As Fusion's NC programs: under a setup's files in the project tree, **NC exports** lists named
+exports. Ctrl-click operations (from any file) and press **+ New**, or tick them in the
+export's details; name it and press **Write**. In Chrome and Edge the first write asks where to
+save the file and later writes go to the same file; other browsers download `<name>.nc`. The
+G-code is the planned toolpaths of its operations (what was simulated), joined with a safe way
+in between them (retract, tool, over the start). Each export's line says whether its file is
+**in sync** or **out of sync** with the toolpaths, updated as they update in the background.
+The tree's list also keeps its scroll when it is drawn again (it went back to the top after
+each plan).
+
 ### STEP import: no missing faces, and big parts drawn whole (2026-11-23)
 
 A face SolidCraft's kernel cannot trim (one wound round a closed surface that no iso line can

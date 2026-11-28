@@ -867,6 +867,8 @@ async function generate(opts = {}) {
     const ms = performance.now() - t0;
     // an edit since then (auto-regenerate) has asked for a newer run: this one is dropped
     if (run !== state.genRun) return;
+    // (the setup the results are for: its NC exports' states are read from them)
+    result.setupId = setupArg ?? null;
     state.result = result;
     state.sim = null;
     state.job = job;
@@ -2921,6 +2923,7 @@ new ResizeObserver(() => drawSide()).observe($("side"));
 
 // ---------------------------------------------------------------- project tree (0.2)
 window.__marcam.showError = showError;
+window.__marcam.setStatus = setStatus;
 window.__marcam.setupSwitched = () => markStale();
 window.__marcam.handles = setupHandles({ state, edit: (fn) => window.__marcam.tree?.edit(fn) });
 window.__marcam.tree = setupTree({
