@@ -294,12 +294,15 @@ pub mod api {
         }
     }
 
+    /// A plan's toolpaths, its operations' ids in planning order, and its post.
+    type LastPost = (Vec<Toolpath>, Option<Vec<String>>, marcam::machine::Machine);
+
     thread_local! {
         /// Operations planned before (see marcam::PlanCache).
         static PLAN_CACHE: std::cell::RefCell<marcam::PlanCache> = std::cell::RefCell::new(marcam::PlanCache::new());
         /// The last plan_and_post's toolpaths, operation ids and post: an NC export added,
         /// changed or renamed is posted from them (post_exports), nothing planned again.
-        static LAST_POST: std::cell::RefCell<Option<(Vec<Toolpath>, Option<Vec<String>>, marcam::machine::Machine)>> = const { std::cell::RefCell::new(None) };
+        static LAST_POST: std::cell::RefCell<Option<LastPost>> = const { std::cell::RefCell::new(None) };
     }
 
     /// The setup's named exports posted from toolpaths: each its operations' moves spliced
