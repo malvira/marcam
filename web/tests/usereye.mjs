@@ -3436,11 +3436,14 @@ try {
     check("NC exports: + New makes an export of the two, its line under the files (not written), its details beside", /\b2 ops\b/.test(r1) && /not written/.test(r1) && /Not written yet/.test(p1) && /Rotary turning/.test(p1), JSON.stringify({ r1, p1: p1.slice(0, 200) }));
     // (a second export, of every operation: the project is the one planned now, as a person's
     // own project is; the first edit above wrote the example, a 0.1 job, as 0.2)
-    await click("#tree .tree-setuphead .tree-label");
+    await click("#tree .tree-setuphead .tree-label[data-act=setup]");
     await settled();
     await record();
+    const rows0 = await read("document.querySelectorAll('#treeExports .tree-exp').length");
     await click("#treeExports button", "New");
-    // (looked at as it is, before anything else is clicked or scrolled)
+    // (looked at as it is once it has come, before anything else is clicked or scrolled)
+    await waitFor(() => read(`document.querySelectorAll('#treeExports .tree-exp').length === ${rows0 + 1}`), "the new export's line", 30000).catch(() => {});
+    await sleep(200);
     const seen = await read(`(() => { const r = [...document.querySelectorAll('#treeExports .tree-exp')].pop(); if (!r) return 'none'; const b = r.querySelector('.tree-label').getBoundingClientRect(); const h = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return h && r.contains(h) ? r.dataset.export : 'hidden ' + r.dataset.export + ' at ' + Math.round(b.top); })()`);
     await waitFor(() => read("[...document.querySelectorAll('#tree [data-exp-gen]')].every((e) => e.classList.contains('ready'))"), "the export's G-code ready", 60000).catch(() => {});
     const addRec = await recorded();
